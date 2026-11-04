@@ -1,0 +1,16 @@
+{
+  "name": "@orc/mcp-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@orc/logger": "*",
+    "@orc/security": "*",
+    "@orc/shared": "*",
+    "zod": "^4.6.7"
+  }
+}

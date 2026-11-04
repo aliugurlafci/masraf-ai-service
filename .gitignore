@@ -1,0 +1,27 @@
+node_modules/
+dist/
+coverage/
+test-results/
+.vite/
+*.log
+
+.env
+.env.*
+!.env.example
+!tests/.env.test.example
+
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+
+workspaces/*
+!workspaces/.gitkeep
+
+projects/*
+!projects/.gitkeep
+!projects/README.md
+
+.codebase-memory/
+
+# test reports (npm run test:report)
+reports/

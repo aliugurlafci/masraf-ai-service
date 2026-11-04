@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+package-lock.json
+workspaces
+projects
+secrets
+test-results
+.codebase-memory
+*.md
+reports/

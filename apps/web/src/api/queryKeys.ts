@@ -1,0 +1,30 @@
+// react-query keys (prefix-invalidation friendly).
+
+export const queryKeys = {
+  tasks: ['tasks'] as const,
+  taskList: (filters: Readonly<Record<string, unknown>>) => ['tasks', 'list', filters] as const,
+  recentTasks: ['tasks', 'recent'] as const,
+  task: (taskId: string) => ['task', taskId] as const,
+  taskDetail: (taskId: string) => ['task', taskId, 'detail'] as const,
+  taskAttempts: (taskId: string) => ['task', taskId, 'attempts'] as const,
+  taskEvents: (taskId: string) => ['task', taskId, 'events'] as const,
+  taskArtefact: (taskId: string, kind: string, attemptId: string | undefined) =>
+    ['task', taskId, kind, attemptId ?? 'current'] as const,
+  projects: ['projects'] as const,
+  projectList: (filters: Readonly<Record<string, unknown>>) => ['projects', 'list', filters] as const,
+  project: (projectId: string) => ['project', projectId] as const,
+  projectDetail: (projectId: string) => ['project', projectId, 'detail'] as const,
+  projectIndexStatus: (projectId: string) => ['project', projectId, 'index-status'] as const,
+  projectIndexOperations: (projectId: string) => ['project', projectId, 'index-operations'] as const,
+  agents: ['agents'] as const,
+  agentList: (filters: Readonly<Record<string, unknown>>) => ['agents', 'list', filters] as const,
+  agent: (agentId: string) => ['agents', 'detail', agentId] as const,
+  teams: ['teams'] as const,
+  team: (teamId: string) => ['teams', 'detail', teamId] as const,
+  workers: ['system', 'workers'] as const,
+  queue: ['system', 'queue'] as const,
+  dlq: ['system', 'dlq'] as const,
+  mcp: ['system', 'mcp'] as const,
+  audit: (filters: Readonly<Record<string, unknown>>) => ['audit', filters] as const,
+  tokens: ['auth', 'tokens'] as const,
+};

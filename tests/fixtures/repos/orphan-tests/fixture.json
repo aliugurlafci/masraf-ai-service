@@ -1,0 +1,4 @@
+{
+  "testCommand": ["node", "run-tests.mjs"],
+  "junitReportPath": null
+}

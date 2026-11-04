@@ -1,0 +1,9 @@
+{
+  "testCommand": [
+    "node",
+    "--test",
+    "--test-reporter=junit",
+    "--test-reporter-destination=junit.xml"
+  ],
+  "junitReportPath": "junit.xml"
+}
