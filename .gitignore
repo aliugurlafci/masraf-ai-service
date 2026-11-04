@@ -6,8 +6,6 @@ test-results/
 *.log
 
 .env
-.env.*
-!.env.example
 !tests/.env.test.example
 
 secrets/*
