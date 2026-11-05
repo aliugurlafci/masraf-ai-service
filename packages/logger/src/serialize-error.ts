@@ -1,5 +1,6 @@
-import { maskObject, maskText } from '@orc/security';
+import { maskObject } from '@orc/security';
 import type { SecretRegistry } from '@orc/security';
+import { maskSecretText as maskText } from './oauth-mask.js';
 
 export interface SerializedError {
   type: string;

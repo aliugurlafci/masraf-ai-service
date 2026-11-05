@@ -1,6 +1,6 @@
 # ADR-0016: Claude runner uses --bare with an isolated config directory
 
-- Status: Accepted (2026-11-02); amended by ADR-0024 (Claude runs in the runner; HOME/CLAUDE_CONFIG_DIR per workspace)
+- Status: Superseded by [ADR-0036](0036-claude-subscription-oauth-auth.md) (2026-11-05; the `--bare` decision only). Accepted 2026-11-02; amended by ADR-0024 (Claude runs in the runner; HOME/CLAUDE_CONFIG_DIR per workspace). The isolated per-workspace `HOME` and `CLAUDE_CONFIG_DIR` stay in force.
 - Deciders: Solution Architecture Manager; GPM approval with contract v1.0.0
 - Contract: `docs/architecture/contract.md`
 

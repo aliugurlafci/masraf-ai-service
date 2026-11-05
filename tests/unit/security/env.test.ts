@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertNoClaudeCredential,
+  assertSingleClaudeCredential,
   buildChildEnv,
+  buildClaudeAppDataEnv,
+  buildClaudeCredentialEnv,
   CLAUDE_ENV_ALLOWLIST,
+  CLAUDE_FIXED_ENV,
   GIT_ENV_ALLOWLIST,
   TEST_ENV_ALLOWLIST,
   UnsafeArgumentError,
@@ -50,6 +55,10 @@ describe('child env allowlists', () => {
       'CBM_ALLOWED_ROOT',
       'ORC_ATTEMPT_ID',
       'CLAUDE_CODE_GIT_BASH_PATH',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+      'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
+      'CLAUDE_CODE_DISABLE_CLAUDE_MDS',
     ]);
     expect(GIT_ENV_ALLOWLIST).toEqual([
       'PATH',
@@ -174,5 +183,168 @@ describe('buildChildEnv', () => {
     expect(() => buildChildEnv(['PATH'], {}, { HOME: 'a\0b' }, 'posix')).toThrow(
       UnsafeArgumentError,
     );
+  });
+});
+
+const OAUTH = 'sk-ant-oat01-' + 'A'.repeat(40);
+const API = 'sk-ant-api03-' + 'b'.repeat(30);
+
+describe('ADR-0036 credential transport', () => {
+  it('oauth/posix: fd variable only, token returned for fd 3 and never in env', () => {
+    const r = buildClaudeCredentialEnv({ mode: 'oauth', oauthToken: OAUTH }, 'posix');
+    expect(r.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' });
+    expect(r.credentialFd).toBe(OAUTH);
+    expect(JSON.stringify(r.env)).not.toContain(OAUTH);
+  });
+
+  it('oauth/win32: token in env, no fd', () => {
+    const r = buildClaudeCredentialEnv({ mode: 'oauth', oauthToken: OAUTH }, 'win32');
+    expect(r.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: OAUTH });
+    expect(r.credentialFd).toBeNull();
+  });
+
+  it('api_key: key in env on both platforms, no fd', () => {
+    for (const p of ['posix', 'win32'] as const) {
+      const r = buildClaudeCredentialEnv({ mode: 'api_key', apiKey: API }, p);
+      expect(r.env).toEqual({ ANTHROPIC_API_KEY: API });
+      expect(r.credentialFd).toBeNull();
+    }
+  });
+
+  it('rejects both credentials and never echoes a value', () => {
+    for (const p of ['posix', 'win32'] as const) {
+      for (const auth of [
+        { mode: 'oauth', oauthToken: OAUTH, apiKey: API },
+        { mode: 'api_key', apiKey: API, oauthToken: OAUTH },
+      ]) {
+        let caught: unknown;
+        try {
+          buildClaudeCredentialEnv(auth as never, p);
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(UnsafeArgumentError);
+        expect(JSON.stringify(caught) + String(caught)).not.toMatch(/sk-ant/);
+      }
+    }
+  });
+
+  it('rejects empty, NUL and unknown-mode credentials', () => {
+    expect(() => buildClaudeCredentialEnv({ mode: 'oauth', oauthToken: '' }, 'posix')).toThrow(
+      UnsafeArgumentError,
+    );
+    expect(() => buildClaudeCredentialEnv({ mode: 'api_key', apiKey: 'a\0b' }, 'win32')).toThrow(
+      UnsafeArgumentError,
+    );
+    expect(() => buildClaudeCredentialEnv({ mode: 'x' } as never, 'posix')).toThrow(
+      UnsafeArgumentError,
+    );
+  });
+
+  it('assertSingleClaudeCredential rejects any pair and the never-set keys', () => {
+    expect(() => assertSingleClaudeCredential({ ANTHROPIC_API_KEY: API })).not.toThrow();
+    expect(() => assertSingleClaudeCredential({ CLAUDE_CODE_OAUTH_TOKEN: OAUTH })).not.toThrow();
+    expect(() =>
+      assertSingleClaudeCredential({ ANTHROPIC_API_KEY: API, CLAUDE_CODE_OAUTH_TOKEN: OAUTH }),
+    ).toThrow(UnsafeArgumentError);
+    expect(() =>
+      assertSingleClaudeCredential({
+        ANTHROPIC_API_KEY: API,
+        CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3',
+      }),
+    ).toThrow(UnsafeArgumentError);
+    expect(() =>
+      assertSingleClaudeCredential({
+        CLAUDE_CODE_OAUTH_TOKEN: OAUTH,
+        CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3',
+      }),
+    ).toThrow(UnsafeArgumentError);
+    for (const k of ['CLAUDE_CODE_SIMPLE', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']) {
+      expect(() => assertSingleClaudeCredential({ [k]: '1' })).toThrow(UnsafeArgumentError);
+    }
+  });
+
+  it('buildChildEnv refuses to emit both credentials (source or overrides)', () => {
+    const source = { ANTHROPIC_API_KEY: API, CLAUDE_CODE_OAUTH_TOKEN: OAUTH };
+    expect(() => buildChildEnv(CLAUDE_ENV_ALLOWLIST, source, {}, 'posix')).toThrow(
+      UnsafeArgumentError,
+    );
+    expect(() =>
+      buildChildEnv(
+        CLAUDE_ENV_ALLOWLIST,
+        { ANTHROPIC_API_KEY: API },
+        { CLAUDE_CODE_OAUTH_TOKEN: OAUTH },
+        'win32',
+      ),
+    ).toThrow(UnsafeArgumentError);
+  });
+
+  it('probe env carries no credential variable and no fd 3', () => {
+    expect(() => assertNoClaudeCredential({ PATH: '/bin' })).not.toThrow();
+    for (const k of [
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+    ]) {
+      expect(() => assertNoClaudeCredential({ [k]: 'x' })).toThrow(UnsafeArgumentError);
+    }
+  });
+
+  it('fixed Claude env disables auto memory and CLAUDE.md loading', () => {
+    expect(CLAUDE_FIXED_ENV).toEqual({
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+      CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+    });
+    const env = buildChildEnv(CLAUDE_ENV_ALLOWLIST, {}, { ...CLAUDE_FIXED_ENV }, 'posix');
+    expect(env).toMatchObject(CLAUDE_FIXED_ENV);
+  });
+});
+
+describe('B-020 isolated AppData', () => {
+  const BS = String.fromCharCode(92);
+  const w = (...parts: string[]): string => parts.join(BS);
+  const HOME = w('D:', 'claude', 'w', 'abc', 'home');
+  const ROAM = w(HOME, 'AppData', 'Roaming');
+  const LOCAL = w(HOME, 'AppData', 'Local');
+  const REAL_ROAM = w('C:', 'Users', 'real', 'AppData', 'Roaming');
+  const REAL_LOCAL = w('C:', 'Users', 'real', 'AppData', 'Local');
+
+  it('claude and probe on win32 get isolated APPDATA and LOCALAPPDATA', () => {
+    for (const kind of ['claude', 'probe'] as const) {
+      expect(buildClaudeAppDataEnv(kind, HOME, 'win32')).toEqual({
+        APPDATA: ROAM,
+        LOCALAPPDATA: LOCAL,
+      });
+    }
+  });
+
+  it('other kinds and posix are unchanged (empty)', () => {
+    for (const kind of ['test', 'mcp', 'git'] as const) {
+      expect(buildClaudeAppDataEnv(kind, HOME, 'win32')).toEqual({});
+    }
+    expect(buildClaudeAppDataEnv('claude', '/h', 'posix')).toEqual({});
+  });
+
+  it('overrides replace the real values copied from the worker (win32, case-insensitive)', () => {
+    const source = { appdata: REAL_ROAM, LocalAppData: REAL_LOCAL };
+    const env = buildChildEnv(
+      CLAUDE_ENV_ALLOWLIST,
+      source,
+      buildClaudeAppDataEnv('claude', HOME, 'win32'),
+      'win32',
+    );
+    expect(env.APPDATA).toBe(ROAM);
+    expect(env.LOCALAPPDATA).toBe(LOCAL);
+    expect(Object.values(env).join(' ')).not.toContain('real');
+    // test kind: real values still copied (known issue, ADR 8.6)
+    const testEnv = buildChildEnv(TEST_ENV_ALLOWLIST, source, {}, 'win32');
+    expect(testEnv.APPDATA).toBe(REAL_ROAM);
+  });
+
+  it('rejects empty or NUL home', () => {
+    expect(() => buildClaudeAppDataEnv('claude', '', 'win32')).toThrow(UnsafeArgumentError);
+    expect(() =>
+      buildClaudeAppDataEnv('probe', 'a' + String.fromCharCode(0) + 'b', 'win32'),
+    ).toThrow(UnsafeArgumentError);
   });
 });

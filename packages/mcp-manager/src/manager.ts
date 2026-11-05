@@ -7,6 +7,7 @@ import { GUID_REGEX, OrcError, isOrcError, shortKey, systemClock } from '@orc/sh
 import type { IndexMode, McpOperationKind, Uuid } from '@orc/shared';
 import type { LaunchLease } from '@orc/shared/node';
 import { serializeError } from '@orc/logger';
+import { z } from 'zod';
 import {
   PathEscapeError,
   UnsafeArgumentError,
@@ -130,7 +131,33 @@ async function assertPrivateDir(path: string, uid: number, role: 'parent' | 'run
   }
 }
 
+const STICKY_BIT = 0o1000;
+const OTHER_WRITE_BIT = 0o002;
+
+/**
+ * ADR-0037: `os.tmpdir()` is the shared parent of the per-uid runtime parent, so it is checked first (POSIX):
+ * a real directory (never a link), owned by root or this uid, and sticky or not other-writable.
+ */
+async function assertSafeTmpdir(uid: number): Promise<void> {
+  const path = tmpdir();
+  const st = await lstat(path);
+  let reason: string | null = null;
+  if (st.isSymbolicLink()) reason = 'symlink';
+  else if (!st.isDirectory()) reason = 'not_directory';
+  else if (st.uid !== 0 && st.uid !== uid) reason = 'tmpdir_owner';
+  else if ((st.mode & STICKY_BIT) === 0 && (st.mode & OTHER_WRITE_BIT) !== 0) reason = 'tmpdir_world_writable';
+  if (reason !== null) {
+    throw new PathEscapeError(`MCP runtime tmpdir is not safe (${reason}): ${path}`, {
+      details: { role: 'tmpdir', reason },
+    });
+  }
+}
+
+/** ADR-0036 item 7: the only environment name that may be blanked in Claude's mcp.json. */
+const ClaudeEnvScrubSchema = z.array(z.literal('ANTHROPIC_API_KEY')).readonly().optional();
+
 export function createMcpManager(cfg: McpManagerConfig, deps: McpManagerDeps): McpManager {
+  const claudeEnvScrub = ClaudeEnvScrubSchema.parse(cfg.claudeEnvScrub) ?? [];
   const clock = deps.clock ?? systemClock;
   const logger = deps.logger;
   const launcher = deps.launcher;
@@ -209,6 +236,7 @@ export function createMcpManager(cfg: McpManagerConfig, deps: McpManagerDeps): M
   /** Creates and verifies the parent before creating anything below it, then the per-cache dir (B-014). */
   async function prepareLocalRuntimeDir(cache: string): Promise<void> {
     const uid = processUid();
+    if (uid !== null) await assertSafeTmpdir(uid);
     const parent = localRuntimeParent(uid);
     await mkdir(parent, { recursive: true, mode: CACHE_DIR_MODE });
     if (uid !== null) await assertPrivateDir(parent, uid, 'parent');
@@ -694,17 +722,25 @@ export function createMcpManager(cfg: McpManagerConfig, deps: McpManagerDeps): M
       throw new OrcError('internal_error', 'claudeMcpConfig requires a workspace scope');
     }
     const dir = scopePath(scope);
+    const env = cbmEnv(dir, cacheDir(scope));
+    for (const name of claudeEnvScrub) env[name] = '';
     return {
       mcpServers: {
         'codebase-memory-mcp': {
           type: 'stdio',
           command: cfg.bin,
           args: [...cfg.binPrefixArgs],
-          env: cbmEnv(dir, cacheDir(scope)),
+          env,
         },
       },
     };
   }
 
-  return { probe, index, detectChanges, deleteIndex, claudeMcpConfig, indexName, cacheDir };
+  /** ADR-0037: verifies the runtime dir Claude's own MCP server will use. Runner mode: leased path, no-op. */
+  async function ensureClaudeMcpRuntime(scope: WorkspaceScope): Promise<void> {
+    if (!localMode) return;
+    await prepareLocalRuntimeDir(cacheDir(scope));
+  }
+
+  return { probe, index, detectChanges, deleteIndex, claudeMcpConfig, ensureClaudeMcpRuntime, indexName, cacheDir };
 }

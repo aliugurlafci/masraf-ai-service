@@ -1,6 +1,9 @@
 // Worker runtime end to end against mssql-test + redis-test with fake-claude and fake-cbm through the local
 // launcher (contract §13, §14): happy path artefacts, failure mappings, timeout/cancel without surviving processes,
 // output limit, requireIndex => blocked, and the real source repository left untouched.
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sql from 'mssql';
 import type { Uuid } from '@orc/shared';
@@ -162,6 +165,67 @@ describe('worker pipeline (integration)', () => {
     await waitFor(() => aliveProcesses(all).length === 0, { timeoutMs: 15_000, description: 'no surviving processes' });
     // the task row settles before the pipeline's finally (lock release, unregister) has run
     await waitFor(() => worker.active.size() === 0, { timeoutMs: 10_000, description: 'pipeline unregistered' });
+  });
+});
+
+// ADR-0037: a pre-created, group/world-readable `orc-cbm-rt-<uid>` in a private TMPDIR makes
+// ensureClaudeMcpRuntime fail with path_escape (set after the startup probe) (POSIX only: win32 has no uid and no ownership check).
+describe.skipIf(process.platform === 'win32')('worker pipeline MCP runtime precheck (ADR-0037)', () => {
+  let mcpWorld: WorkerWorld;
+  let tmpRoot: string;
+  const prevTmpdir = process.env['TMPDIR'];
+
+  beforeAll(async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'orc-rt-tmp-'));
+    chmodSync(tmpRoot, 0o700);
+    process.env['TMPDIR'] = tmpRoot;
+    mcpWorld = await createWorkerWorld({ env: { ATTEMPT_STALE_MS: '30000' } });
+  });
+
+  /** After the worker's own startup probe (which needs a valid runtime dir) the dir becomes group/world-readable. */
+  function loosenRuntimeParent(): void {
+    const parent = join(tmpRoot, `orc-cbm-rt-${(process.getuid as () => number)()}`);
+    mkdirSync(parent, { recursive: true, mode: 0o755 });
+    chmodSync(parent, 0o755);
+  }
+
+  afterAll(async () => {
+    if (prevTmpdir === undefined) delete process.env['TMPDIR'];
+    else process.env['TMPDIR'] = prevTmpdir;
+    await mcpWorld?.dispose();
+    if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('MCP_REQUIRED=true: fails closed as failed(security_violation) without starting Claude', async () => {
+    const w = await mcpWorld.startWorker({ workerId: 'it-mcp-required', env: { MCP_REQUIRED: 'true' } });
+    loosenRuntimeParent();
+    const project = await mcpWorld.project(mcpWorld.repo());
+    const { task, attempt } = await mcpWorld.createTask(project);
+    const settled = await mcpWorld.waitSettled(task.id);
+    expect(settled).toMatchObject({ status: 'failed', statusReason: 'security_violation' });
+    expect((await mcpWorld.db.repos.attempts.findById(attempt.id))?.failureReason).toBe('security_violation');
+    expect(await mcpWorld.db.repos.claudeSessions.findByAttempt(attempt.id)).toBeNull();
+    await w.stop(); // the next case must be consumed by the MCP_REQUIRED=false worker only
+  });
+
+  it('MCP_REQUIRED=false: completes without --mcp-config and publishes the mcp_runtime_rejected warning', async () => {
+    await mcpWorld.startWorker({ workerId: 'it-mcp-optional', env: { MCP_REQUIRED: 'false' } });
+    loosenRuntimeParent();
+    const project = await mcpWorld.project(mcpWorld.repo());
+    const { task, attempt } = await mcpWorld.createTask(project, {
+      directives: ['@@fake echo-argv', '@@fake text done'],
+    });
+    const settled = await mcpWorld.waitSettled(task.id);
+    expect(settled.status).toBe('completed');
+    const events = await mcpWorld.db.repos.taskEvents.listByTask({ taskId: task.id, limit: 500 });
+    expect(
+      events.some((e) => e.type === 'warning' && e.data?.['warning'] === 'mcp_runtime_rejected' && e.data?.['errorCode'] === 'path_escape'),
+    ).toBe(true);
+    const logs = await mcpWorld.db.repos.taskLogs.listByAttempt({ attemptId: attempt.id, stream: 'claude', limit: 1000 });
+    const text = logs.map((l) => l.content).join('');
+    expect(text).toContain('"subtype":"fake_argv"');
+    expect(text).toContain('--strict-mcp-config');
+    expect(text).not.toContain('--mcp-config');
   });
 });
 

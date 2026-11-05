@@ -36,6 +36,7 @@ import {
   resolveLeasePaths,
   validateLeaseKey,
   validateSpawnArgv,
+  validateSpawnCredential,
   validateSpawnEnv,
   validateSpawnEnvPaths,
   type EffectiveLimits,
@@ -49,6 +50,8 @@ export interface LaunchProcessOptions {
   env: Record<string, string>;
   uid: number | null;
   gid: number | null;
+  /** Written to the child's fd 3 and ended at once (ADR-0036 m.4; kind `claude` only). Never logged. */
+  credentialFd?: string;
 }
 export type LaunchProcessFn = (
   cmd: string,
@@ -71,6 +74,7 @@ export function createDefaultLaunch(spawnFn: SpawnFn = nodeSpawn): LaunchProcess
       env: o.env,
       platform: 'posix',
       spawn: o.uid === null ? spawnFn : spawnAs(spawnFn, o.uid, o.gid ?? o.uid),
+      ...(o.credentialFd === undefined ? {} : { credentialFd: o.credentialFd }),
     });
 }
 
@@ -92,6 +96,8 @@ export interface SpawnInput {
   cwd: string;
   env: Record<string, string>;
   limits?: LaunchLimits;
+  /** Decoded `credentialFd` of the spawn frame (ADR-0036 m.4); never logged or persisted. */
+  credentialFd?: string;
 }
 
 export interface LeaseManagerOptions {
@@ -412,6 +418,7 @@ export function createLeaseManager(o: LeaseManagerOptions): LeaseManager {
     const r = liveRecord(id);
     validateSpawnArgv(input.argv);
     validateSpawnEnv(input.kind, input.env);
+    validateSpawnCredential(input.kind, input.env, input.credentialFd);
     const cwd = await resolveInLease(input.cwd, r.paths, realpath, 'cwd_rejected');
     await validateSpawnEnvPaths(input.env, r.paths, realpath);
     liveRecord(id);
@@ -428,6 +435,7 @@ export function createLeaseManager(o: LeaseManagerOptions): LeaseManager {
         env: { ...input.env },
         uid: switching ? r.uid : null,
         gid: switching ? r.gid : null,
+        ...(input.credentialFd === undefined ? {} : { credentialFd: input.credentialFd }),
       });
     } catch (e) {
       throw runnerError(

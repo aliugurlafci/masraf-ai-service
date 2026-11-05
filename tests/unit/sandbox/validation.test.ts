@@ -1,9 +1,16 @@
 import { mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { CLAUDE_ENV_ALLOWLIST, TEST_ENV_ALLOWLIST } from '@orc/security';
 import {
   allowedEnvKeys,
   buildPrlimitCommand,
+  CLAUDE_ONLY_ENV_KEYS,
+  CREDENTIAL_FD_ENV_KEY,
+  decodeCredentialFd,
+  encodeCredentialFd,
+  MAX_CREDENTIAL_FD_BYTES,
+  validateSpawnCredential,
   effectiveLimits,
   isPathInside,
   pathsOverlap,
@@ -95,6 +102,140 @@ describe('kind-specific environment', () => {
     expect(() =>
       validateSpawnEnv('test', { SystemRoot: 'C:\\Windows' }, ['SystemRoot']),
     ).not.toThrow();
+  });
+});
+
+describe('Claude credentials (ADR-0036 m.1, m.4; contract §10.11 item 5)', () => {
+  const SECRET = 'fd3-credential-TESTONLY-0123456789abcdef';
+  const KEY = 'api-key-TESTONLY-0123456789abcdef';
+  const FD_ENV = { [CREDENTIAL_FD_ENV_KEY]: '3' };
+
+  const rejectedQuietly = (fn: () => unknown): string | undefined => {
+    try {
+      fn();
+    } catch (e) {
+      expect(e).toBeInstanceOf(OrcError);
+      const err = e as OrcError;
+      expect(err.code).toBe('unsafe_argument');
+      const text = JSON.stringify({ m: err.message, d: err.details, c: err.cause instanceof Error ? err.cause.message : '' });
+      for (const v of [SECRET, KEY, Buffer.from(SECRET).toString('base64')]) {
+        expect(text).not.toContain(v);
+      }
+      return err.details?.reason as string | undefined;
+    }
+    return 'accepted';
+  };
+
+  it('CLAUDE_ONLY_ENV_KEYS stays in sync with the @orc/security allowlist', () => {
+    expect([...CLAUDE_ONLY_ENV_KEYS].sort()).toEqual(
+      [
+        'ANTHROPIC_API_KEY',
+        'CLAUDE_CODE_OAUTH_TOKEN',
+        'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+        'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
+        'CLAUDE_CODE_DISABLE_CLAUDE_MDS',
+        'HTTPS_PROXY',
+        'HTTP_PROXY',
+        'NO_PROXY',
+      ].sort(),
+    );
+    for (const k of CLAUDE_ONLY_ENV_KEYS) {
+      expect(CLAUDE_ENV_ALLOWLIST, k).toContain(k);
+      expect(TEST_ENV_ALLOWLIST, k).not.toContain(k);
+    }
+    // A credential or proxy key added to the security allowlist must be claude-only here too.
+    const sensitive = CLAUDE_ENV_ALLOWLIST.filter((k) =>
+      /^(?:ANTHROPIC_|CLAUDE_CODE_OAUTH_)|_PROXY$|^CLAUDE_CODE_DISABLE_(?:AUTO_MEMORY|CLAUDE_MDS)$/.test(k),
+    );
+    for (const k of sensitive) expect(CLAUDE_ONLY_ENV_KEYS, k).toContain(k);
+  });
+
+  it('OAuth and memory switches only for claude', () => {
+    for (const k of [
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+      'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
+      'CLAUDE_CODE_DISABLE_CLAUDE_MDS',
+    ]) {
+      expect(allowedEnvKeys('claude').has(k), k).toBe(true);
+      expect(allowedEnvKeys('test').has(k), k).toBe(false);
+      expect(allowedEnvKeys('mcp').has(k), k).toBe(false);
+      expect(rejectedQuietly(() => validateSpawnEnv('test', { [k]: SECRET }))).toBe('env_rejected');
+      expect(rejectedQuietly(() => validateSpawnEnv('mcp', { [k]: SECRET }))).toBe('env_rejected');
+    }
+    expect(
+      rejectedQuietly(() =>
+        validateSpawnEnv('claude', {
+          CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+          CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+          ...FD_ENV,
+        }),
+      ),
+    ).toBe('accepted');
+    expect(rejectedQuietly(() => validateSpawnEnv('claude', { CLAUDE_CODE_OAUTH_TOKEN: SECRET }))).toBe(
+      'accepted',
+    );
+  });
+
+  it('rejects two credentials together and the "never set" keys, without echoing values', () => {
+    const conflicts: Record<string, string>[] = [
+      { ANTHROPIC_API_KEY: KEY, CLAUDE_CODE_OAUTH_TOKEN: SECRET },
+      { ANTHROPIC_API_KEY: KEY, ...FD_ENV },
+      { CLAUDE_CODE_OAUTH_TOKEN: SECRET, ...FD_ENV },
+    ];
+    for (const env of conflicts) {
+      expect(rejectedQuietly(() => validateSpawnEnv('claude', env))).toBe('env_rejected');
+    }
+    for (const k of ['CLAUDE_CODE_SIMPLE', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']) {
+      expect(rejectedQuietly(() => validateSpawnEnv('claude', { [k]: SECRET }))).toBe('env_rejected');
+      // Even if a host addition (`extra`) let the key through the allowlist.
+      expect(rejectedQuietly(() => validateSpawnEnv('claude', { [k]: SECRET }, [k]))).toBe(
+        'env_rejected',
+      );
+    }
+    expect(rejectedQuietly(() => validateSpawnEnv('claude', { ANTHROPIC_API_KEY: KEY }))).toBe(
+      'accepted',
+    );
+  });
+
+  it('credentialFd only for kind claude and only when the env names fd 3', () => {
+    expect(rejectedQuietly(() => validateSpawnCredential('claude', FD_ENV, SECRET))).toBe('accepted');
+    expect(rejectedQuietly(() => validateSpawnCredential('claude', {}, undefined))).toBe('accepted');
+    expect(rejectedQuietly(() => validateSpawnCredential('test', {}, undefined))).toBe('accepted');
+    for (const kind of ['test', 'mcp'] as const) {
+      expect(rejectedQuietly(() => validateSpawnCredential(kind, {}, SECRET))).toBe('env_rejected');
+      expect(rejectedQuietly(() => validateSpawnCredential(kind, FD_ENV, SECRET))).toBe(
+        'env_rejected',
+      );
+    }
+    expect(rejectedQuietly(() => validateSpawnCredential('claude', {}, SECRET))).toBe('env_rejected');
+    for (const fd of ['4', '03', ' 3', '']) {
+      expect(
+        rejectedQuietly(() => validateSpawnCredential('claude', { [CREDENTIAL_FD_ENV_KEY]: fd }, SECRET)),
+        fd,
+      ).toBe('env_rejected');
+    }
+    // The fd variable never travels without a credential (the child would read an unrelated fd 3).
+    expect(rejectedQuietly(() => validateSpawnCredential('claude', FD_ENV, undefined))).toBe(
+      'env_rejected',
+    );
+  });
+
+  it('credentialFd values: 1..4096 bytes, no NUL; UTF-8 round trip on the wire', () => {
+    const max = 'x'.repeat(MAX_CREDENTIAL_FD_BYTES);
+    expect(rejectedQuietly(() => validateSpawnCredential('claude', FD_ENV, max))).toBe('accepted');
+    for (const bad of ['', `${max}x`, 'a\0b', `${'é'.repeat(MAX_CREDENTIAL_FD_BYTES / 2)}x`]) {
+      expect(rejectedQuietly(() => validateSpawnCredential('claude', FD_ENV, bad))).toBe(
+        'env_rejected',
+      );
+    }
+    const frame = encodeCredentialFd(SECRET);
+    expect(frame).toEqual({ b64: Buffer.from(SECRET, 'utf8').toString('base64') });
+    expect(decodeCredentialFd(frame)).toBe(SECRET);
+    expect(decodeCredentialFd(encodeCredentialFd('tök€n'))).toBe('tök€n');
+    expect(
+      rejectedQuietly(() => decodeCredentialFd({ b64: Buffer.from([0xff, 0xfe, 0x41]).toString('base64') })),
+    ).toBe('env_rejected');
   });
 });
 

@@ -66,9 +66,14 @@ export interface RunContext {
   clock: Clock;
   argv: string[];
   env: Record<string, string>;
+  /** oauth on POSIX: token written to fd 3 (`LaunchSpec.credentialFd`); never logged. */
+  credentialFd: string | null;
+  /** Version found by the probe (§10.9); the extension rule keys on it. */
+  cliVersion: string;
 }
 
-function emptyResult(outcome: ClaudeOutcome, durationMs: number): ClaudeRunResult {
+/** Result of a run that never spawned Claude (aborted before spawn, or the CLI could not be started). */
+export function emptyResult(outcome: ClaudeOutcome, durationMs: number): ClaudeRunResult {
   return {
     outcome,
     exitCode: null,
@@ -172,6 +177,7 @@ class ClaudeRun {
         args,
         cwd: r.cwd,
         env: this.ctx.env,
+        ...(this.ctx.credentialFd !== null ? { credentialFd: this.ctx.credentialFd } : {}),
       });
     } catch (e) {
       if (isSpawnFailure(e)) {
@@ -446,12 +452,11 @@ class ClaudeRun {
       case 'init':
         return this.onInit(parsed.event);
       case 'hook':
-        if (this.cfg.bare) {
-          this.setViolation({
-            rule: 'hook_event',
-            detail: maskText(`hook event ${JSON.stringify(parsed.subtype)} with --bare`),
-          });
-        }
+        // `--include-hook-events` is always on and hooks are disabled (ADR-0036): any hook line is foreign.
+        this.setViolation({
+          rule: 'hook_event',
+          detail: maskText(`hook event ${JSON.stringify(parsed.subtype)} (hooks are disabled)`, this.ctx.secrets),
+        });
         return undefined;
       case 'result':
         this.result = parsed.event;
@@ -479,6 +484,11 @@ class ClaudeRun {
       extraTools: [...CLAUDE_INTERNAL_TOOL_NAMES, ...this.cfg.initExtraTools],
       mcpEnabled: this.r.mcp !== null,
       platform: this.cfg.platform,
+      authMode: this.cfg.auth.mode,
+      cliVersion: this.ctx.cliVersion,
+      ...(this.cfg.reviewedExtensions !== undefined
+        ? { reviewedExtensions: this.cfg.reviewedExtensions }
+        : {}),
     });
     if (!v.ok) {
       for (const violation of v.violations) this.setViolation(violation);

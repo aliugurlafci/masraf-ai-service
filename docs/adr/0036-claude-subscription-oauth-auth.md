@@ -1,6 +1,6 @@
 # ADR-0036: Claude runs non-bare with subscription OAuth by default; one hardened argv for both auth modes
 
-- Status: Accepted (2026-11-05; contract 3.0.0 approved by the user). D-7(a), the offline check of the real token's format, is still pending and Wave 1 waits for it. GPM and the Opus review signed the K8 decisions 8.1-8.8 (`.claude/state/denetim-defteri.md`, "D3 TASARIM-ONAYI").
+- Status: Accepted (2026-11-05; contract 3.0.0 approved by the user). D-7(a), the offline check of the real token's format, passed (the user's real token matches `CLAUDE_OAUTH_TOKEN_REGEX`; only the boolean was recorded). GPM and the Opus review signed the K8 decisions 8.1-8.8 (`.claude/state/denetim-defteri.md`, "D3 TASARIM-ONAYI").
 - Supersedes ADR-0016 (the `--bare` decision). The isolated per-workspace `HOME` and `CLAUDE_CONFIG_DIR` from ADR-0016, as amended by ADR-0024, stay in force.
 - Amends ADR-0024 Decision 5 and its residual risks: each Claude spawn now receives its own credential.
 - Release: shipped in contract 3.0.0 together with ADR-0037 (B-015). Each ADR has its own changelog subsection.
@@ -243,7 +243,7 @@ On win32, `buildChildEnv` copies the worker's real `APPDATA` and `LOCALAPPDATA`.
 
 ## Acceptance criteria and verification
 - **D0 (`B-017-D0.md`):** D-1a/b/c, D-2, D-4 and D-6 passed. D-3 passed for MCP but not for Bash (item 7).
-- **D-7(a), blocking before Wave 1:** check offline that the user's real token matches `CLAUDE_OAUTH_TOKEN_REGEX`. Report only the boolean result.
+- **D-7(a), PASSED (GEÇ):** the user's real token matches `CLAUDE_OAUTH_TOKEN_REGEX` (offline check; only the boolean result was reported).
 - **Wave 2 gate (completes D-2):** after `credentialFd` is implemented, the runner and worker logs of `test:compose`, `test:integration` and the security suite contain 0 matches of the dummy token value and of its base64 form.
 - **Live, with user approval:**
   - D-5: only `api.anthropic.com:443` is reached, checked with a proxy that logs CONNECT requests.

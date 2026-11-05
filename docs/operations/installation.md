@@ -14,7 +14,7 @@ the development mode on the host. Operations after installation: [runbook.md](ru
 | Node.js | v24.18.0 and npm 11 on the host, for the operator scripts (`scripts/*.mjs`) and the development mode. |
 | Git | Any recent git on the host, to place repositories under `projects/`. |
 | Network | Outbound HTTPS for the image build (npm registry, Docker Hub, mcr.microsoft.com, GitHub release of codebase-memory-mcp) and at runtime only `api.anthropic.com:443` through the egress proxy. |
-| Anthropic | An API key for Claude Code (`CLAUDE_BARE=true` in production). |
+| Claude | A Claude subscription (Pro, Max, Team or Enterprise) and the Claude CLI on the host, only to run `claude setup-token`. Production uses the OAuth token (`CLAUDE_AUTH_MODE=oauth`, the default). An Anthropic API key is the not recommended alternative (`api_key` mode). |
 
 ## 2. Get the code and install the host tooling
 
@@ -37,13 +37,23 @@ certificates into `./secrets` (gitignored). Details and permissions: [secrets.md
 - `ORC_SECRETS_DIR=/srv/orc/secrets` keeps the secrets outside the checkout. Every script and
   `docker-compose.yml` read the same variable.
 
-The Anthropic API key cannot be generated. Provide it on stdin so that it does not appear in shell history:
+The Claude credential cannot be generated. Create a long-lived subscription token on a machine where you are
+logged in to Claude Code, then install it from stdin so that it does not appear in shell history:
 
 ```bash
-node scripts/generate-secrets.mjs --only anthropic_api_key --anthropic-api-key-stdin < /path/to/key-file
+claude setup-token                                   # prints sk-ant-oat01-...; copy it into a file
+node scripts/generate-secrets.mjs --only claude_oauth_token --claude-oauth-token-stdin < /path/to/token-file
 ```
 
-PowerShell: `Get-Content C:\path\key.txt | node scripts/generate-secrets.mjs --only anthropic_api_key --anthropic-api-key-stdin`.
+PowerShell: `Get-Content C:\path\token.txt | node scripts/generate-secrets.mjs --only claude_oauth_token --claude-oauth-token-stdin`.
+Delete the temporary token file afterwards. `generate-secrets` checks the token format and never prints it.
+`anthropic_api_key.txt` stays empty (0 bytes = not configured); exactly one of the two credential files may
+be non-empty. API-key mode is described in [secrets.md](secrets.md#switching-the-auth-mode).
+
+On a Linux Docker host, check the kernel setting that protects Claude's memory from other processes of the
+same uid (the runner refuses to become healthy in production without it):
+`cat /proc/sys/kernel/yama/ptrace_scope` must print `1` or higher (persist it with a file in
+`/etc/sysctl.d/`; see the [runbook](runbook.md#claude-credential-oauth-token)).
 
 ## 4. Optional settings
 
@@ -182,7 +192,7 @@ The test global setup drops that database.
 npm run dev:setup                                   # once; safe to repeat
 npm run dev:create-admin -- --username admin        # once; asks for the password interactively
 npm run dev:api                                     # :4000, each in its own terminal
-npm run dev:worker                                  # :4100
+npm run dev:worker                                  # :4100; needs the Claude token, see below
 npm run dev:web                                     # http://127.0.0.1:5173
 ```
 
@@ -192,8 +202,10 @@ repository; never printed). It starts or reuses `orc-dev-mssql` (127.0.0.1:14330
 `projects/`, `workspaces/` and `~/.orc-dev/{claude,cbm-cache,empty-hooks}`. `dev:api` and `dev:worker` merge
 `dev.env` with the application-specific values of steps 2 and 4 below and start `tsx watch`. A variable that
 is already set in your shell wins over `dev.env`; extra `KEY=VALUE` lines in `dev.env` (for example
-`ANTHROPIC_API_KEY`) are forwarded. If `dev.env` is missing, the commands tell you to run `dev:setup`.
-Ctrl+C stops the whole process tree. The manual steps below do the same by hand.
+`CLAUDE_AUTH_MODE`) are forwarded. If `dev.env` is missing, the commands tell you to run `dev:setup`.
+`dev:worker` runs in `oauth` mode: it reads the token from `secrets/claude_oauth_token.txt` (install it once with
+`claude setup-token`, section 3) unless `CLAUDE_CODE_OAUTH_TOKEN[_FILE]` is set, and otherwise stops with
+instructions. Ctrl+C stops the whole process tree. The manual steps below do the same by hand.
 
 ### Manual path
 
@@ -236,13 +248,18 @@ Ctrl+C stops the whole process tree. The manual steps below do the same by hand.
    DB_USER=orc_worker DB_PASSWORD="$DEV_WORKER_PASSWORD" \
      PROJECTS_ROOT="$PWD/projects" WORKSPACES_ROOT="$PWD/workspaces" \
      CLAUDE_HOME_ROOT="$HOME/.orc-dev/claude" CBM_CACHE_DIR="$HOME/.orc-dev/cbm-cache" \
-     GIT_HOOKS_DIR="$HOME/.orc-dev/empty-hooks" CLAUDE_BARE=false npm run dev:worker          # :4100
+     GIT_HOOKS_DIR="$HOME/.orc-dev/empty-hooks" CLAUDE_AUTH_MODE=oauth \
+     CLAUDE_CODE_OAUTH_TOKEN_FILE="$PWD/secrets/claude_oauth_token.txt" npm run dev:worker    # :4100
    npm run dev:web                                                                             # http://127.0.0.1:5173
    ```
 
    `GIT_HOOKS_DIR` must be an empty, read-only directory: `mkdir -p ~/.orc-dev/empty-hooks && chmod 0555 ~/.orc-dev/empty-hooks`.
-   With `CLAUDE_BARE=false`, the worker uses your local Claude Code login. To use an API key instead,
-   set `ANTHROPIC_API_KEY` and leave `CLAUDE_BARE` unset. The Claude CLI 2.1.316 and codebase-memory-mcp
+   The worker needs the subscription token (`CLAUDE_AUTH_MODE=oauth`, the default): run `claude setup-token`
+   and install the token as in section 3. `npm run dev:worker` defaults `CLAUDE_CODE_OAUTH_TOKEN_FILE` to
+   `secrets/claude_oauth_token.txt` when no token variable is set, checks that the file exists and explains
+   the setup-token step if it does not. To use an API key instead (not recommended), set
+   `CLAUDE_AUTH_MODE=api_key` and `ANTHROPIC_API_KEY`. `CLAUDE_BARE` was removed (ADR-0036); setting it
+   makes the worker fail at startup. The Claude CLI 2.1.316 and codebase-memory-mcp
    0.12.0 must be on `PATH`. Otherwise, set `CLAUDE_BIN` and `CODEBASE_MEMORY_MCP_BIN`.
    The Vite dev server proxies `/api` to `VITE_API_PROXY_TARGET` (default `http://127.0.0.1:4000`).
 

@@ -3,8 +3,9 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ClaudeInitEvent, ParsedClaudeLine } from '@orc/shared';
-import type { HostPlatform, LaunchLease } from '@orc/shared/node';
+import type { ClaudeAuth, HostPlatform, LaunchLease } from '@orc/shared/node';
 import { computeToolPolicy } from '@orc/security';
+import { CLAUDE_REVIEWED_EXTENSIONS } from '@orc/claude-runner';
 import type { ClaudeRunHandlers, ClaudeRunnerConfig, ClaudeRunRequest, InitValidation } from '@orc/claude-runner';
 
 export const FAKE_CLAUDE_PATH = fileURLToPath(
@@ -16,6 +17,8 @@ export const FAKE_HELP_PATH = fileURLToPath(
 
 /** A syntactically realistic test-only API key (masked by the `sk-ant-` pattern). */
 export const TEST_API_KEY = 'sk-ant-api03-TESTONLY0000000000000000000000000000';
+/** A dummy OAuth token matching `CLAUDE_OAUTH_TOKEN_REGEX` (ADR-0036); never a real credential. */
+export const FAKE_OAUTH_TOKEN = `sk-ant-oat01-${'A'.repeat(40)}`;
 export const TEST_PROXY_TOKEN = 'proxytoken_TESTONLY_000000000000';
 
 export const ATTEMPT_ID = '11111111-2222-4333-8444-555555555555';
@@ -23,7 +26,50 @@ export const TASK_ID = '22222222-3333-4444-8555-666666666666';
 export const WORKSPACE_ID = '33333333-4444-4555-8666-777777777777';
 export const SESSION_ID = '44444444-5555-4666-8777-888888888888';
 
+export type FakeAuthVariant = 'oauth' | 'api_key';
+
+/** Auth input of the runner for a variant; oauth is the default mode (ADR-0036). */
+export function fakeAuth(variant: FakeAuthVariant = 'oauth'): ClaudeAuth {
+  return variant === 'oauth'
+    ? { mode: 'oauth', oauthToken: FAKE_OAUTH_TOKEN }
+    : { mode: 'api_key', apiKey: TEST_API_KEY };
+}
+
 export const hostPlatform: HostPlatform = process.platform === 'win32' ? 'win32' : 'posix';
+
+/** Same shape as `ReviewedExtensions` (contract §10.6): names the fake CLI reports in its init. */
+export interface FakeReviewedExtensions {
+  skills: readonly string[];
+  agents: readonly string[];
+  slashCommands: readonly string[];
+  plugins: readonly string[];
+}
+
+/** Version the fake reports (matches the recorded table entry of the host platform). */
+export const FAKE_CLI_VERSION = process.platform === 'win32' ? '2.1.318' : '2.1.316';
+
+/**
+ * The extension sets tests/fixtures/fake-claude/fake-claude.mjs reports: the names recorded from the real CLI
+ * (copied by hand into the fake), keyed for the fake's version on the host platform. Tests inject this table
+ * so the production one is never edited.
+ */
+export function fakeReviewedExtensions(
+  platform: HostPlatform = hostPlatform,
+): Record<string, FakeReviewedExtensions> {
+  const table: Record<string, FakeReviewedExtensions> = {};
+  for (const mode of ['oauth', 'api_key'] as const) {
+    // The recorded names are identical on every platform; only the plugin set differs (ADR-0036 D-6).
+    const recorded = CLAUDE_REVIEWED_EXTENSIONS[`2.1.316/posix/${mode}`];
+    if (recorded === undefined) throw new Error(`no recorded extensions for ${mode}`);
+    table[`${FAKE_CLI_VERSION}/${platform}/${mode}`] = {
+      skills: [...recorded.skills],
+      agents: [...recorded.agents],
+      slashCommands: [...recorded.slashCommands],
+      plugins: [...recorded.plugins, ...(platform === 'win32' ? ['cc-plugin-privacy'] : [])],
+    };
+  }
+  return table;
+}
 
 export interface RunnerLayout {
   root: string;
@@ -72,13 +118,15 @@ export async function createRunnerLayout(root: string): Promise<RunnerLayout> {
 export function fakeRunnerConfig(
   layout: RunnerLayout,
   overrides: Partial<ClaudeRunnerConfig> = {},
+  options: { injectExtensions?: boolean } = {},
 ): ClaudeRunnerConfig {
+  // Live runs use the production reviewed table; fake runs inject the table of the names fake-claude reports.
+  const injected = options.injectExtensions === false ? undefined : fakeReviewedExtensions();
   return {
     bin: process.execPath,
     binPrefixArgs: [FAKE_CLAUDE_PATH],
-    bare: true,
     claudeHomeRoot: layout.claudeHomeRoot,
-    apiKey: TEST_API_KEY,
+    auth: fakeAuth('oauth'),
     proxy: { https: null, http: null, noProxy: null, token: null },
     killGraceMs: 1500,
     initTimeoutMs: 20_000,
@@ -88,6 +136,7 @@ export function fakeRunnerConfig(
     platform: hostPlatform,
     workerId: 'worker-test-1',
     initExtraTools: [],
+    ...(injected !== undefined ? { reviewedExtensions: injected } : {}),
     ...overrides,
   };
 }

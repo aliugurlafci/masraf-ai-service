@@ -35,6 +35,8 @@ export { DbWriteAbandonedError, withDbRetry } from './util.js';
 export { createDbGitOperationRecorder, createDbMcpOperationRecorder } from './recorders.js';
 export type { DbMcpOperationRecorder } from './recorders.js';
 export { commitMessage, createAttemptPipeline, resultSummary, workerHeartbeatKey } from './pipeline.js';
+export { ensureClaudeAppDataDirs } from './claude-home.js';
+export type { MkdirFn } from './claude-home.js';
 export { createDeadLetterHandler, createProjectJobProcessor, createRunAttemptProcessor } from './processors.js';
 export { DB_FAILURES_UNHEALTHY, createHeartbeat } from './heartbeat.js';
 export type { HeartbeatDeps } from './heartbeat.js';

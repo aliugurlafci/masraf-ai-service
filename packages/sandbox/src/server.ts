@@ -23,6 +23,7 @@ import {
   type SessionFrame,
   type SpawnRequest,
 } from './protocol';
+import { decodeCredentialFd } from './validation';
 
 export interface SocketFsOps {
   lstat(p: string): Promise<{ isSocket(): boolean }>;
@@ -243,12 +244,17 @@ export function createRunnerServer(o: RunnerServerOptions): RunnerServer {
       let proc: SupervisedProcess;
       let uid: number | null;
       try {
+        // ADR-0036 m.4/m.8: the credential is decoded only here, handed to the lease manager and
+        // never logged; the frame drops its reference so it does not outlive the spawn.
+        const credential = req.credentialFd;
+        delete req.credentialFd;
         ({ proc, uid } = await o.manager.spawn(req.leaseId, {
           kind: req.kind,
           argv: req.argv,
           cwd: req.cwd,
           env: req.env,
           limits: req.limits,
+          ...(credential === undefined ? {} : { credentialFd: decodeCredentialFd(credential) }),
         }));
       } catch (e) {
         if (isOrcError(e) && e.status < 500)

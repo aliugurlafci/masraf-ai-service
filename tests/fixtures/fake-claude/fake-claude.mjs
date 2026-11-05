@@ -5,12 +5,25 @@
 // behaviour is driven by `@@fake <directive> [args]` lines in the prompt read from stdin.
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  readlinkSync,
+  mkdirSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.1.316';
-const HELP_FILE = join(dirname(fileURLToPath(import.meta.url)), `claude-help-${VERSION}.txt`);
+// The version of the recorded reviewed-extension entry of the host platform (CLAUDE_REVIEWED_EXTENSIONS):
+// 2.1.316 on POSIX, 2.1.318 on win32 (ADR-0036 D-6). The help text is the recorded 2.1.316 one on both.
+const VERSION = process.platform === 'win32' ? '2.1.318' : '2.1.316';
+const HELP_VERSION = '2.1.316';
+const HELP_FILE = join(dirname(fileURLToPath(import.meta.url)), `claude-help-${HELP_VERSION}.txt`);
 const DIRECTIVE = /^@@fake (\S+)(?: (.*))?$/;
 const SECRET_TEXT = 'here is a key sk-ant-FAKE0000000000000000000000 do not leak';
 const MCP_TOOLS = [
@@ -20,6 +33,85 @@ const MCP_TOOLS = [
 ];
 const SNIPPET_MAX = 4096;
 const HUGE_CHUNK = 64 * 1024;
+const NOT_LOGGED_IN = 'Not logged in \u00b7 Please run /login';
+const AUTH_401_BODY =
+  '{"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}';
+
+// Init sets of the recorded CLI (ADR-0036 D-6): oauth adds `schedule` (skill + slash command),
+// win32 adds the cc-plugin-privacy plugin, agents are the same everywhere, memory_paths is null.
+// Synced by hand from RECORDED_* in packages/claude-runner/src/constants.ts (16 skills, 43 slash commands, 5 agents).
+const BASE_SKILLS = [
+  'deep-research',
+  'dataviz',
+  'update-config',
+  'verify',
+  'debug',
+  'code-review',
+  'simplify',
+  'batch',
+  'fewer-permission-prompts',
+  'doctor',
+  'loop',
+  'claude-api',
+  'workflow-authoring',
+  'run',
+  'run-skill-generator',
+  'plugin-authoring',
+];
+const BASE_SLASH = [
+  'deep-research',
+  'dataviz',
+  'update-config',
+  'verify',
+  'debug',
+  'code-review',
+  'simplify',
+  'batch',
+  'fewer-permission-prompts',
+  'doctor',
+  'loop',
+  'claude-api',
+  'workflow-authoring',
+  'run',
+  'run-skill-generator',
+  'plugin-authoring',
+  'agents',
+  'auto-mode-setup',
+  'autocompact',
+  'clear',
+  'color',
+  'compact',
+  'config',
+  'output-style',
+  'context',
+  'effort',
+  'fast',
+  'focus',
+  'init',
+  'mcp',
+  'model',
+  '__remote-workflow',
+  'workflow-launch-exec',
+  'reload-plugins',
+  'reload-skills',
+  'rename',
+  'security-review',
+  'usage',
+  'insights',
+  'recap',
+  'goal',
+  'list-agents',
+  'team-onboarding',
+];
+const AGENTS = [
+  'claude',
+  'Explore',
+  'general-purpose',
+  'Plan',
+  'statusline-setup',
+];
+const BASE_PLUGINS = ['cc-plugin-agents-md', 'cc-plugin-plugin-authoring'];
+const EXTENSION_KINDS = { skill: 'skill', agent: 'agent', slash: 'slash', command: 'slash', plugin: 'plugin' };
 
 // Option table of the verified CLI flags: 0 = boolean, 1 = one value, 'v' = variadic.
 const OPTIONS = {
@@ -27,6 +119,9 @@ const OPTIONS = {
   '--print': 0,
   '--verbose': 0,
   '--bare': 0,
+  '--include-hook-events': 0,
+  '--restricted': 0,
+  '--settings': 1,
   '--strict-mcp-config': 0,
   '--fork-session': 0,
   '--output-format': 1,
@@ -284,6 +379,103 @@ function spawnSleeper(detached) {
   return child;
 }
 
+// ---- credentials (ADR-0036 Decision 4 and 11) -----------------------------------------------
+
+function readFdToEof(fd) {
+  const chunks = [];
+  const buf = Buffer.alloc(4096);
+  let spins = 0;
+  try {
+    for (;;) {
+      let n;
+      try {
+        n = readSync(fd, buf, 0, buf.length, null);
+      } catch (e) {
+        if (e && e.code === 'EAGAIN' && spins < 2000) {
+          spins += 1;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+          continue;
+        }
+        if (e && e.code === 'EOF') break;
+        return null;
+      }
+      if (n === 0) break;
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+    }
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // already closed or never open
+    }
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/** Resolves the credential like the CLI: FD variable first (read to EOF, then closed), else env. */
+function resolveCredential() {
+  const env = process.env;
+  const fdVar = env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
+  const fdVarSet = fdVar !== undefined && fdVar !== '';
+  let oauth = 'none';
+  if (fdVarSet) {
+    const fd = /^\d+$/.test(fdVar) ? Number.parseInt(fdVar, 10) : -1;
+    credentialFdTarget = fd >= 3 ? fdTarget(fd) : null;
+    const text = fd >= 3 ? readFdToEof(fd) : null;
+    if (text !== null && text.trim().length > 0) oauth = 'oauth_fd';
+  }
+  if (oauth === 'none' && (env.CLAUDE_CODE_OAUTH_TOKEN ?? '').length > 0) oauth = 'oauth_env';
+  const apiKey = (env.ANTHROPIC_API_KEY ?? '').length > 0;
+  // An API key wins (apiKeySource reports it); otherwise the oauth token is used.
+  return {
+    authSource: apiKey ? 'api_key' : oauth,
+    apiKeySource: apiKey ? 'ANTHROPIC_API_KEY' : 'none',
+    mode: apiKey ? 'api_key' : oauth === 'none' ? 'none' : 'oauth',
+    fdVarSet,
+  };
+}
+
+function initSets(mode, cfg) {
+  const oauth = mode === 'oauth';
+  const plugins = [...BASE_PLUGINS, ...(process.platform === 'win32' ? ['cc-plugin-privacy'] : [])];
+  return {
+    skills: [...BASE_SKILLS, ...(oauth ? ['schedule'] : []), ...cfg.ext.skill],
+    slash_commands: [...BASE_SLASH, ...(oauth ? ['schedule'] : []), ...cfg.ext.slash],
+    agents: [...AGENTS, ...cfg.ext.agent],
+    plugins: [...plugins, ...cfg.ext.plugin].map((name) => ({
+      name,
+      path: `/fake/plugins/${name}`,
+      source: `${name}@fake`,
+    })),
+  };
+}
+
+/** `readlink /proc/self/fd/N` (`pipe:[inode]`, `socket:[inode]`, `anon_inode:[eventpoll]`, ...); null where unavailable (win32). */
+function fdTarget(fd) {
+  try {
+    return readlinkSync(`/proc/self/fd/${fd}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Identity (`pipe:[inode]` or `socket:[inode]`) of the credential fd, recorded before it is read and closed. */
+let credentialFdTarget = null;
+
+/** Every open fd with its target. fd numbers above 2 are reused by the runtime's own handles, so tests must compare targets. */
+function openFds() {
+  const fds = [];
+  for (let fd = 0; fd <= 63; fd += 1) {
+    try {
+      fstatSync(fd);
+      fds.push({ fd, target: fdTarget(fd) });
+    } catch {
+      // not open
+    }
+  }
+  return fds;
+}
+
 // ---- main -----------------------------------------------------------------------------------
 
 async function main() {
@@ -302,6 +494,22 @@ async function main() {
     return exit(1);
   }
   const { opts } = parsed;
+  if (opts.flags.has('--bare')) {
+    await writeTo(
+      process.stderr,
+      'error: --bare is removed by ADR-0036 (bare mode does not read the OAuth token); use the hardened non-bare argv\n',
+    );
+    return exit(1);
+  }
+  const settingsArg = opts.values['--settings'];
+  if (settingsArg !== undefined && settingsArg.trimStart().startsWith('{')) {
+    try {
+      JSON.parse(settingsArg);
+    } catch {
+      await writeTo(process.stderr, 'Error: Invalid JSON provided to --settings\n');
+      return exit(1);
+    }
+  }
   if (!opts.flags.has('-p')) {
     await writeTo(process.stderr, 'error: fake-claude supports only print mode (-p)\n');
     return exit(1);
@@ -336,6 +544,11 @@ async function main() {
     cost: 0.0123,
     usage: [10, 5],
     sessionMissing: false,
+    ext: { skill: [], slash: [], agent: [], plugin: [] },
+    memoryPath: null,
+    apiKeySourceOverride: null,
+    toolMissing: [],
+    authError: null,
   };
   for (const d of directives) {
     switch (d.name) {
@@ -373,6 +586,25 @@ async function main() {
         cfg.usage = [a || 0, b || 0];
         break;
       }
+      case 'init-extension': {
+        const [kind = '', ...rest] = d.arg.trim().split(/\s+/);
+        const key = EXTENSION_KINDS[kind.toLowerCase().replace(/^slash.*/, 'slash')];
+        const name = rest.join(' ');
+        if (key !== undefined && name.length > 0) cfg.ext[key].push(name);
+        break;
+      }
+      case 'init-memory-path':
+        cfg.memoryPath = d.arg.trim();
+        break;
+      case 'init-api-key-source':
+        cfg.apiKeySourceOverride = d.arg.trim();
+        break;
+      case 'init-tool-missing':
+        cfg.toolMissing.push(d.arg.trim());
+        break;
+      case 'auth-error':
+        cfg.authError = d.arg.trim() === 'not-logged-in' ? 'not-logged-in' : '401';
+        break;
       case 'session-missing':
         cfg.sessionMissing = true;
         break;
@@ -408,6 +640,8 @@ async function main() {
       (resumeId !== null ? (opts.flags.has('--fork-session') ? randomUUID() : resumeId) : randomUUID()),
   };
   const started = Date.now();
+  const cred = resolveCredential();
+  if (cred.mode === 'none' && cfg.authError === null) cfg.authError = 'not-logged-in';
 
   if (!cfg.noInit) {
     await emit({
@@ -415,7 +649,9 @@ async function main() {
       subtype: 'init',
       cwd: cfg.initCwd ?? process.cwd(),
       session_id: state.sessionId,
-      tools: [...tools, ...(mcpConfigs.length > 0 ? MCP_TOOLS : []), ...cfg.toolExtra],
+      tools: [...tools, ...(mcpConfigs.length > 0 ? MCP_TOOLS : []), ...cfg.toolExtra].filter(
+        (t) => !cfg.toolMissing.includes(t),
+      ),
       mcp_servers: [...mcpServerNames(mcpConfigs), ...cfg.mcpExtra].map((name) => ({
         name,
         status: 'connected',
@@ -423,8 +659,10 @@ async function main() {
       model: state.model,
       permissionMode: cfg.permissionMode ?? opts.values['--permission-mode'] ?? 'default',
       claude_code_version: VERSION,
-      apiKeySource: process.env.ANTHROPIC_API_KEY ? 'ANTHROPIC_API_KEY' : 'none',
+      apiKeySource: cfg.apiKeySourceOverride ?? cred.apiKeySource,
       output_style: 'default',
+      memory_paths: cfg.memoryPath === null ? null : { auto: cfg.memoryPath },
+      ...initSets(cred.mode, cfg),
     });
   }
 
@@ -501,7 +739,13 @@ async function main() {
           subtype: 'fake_env',
           names: Object.keys(process.env).sort(),
           hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
+          hasOauthToken: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN),
+          hasOauthFdVar: cred.fdVarSet,
+          authSource: cred.authSource,
         });
+        break;
+      case 'echo-fds':
+        await emit({ type: 'system', subtype: 'fake_fds', fds: openFds(), credentialFdTarget, fdVarSet: cred.fdVarSet });
         break;
       case 'echo-argv':
         await emit({ type: 'system', subtype: 'fake_argv', argv });
@@ -549,6 +793,28 @@ async function main() {
   }
 
   if (cfg.noInit) return hangForever();
+
+  if (cfg.authError !== null) {
+    const text =
+      cfg.authError === '401' ? `Failed to authenticate. API Error: 401 ${AUTH_401_BODY}` : NOT_LOGGED_IN;
+    await emit({ ...assistant(state, [{ type: 'text', text }]), error: 'authentication_failed' });
+    await emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      ...(cfg.authError === '401' ? { api_error_status: 401 } : {}),
+      duration_ms: Date.now() - started,
+      duration_api_ms: 0,
+      num_turns: 1,
+      result: text,
+      stop_reason: 'stop_sequence',
+      session_id: state.sessionId,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      permission_denials: [],
+    });
+    return exit(1);
+  }
 
   await emit(assistant(state, [{ type: 'text', text: 'fake: done' }]));
   const withResult = !cfg.noResult && !(cfg.exitSet && cfg.exitCode !== 0 && !cfg.resultSet);

@@ -48,14 +48,15 @@ in [docs/architecture/failure-recovery.md](docs/architecture/failure-recovery.md
 
 ## Quick start (Docker Compose)
 
-Prerequisites: Docker with Compose v2.24+, Node.js 24.18.0, git, and an Anthropic API key. The full
+Prerequisites: Docker with Compose v2.24+, Node.js 24.18.0, git, and a Claude subscription (the Claude CLI is needed once for `claude setup-token`). The full
 procedure, including remote access and development mode, is in
 [docs/operations/installation.md](docs/operations/installation.md).
 
 ```bash
 npm ci
 npm run secrets:generate                                   # passwords, tokens, CAs, TLS certificates → ./secrets
-node scripts/generate-secrets.mjs --only anthropic_api_key --anthropic-api-key-stdin < /path/to/key-file
+claude setup-token                                         # prints a long-lived subscription token (sk-ant-oat01-...)
+node scripts/generate-secrets.mjs --only claude_oauth_token --claude-oauth-token-stdin < /path/to/token-file
 git clone <your repo> projects/my-service                  # repositories live under ./projects (mounted read-only)
 npm run compose:up                                         # validate secrets, build, start, wait until healthy
 docker compose run --rm db-cli create-admin --username admin

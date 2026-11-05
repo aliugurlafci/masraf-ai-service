@@ -73,6 +73,12 @@ export interface SpawnSupervisedOptions {
   env: Record<string, string>;
   spawn?: SpawnFn;
   platform?: HostPlatform;
+  /**
+   * Credential handed to the child on file descriptor 3 (ADR-0036; POSIX only, kind `claude`). The child is
+   * spawned with `stdio: ['pipe','pipe','pipe','pipe']`; the value is written to `stdio[3]` and that pipe is
+   * ended at once. The value never enters argv or env. Rejected on win32 (the fd path does not work there).
+   */
+  credentialFd?: string;
 }
 
 // ---- internals ------------------------------------------------------------------------------
@@ -568,6 +574,12 @@ export function spawnSupervised(
   const platform = opts.platform ?? hostPlatform();
   const spawnFn = opts.spawn ?? nodeSpawn;
   const command = basename(cmd);
+  const credential = opts.credentialFd;
+  if (credential !== undefined && platform !== 'posix') {
+    throw new ProcessSpawnError(`Failed to spawn ${command}`, {
+      details: { command, reason: 'credential_fd_unsupported' },
+    });
+  }
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawnFn(cmd, [...args], {
@@ -576,6 +588,9 @@ export function spawnSupervised(
       shell: false,
       windowsHide: true,
       detached: platform === 'posix',
+      ...(credential === undefined
+        ? {}
+        : { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe', 'pipe'] }),
     });
   } catch (e) {
     throw new ProcessSpawnError(`Failed to spawn ${command}`, {
@@ -598,6 +613,26 @@ export function spawnSupervised(
     });
   });
   child.stdin.on('error', () => undefined);
+  if (credential !== undefined) {
+    const fd3 = child.stdio[3];
+    if (fd3 === null || fd3 === undefined || !('write' in fd3)) {
+      // The child is already running and would start without its credential: kill its whole group
+      // (it is detached, pgid = pid) and close our pipe ends before reporting the failure.
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      throw new ProcessSpawnError(`Failed to spawn ${command}`, {
+        details: { command, reason: 'credential_fd_missing' },
+      });
+    }
+    fd3.on('error', () => undefined);
+    fd3.end(credential);
+  }
   const markerAttemptId = opts.env[MARKER_ENV] ?? null;
   let graceful: Promise<KillResult> | null = null;
   let forced: Promise<KillResult> | null = null;

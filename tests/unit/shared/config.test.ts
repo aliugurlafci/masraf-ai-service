@@ -7,6 +7,7 @@ import {
   ApiConfigSchema,
   ConfigError,
   DbNameGuardError,
+  CLAUDE_OAUTH_TOKEN_REGEX,
   SECRET_ENV_KEYS,
   assertDbNameForEnv,
   loadApiConfig,
@@ -54,6 +55,8 @@ const apiEnv = (extra: Env = {}): Env => ({
   ...extra,
 });
 
+const OAUTH_TOKEN = 'sk-ant-oat01-unit_Test-Token0123456789abcdefghij';
+const API_KEY = 'sk-ant-api03-test-key-000000000000000000';
 const workerEnv = (extra: Env = {}): Env => ({
   NODE_ENV: 'development',
   DB_USER: 'orc_worker',
@@ -62,7 +65,7 @@ const workerEnv = (extra: Env = {}): Env => ({
   WORKSPACES_ROOT: abs('workspaces'),
   CLAUDE_HOME_ROOT: abs('claude-home'),
   CBM_CACHE_DIR: abs('cbm'),
-  ANTHROPIC_API_KEY: 'sk-ant-test-key-000000000000000000',
+  CLAUDE_CODE_OAUTH_TOKEN: OAUTH_TOKEN,
   WORKER_ID: 'worker-1',
   ...extra,
 });
@@ -257,8 +260,7 @@ describe('loadWorkerConfig', () => {
     expect(cfg.db.poolMax).toBe(5);
     expect(cfg.db.appName).toBe('orc-worker');
     expect(cfg.workerConcurrency).toBe(2);
-    expect(cfg.claudeBare).toBe(true);
-    expect(cfg.anthropicApiKey).toBe('sk-ant-test-key-000000000000000000');
+    expect(cfg.claudeAuth).toEqual({ mode: 'oauth', oauthToken: OAUTH_TOKEN });
     expect(cfg.claudeBinPrefixArgs).toEqual([]);
     expect(cfg.httpsProxy).toBeNull();
     expect(cfg.noProxy).toBe('localhost,127.0.0.1');
@@ -272,22 +274,133 @@ describe('loadWorkerConfig', () => {
     expect(loadWorkerConfig(rest).workerId.length).toBeGreaterThan(0);
   });
 
-  it('reads ANTHROPIC_API_KEY from a file and requires it when CLAUDE_BARE=true', () => {
-    const p = secretFile('anthropic.txt', 'sk-ant-from-file\n');
-    const { ANTHROPIC_API_KEY: _unused, ...rest } = workerEnv();
-    expect(loadWorkerConfig({ ...rest, ANTHROPIC_API_KEY_FILE: p }).anthropicApiKey).toBe(
-      'sk-ant-from-file',
+  it('reads CLAUDE_CODE_OAUTH_TOKEN from a file in oauth mode (the default)', () => {
+    const p = secretFile(
+      'oauth.txt',
+      `${OAUTH_TOKEN}
+`,
     );
-    expect(() => loadWorkerConfig(rest)).toThrow(/ANTHROPIC_API_KEY/);
-    expect(loadWorkerConfig({ ...rest, CLAUDE_BARE: 'false' }).anthropicApiKey).toBeNull();
+    const { CLAUDE_CODE_OAUTH_TOKEN: _unused, ...rest } = workerEnv();
+    const cfg = loadWorkerConfig({ ...rest, CLAUDE_CODE_OAUTH_TOKEN_FILE: p });
+    expect(cfg.claudeAuth).toEqual({ mode: 'oauth', oauthToken: OAUTH_TOKEN });
+    expect(() => loadWorkerConfig(rest)).toThrow(/CLAUDE_CODE_OAUTH_TOKEN/);
   });
 
-  it('allows CLAUDE_BARE=false only in development', () => {
+  it('treats the token and the token file as one credential (both set => ConfigError)', () => {
+    const p = secretFile('oauth-both.txt', OAUTH_TOKEN);
+    expect(() => loadWorkerConfig(workerEnv({ CLAUDE_CODE_OAUTH_TOKEN_FILE: p }))).toThrow(
+      /CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN_FILE are both set/,
+    );
+  });
+});
+
+describe('loadWorkerConfig: Claude auth mode matrix (ADR-0036)', () => {
+  const withoutCredential = (): Env => {
+    const { CLAUDE_CODE_OAUTH_TOKEN: _t, ...rest } = workerEnv();
+    return rest;
+  };
+  const apiKeyEnv = (extra: Env = {}): Env => ({
+    ...withoutCredential(),
+    CLAUDE_AUTH_MODE: 'api_key',
+    ANTHROPIC_API_KEY: API_KEY,
+    ...extra,
+  });
+  const messageOf = (env: Env): string => {
+    try {
+      loadWorkerConfig(env);
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+    return '';
+  };
+
+  it('defaults to oauth in every NODE_ENV and exposes the token', () => {
+    expect(loadWorkerConfig(workerEnv()).claudeAuth.mode).toBe('oauth');
+    const test = workerEnv({ NODE_ENV: 'test', DB_NAME: 'orc_test' });
+    expect(loadWorkerConfig(test).claudeAuth).toEqual({ mode: 'oauth', oauthToken: OAUTH_TOKEN });
+  });
+
+  it('oauth: requires a token matching CLAUDE_OAUTH_TOKEN_REGEX', () => {
+    expect(messageOf(withoutCredential())).toMatch(/CLAUDE_CODE_OAUTH_TOKEN: Required/);
+    const bad = 'sk-ant-oat1-too-short';
+    const msg = messageOf({ ...withoutCredential(), CLAUDE_CODE_OAUTH_TOKEN: bad });
+    expect(msg).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
+    expect(msg).not.toContain(bad);
+    expect(CLAUDE_OAUTH_TOKEN_REGEX.test(OAUTH_TOKEN)).toBe(true);
+    expect(CLAUDE_OAUTH_TOKEN_REGEX.test(API_KEY)).toBe(false);
+    expect(
+      CLAUDE_OAUTH_TOKEN_REGEX.test(`${OAUTH_TOKEN}
+`),
+    ).toBe(false);
+    expect(CLAUDE_OAUTH_TOKEN_REGEX.test('sk-ant-oat01-' + 'a'.repeat(19))).toBe(false);
+    expect(CLAUDE_OAUTH_TOKEN_REGEX.test('sk-ant-oat01-' + 'a'.repeat(500))).toBe(true);
+    expect(CLAUDE_OAUTH_TOKEN_REGEX.test('sk-ant-oat01-' + 'a'.repeat(501))).toBe(false);
+  });
+
+  it('oauth: ANTHROPIC_API_KEY set => ConfigError naming only the key, never a value', () => {
+    const msg = messageOf(workerEnv({ ANTHROPIC_API_KEY: API_KEY }));
+    expect(msg).toMatch(/ANTHROPIC_API_KEY: Must not be set when CLAUDE_AUTH_MODE=oauth/);
+    expect(msg).not.toContain(API_KEY);
+    expect(msg).not.toContain(OAUTH_TOKEN);
+    // An empty value counts as unset (§16).
+    expect(loadWorkerConfig(workerEnv({ ANTHROPIC_API_KEY: '' })).claudeAuth.mode).toBe('oauth');
+  });
+
+  it('api_key: requires ANTHROPIC_API_KEY and exposes it', () => {
+    expect(loadWorkerConfig(apiKeyEnv()).claudeAuth).toEqual({ mode: 'api_key', apiKey: API_KEY });
+    const { ANTHROPIC_API_KEY: _k, ...rest } = apiKeyEnv();
+    expect(() => loadWorkerConfig(rest)).toThrow(/ANTHROPIC_API_KEY: Required/);
+    const p = secretFile(
+      'apikey.txt',
+      `${API_KEY}
+`,
+    );
+    const fromFile = loadWorkerConfig({ ...rest, ANTHROPIC_API_KEY_FILE: p });
+    expect(fromFile.claudeAuth).toEqual({ mode: 'api_key', apiKey: API_KEY });
+  });
+
+  it('api_key: rejects an OAuth token in ANTHROPIC_API_KEY and a set CLAUDE_CODE_OAUTH_TOKEN', () => {
+    const asKey = messageOf(apiKeyEnv({ ANTHROPIC_API_KEY: OAUTH_TOKEN }));
+    expect(asKey).toMatch(/ANTHROPIC_API_KEY: Holds an OAuth token/);
+    expect(asKey).not.toContain(OAUTH_TOKEN);
+    const both = messageOf(apiKeyEnv({ CLAUDE_CODE_OAUTH_TOKEN: OAUTH_TOKEN }));
+    expect(both).toMatch(/CLAUDE_CODE_OAUTH_TOKEN: Must not be set when CLAUDE_AUTH_MODE=api_key/);
+    expect(both).not.toContain(OAUTH_TOKEN);
+    expect(both).not.toContain(API_KEY);
+  });
+
+  it('rejects an unknown mode and the removed CLAUDE_BARE in every mode', () => {
+    expect(() => loadWorkerConfig(workerEnv({ CLAUDE_AUTH_MODE: 'auto' }))).toThrow(
+      /CLAUDE_AUTH_MODE/,
+    );
+    for (const bare of ['true', 'false', '1']) {
+      expect(messageOf(workerEnv({ CLAUDE_BARE: bare }))).toMatch(
+        /CLAUDE_BARE: Removed by ADR-0036/,
+      );
+      expect(messageOf(apiKeyEnv({ CLAUDE_BARE: bare }))).toMatch(
+        /CLAUDE_BARE: Removed by ADR-0036/,
+      );
+    }
+    expect(loadWorkerConfig(workerEnv({ CLAUDE_BARE: '' })).claudeAuth.mode).toBe('oauth');
+  });
+
+  it('does not leak the old flat keys into the config output', () => {
+    const cfg: Record<string, unknown> = loadWorkerConfig(workerEnv());
+    for (const key of ['claudeBare', 'anthropicApiKey', 'claudeCodeOauthToken', 'claudeAuthMode']) {
+      expect(key in cfg).toBe(false);
+    }
+  });
+
+  it('keeps MCP_REQUIRED (needs MCP_ENABLED) available for the per-task fail-closed rule (ADR-0037)', () => {
+    expect(loadWorkerConfig(workerEnv()).mcpRequired).toBe(false);
+    expect(loadWorkerConfig(workerEnv({ MCP_REQUIRED: 'true' })).mcpRequired).toBe(true);
     expect(() =>
-      loadWorkerConfig(workerEnv({ NODE_ENV: 'test', DB_NAME: 'orc_test', CLAUDE_BARE: 'false' })),
-    ).toThrow(/CLAUDE_BARE/);
+      loadWorkerConfig(workerEnv({ MCP_REQUIRED: 'true', MCP_ENABLED: 'false' })),
+    ).toThrow(/MCP_REQUIRED/);
   });
+});
 
+describe('loadWorkerConfig (continued)', () => {
   it('enforces absolute roots, JSON prefix args, prompt budget and production proxy', () => {
     expect(() => loadWorkerConfig(workerEnv({ WORKSPACES_ROOT: 'relative/dir' }))).toThrow(
       /WORKSPACES_ROOT/,
@@ -425,5 +538,15 @@ describe('DB name guard', () => {
     expect(() => loadDbCliConfig({ NODE_ENV: 'test', DB_USER: 'u', DB_PASSWORD: 'p' })).toThrow(
       DbNameGuardError,
     );
+  });
+});
+
+describe('SECRET_ENV_KEYS (ADR-0036)', () => {
+  it('worker reads both Claude credentials through _FILE; no other app sees them', () => {
+    expect(SECRET_ENV_KEYS.worker).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(SECRET_ENV_KEYS.worker).toContain('ANTHROPIC_API_KEY');
+    for (const app of ['api', 'runner', 'egress-proxy', 'db-cli'] as const) {
+      expect(SECRET_ENV_KEYS[app]).not.toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    }
   });
 });

@@ -1262,6 +1262,7 @@ async function smoke(ctx) {
       { path: `${sibling}/src/math.mjs`, mustExist: true },
       { path: `${sibling}/src/greeting.mjs`, mustExist: true },
       { path: '/run/secrets/db_worker_password', mustExist: false },
+      { path: '/run/secrets/claude_oauth_token', mustExist: false },
       { path: '/run/secrets/anthropic_api_key', mustExist: false },
       // The runner has no projects mount (the image only carries an empty mount point).
       { path: '/var/lib/orc/projects/smoke-sample/src/math.mjs', mustExist: false },
@@ -1557,16 +1558,20 @@ async function main() {
       WORKER_CONCURRENCY: '2',
     });
 
-    // Secrets + certificates for this run only; the Anthropic key is a generated dummy value
+    // Secrets + certificates for this run only; the Claude OAuth token is a generated dummy value (CLAUDE_AUTH_MODE=oauth)
     // (the fake CLI never contacts the API).
     if (run('docker', ['image', 'inspect', OPENSSL_IMAGE]).status !== 0) {
       log(`pulling ${OPENSSL_IMAGE} (openssl for generate-certs) ...`);
       runChecked('docker', ['pull', OPENSSL_IMAGE], { inherit: true, what: 'docker pull' });
     }
-    runChecked(process.execPath, ['scripts/generate-secrets.mjs', '--dir', ctx.secretsDir], {
-      env: { ...process.env, ANTHROPIC_API_KEY: `sk-ant-smoke-${randomBytes(24).toString('hex')}` },
-      what: 'scripts/generate-secrets.mjs',
-    });
+    runChecked(
+      process.execPath,
+      ['scripts/generate-secrets.mjs', '--dir', ctx.secretsDir, '--claude-oauth-token-stdin'],
+      {
+        input: `sk-ant-oat01-${randomBytes(24).toString('hex')}\n`,
+        what: 'scripts/generate-secrets.mjs',
+      },
+    );
     ok('secrets and TLS material generated into a temporary directory');
 
     await smoke(ctx);

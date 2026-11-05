@@ -3,6 +3,10 @@
 export const NODE_ENVS = ['production', 'development', 'test'] as const;
 export type NodeEnv = (typeof NODE_ENVS)[number];
 
+/** How the Claude CLI authenticates (ADR-0036): subscription OAuth token (default) or an Anthropic API key. Never inferred from which secret is present. */
+export const CLAUDE_AUTH_MODES = ['oauth', 'api_key'] as const;
+export type ClaudeAuthMode = (typeof CLAUDE_AUTH_MODES)[number];
+
 export const TASK_STATUSES = [
   'created',
   'queued',
@@ -393,7 +397,7 @@ export const TASK_TEXT_MAX_BYTES = 98_304;
 /** Agent instructions: <= 4000 chars AND <= 4096 UTF-8 bytes (Layer 1 must fit `--append-system-prompt`). */
 export const AGENT_INSTRUCTIONS_MAX_CHARS = 4000;
 export const AGENT_INSTRUCTIONS_MAX_BYTES = 4096;
-/** Hard cap of the Layer-1 `--append-system-prompt` text; larger => `prompt_too_large` (§10.2 #14). */
+/** Hard cap of the Layer-1 `--append-system-prompt` text; larger => `prompt_too_large` (§10.2 row 16). */
 export const APPEND_SYSTEM_PROMPT_MAX_BYTES = 8192;
 /** `ClaudeEventPayload.text` cap in SSE/Redis stream events; the full line stays in TaskLogs (§3.4). */
 export const CLAUDE_EVENT_TEXT_MAX_CHARS = 2000;

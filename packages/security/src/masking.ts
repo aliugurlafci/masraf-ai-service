@@ -327,8 +327,48 @@ export interface SecretRegistry {
 }
 
 const MIN_SECRET_LENGTH = 8;
+/**
+ * Encoded variants shorter than this are not registered: they cover too few bits of the secret to be masked
+ * without hitting unrelated text (16 base64 chars = 96 bits; 16 hex chars = 8 bytes).
+ */
+const MIN_ENCODED_VARIANT_LENGTH = 16;
+const BASE64_ENCODINGS = ['base64', 'base64url'] as const;
+const BYTE_ALIGNMENTS = [0, 1, 2] as const;
 
-/** Registry of runtime secret values (DB/Redis passwords, API keys); values < 8 chars are ignored. */
+/**
+ * The characters of `encoding(<offset bytes> value <any bytes>)` that depend on the bits of `value` only. Char `i`
+ * covers stream bits [6i, 6i + 6), so the boundary chars shared with the surrounding bytes are trimmed. The slice
+ * occurs wherever `value` is encoded at a byte offset congruent to `offset` (mod 3), whatever surrounds it.
+ */
+function base64Core(bytes: Buffer, offset: 0 | 1 | 2, encoding: 'base64' | 'base64url'): string {
+  const start = Math.ceil((8 * offset) / 6);
+  const end = Math.floor((8 * (offset + bytes.length)) / 6);
+  return Buffer.concat([Buffer.alloc(offset), bytes, Buffer.alloc(2)])
+    .toString(encoding)
+    .slice(start, end);
+}
+
+/**
+ * Forms a secret takes when it is encoded rather than printed (ADR-0036 m.8): the full base64/base64url form, the
+ * value-only core at each of the three byte alignments (the secret inside a larger encoded payload such as a
+ * stdout or `credentialFd` frame), lower/upper-case hex and the JSON-escaped form. Short variants are dropped.
+ */
+function encodedVariants(value: string): string[] {
+  const bytes = Buffer.from(value, 'utf8');
+  const hex = bytes.toString('hex');
+  const out = [hex, hex.toUpperCase(), JSON.stringify(value).slice(1, -1)];
+  for (const encoding of BASE64_ENCODINGS) {
+    out.push(bytes.toString(encoding));
+    for (const offset of BYTE_ALIGNMENTS) out.push(base64Core(bytes, offset, encoding));
+  }
+  return out.filter((v) => v.length >= MIN_ENCODED_VARIANT_LENGTH);
+}
+
+/**
+ * Registry of runtime secret values (DB/Redis passwords, API keys, the Claude credential); values < 8 chars are
+ * ignored. Each value is registered as given, trimmed, percent-encoded and in its encoded forms
+ * ({@link encodedVariants}); registering the same value or one of its variants again is harmless.
+ */
 export function createSecretRegistry(): SecretRegistry {
   const set = new Set<string>();
   let sorted: readonly string[] = [];
@@ -339,10 +379,13 @@ export function createSecretRegistry(): SecretRegistry {
     add(value) {
       if (typeof value !== 'string' || value.length < MIN_SECRET_LENGTH) return;
       const before = set.size;
-      addVariant(value);
-      addVariant(value.trim());
-      // Percent-encoded form, as it appears inside URLs and connection strings.
-      addVariant(encodeURIComponent(value));
+      for (const v of new Set([value, value.trim()])) {
+        if (v.length < MIN_SECRET_LENGTH) continue;
+        addVariant(v);
+        // Percent-encoded form, as it appears inside URLs and connection strings.
+        addVariant(encodeURIComponent(v));
+        for (const encoded of encodedVariants(v)) addVariant(encoded);
+      }
       if (set.size !== before) {
         // Longest first, so a secret that contains another is replaced as a whole.
         sorted = Object.freeze([...set].sort((a, b) => b.length - a.length));

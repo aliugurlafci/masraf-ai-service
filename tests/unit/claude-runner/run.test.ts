@@ -1,15 +1,21 @@
 // Runner state machine with an in-memory process (no real processes): parsing, masking, init
 // validation, limits, stop reasons and the §13.4 outcome mapping.
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
+  claudeExtensionKey,
   createClaudeRunner,
   outcomeForStopReason,
   toAbortReason,
   type ClaudeRunHandlers,
   type ClaudeRunnerConfig,
   type ClaudeRunRequest,
+  type ReviewedExtensionTable,
 } from '@orc/claude-runner';
 import type { ParsedClaudeLine } from '@orc/shared';
+import type { HostPlatform, LaunchSpec, SupervisedProcess } from '@orc/shared/node';
 import { createSecretRegistry } from '@orc/security';
 import {
   captureLogger,
@@ -17,22 +23,57 @@ import {
   createMemoryProcess,
   memoryLease,
   silentLogger,
+  type MemoryLauncher,
   type MemoryProcess,
   type MemoryProcessOptions,
 } from '../../helpers/claude/memory-process';
+import { FAKE_HELP_PATH } from '../../helpers/claude/fake-claude';
 
 const SESSION = '44444444-5555-4666-8777-888888888888';
 const CWD = process.platform === 'win32' ? 'C:\\srv\\ws\\p\\t\\wt' : '/srv/ws/p/t/wt';
 const API_KEY = 'sk-ant-api03-RUNUNIT00000000000000000000000';
-const PLATFORM = process.platform === 'win32' ? 'win32' : 'posix';
+const TOKEN = `sk-ant-oat01-RUNUNIT${'0'.repeat(30)}`;
+const PLATFORM: HostPlatform = process.platform === 'win32' ? 'win32' : 'posix';
+const CLI_VERSION = '2.1.316';
+const ROOT = mkdtempSync(join(tmpdir(), 'orc-claude-runner-'));
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+
+/** Injected reviewed table (the production one only holds recorded names, keyed by the real CLI versions). */
+const EMPTY_EXTENSIONS = { skills: [], agents: [], slashCommands: [], plugins: [] };
+const TABLE: ReviewedExtensionTable = {
+  [claudeExtensionKey(CLI_VERSION, 'posix', 'oauth')]: { ...EMPTY_EXTENSIONS, skills: ['verify'] },
+  [claudeExtensionKey(CLI_VERSION, 'posix', 'api_key')]: { ...EMPTY_EXTENSIONS, skills: ['verify'] },
+  [claudeExtensionKey(CLI_VERSION, 'win32', 'oauth')]: { ...EMPTY_EXTENSIONS, skills: ['verify'] },
+  [claudeExtensionKey(CLI_VERSION, 'win32', 'api_key')]: { ...EMPTY_EXTENSIONS, skills: ['verify'] },
+};
+
+/** Answers the probe (`--version`, `--help`) itself; every other spawn goes to `factory`. */
+const PROBE_OUTPUT: Readonly<Record<string, string>> = {
+  '--version': `${CLI_VERSION} (Claude Code)\n`,
+  '--help': readFileSync(FAKE_HELP_PATH, 'utf8'),
+};
+const isProbeSpec = (spec: LaunchSpec): boolean => spec.args.length === 1 && (spec.args[0] ?? '') in PROBE_OUTPUT;
+function probing(factory: (spec: LaunchSpec) => SupervisedProcess | Error): MemoryLauncher {
+  return createMemoryLauncher((spec) => {
+    if (!isProbeSpec(spec)) return factory(spec);
+    const proc = createMemoryProcess();
+    setImmediate(() => {
+      proc.writeStdout(PROBE_OUTPUT[spec.args[0] ?? ''] ?? '');
+      proc.exit(0);
+    });
+    return proc;
+  });
+}
+/** Spawns of the run itself (probe spawns excluded). */
+const runSpecs = (l: MemoryLauncher): LaunchSpec[] => l.specs.filter((spec) => !isProbeSpec(spec));
 
 function cfg(over: Partial<ClaudeRunnerConfig> = {}): ClaudeRunnerConfig {
   return {
     bin: 'claude',
     binPrefixArgs: [],
-    bare: true,
-    claudeHomeRoot: process.platform === 'win32' ? 'C:\\srv\\claude-home' : '/srv/claude-home',
-    apiKey: API_KEY,
+    claudeHomeRoot: join(ROOT, 'claude-home'),
+    auth: { mode: 'oauth', oauthToken: TOKEN },
+    reviewedExtensions: TABLE,
     proxy: { https: null, http: null, noProxy: null, token: null },
     killGraceMs: 777,
     initTimeoutMs: 5000,
@@ -74,10 +115,13 @@ const init = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   subtype: 'init',
   cwd: CWD,
   session_id: SESSION,
-  tools: ['Read', 'Edit'],
+  tools: ['Read', 'Edit', 'Write', 'Glob', 'Grep'],
   mcp_servers: [],
   model: 'claude-sonnet-4-5',
   permissionMode: 'dontAsk',
+  claude_code_version: CLI_VERSION,
+  apiKeySource: 'none',
+  skills: ['verify'],
   ...over,
 });
 const text = (t: string): Record<string, unknown> => ({
@@ -141,7 +185,7 @@ async function harness(
   const runner = createClaudeRunner(cfg(o.cfg), {
     logger: o.logger?.logger ?? silentLogger(),
     secrets: createSecretRegistry(),
-    launcher: createMemoryLauncher(() => proc),
+    launcher: probing(() => proc),
   });
   const res = await runner.run(request(o.req), h.handlers);
   return { h, res };
@@ -198,7 +242,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
   it('masks secrets in stdout lines and in stderr (also when split across chunks)', async () => {
     const { h, res } = await harness(async (x) => {
       x.proc.line(init());
-      x.proc.line(text(`key sk-ant-FAKE0000000000000000000000 and ${API_KEY}`));
+      x.proc.line(text(`key sk-ant-FAKE0000000000000000000000 and ${TOKEN}`));
       x.proc.writeStderr('warn: token sk-ant-FAKE00000');
       await tick();
       x.proc.writeStderr('00000000000000000 end\n');
@@ -209,7 +253,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
     expect(res.outcome).toBe('success');
     const all = h.lines.map((l) => l.raw).join('\n') + h.stderr.join('');
     expect(all).not.toContain('sk-ant-FAKE');
-    expect(all).not.toContain(API_KEY);
+    expect(all).not.toContain(TOKEN);
     expect(all).toContain('[REDACTED]');
     expect(h.stderr.join('')).toBe('warn: token [REDACTED] end\n');
   });
@@ -233,25 +277,175 @@ describe('ClaudeRunner.run with an in-memory process', () => {
     expect(h.initCalls).toBe(1);
   });
 
-  it('hook events are violations with --bare and ignored without it', async () => {
-    const bare = await harness((x) => {
-      x.proc.line(init());
-      x.proc.line({ type: 'system', subtype: 'hook_started' });
-    });
-    expect(bare.res.outcome).toBe('security_violation');
-    expect(bare.res.violation?.rule).toBe('hook_event');
-
-    const nonBare = await harness(
-      async (x) => {
-        x.proc.line(init());
+  it.each(['oauth', 'api_key'] as const)('a hook event is a violation at any time (%s mode)', async (mode) => {
+    const auth = mode === 'oauth' ? ({ mode, oauthToken: TOKEN } as const) : ({ mode, apiKey: API_KEY } as const);
+    const apiKeySource = mode === 'oauth' ? 'none' : 'ANTHROPIC_API_KEY';
+    const afterInit = await harness(
+      (x) => {
+        x.proc.line(init({ apiKeySource }));
         x.proc.line({ type: 'system', subtype: 'hook_started' });
-        x.proc.line(result());
-        await tick();
-        x.proc.exit(0);
+        x.proc.line(text('after hook'));
       },
-      { cfg: { bare: false } },
+      { cfg: { auth }, proc: { onStop: 'exit' } },
     );
-    expect(nonBare.res.outcome).toBe('success');
+    expect(afterInit.res.outcome).toBe('security_violation');
+    expect(afterInit.res.violation).toEqual({
+      rule: 'hook_event',
+      detail: 'hook event "hook_started" (hooks are disabled)',
+    });
+    expect(afterInit.h.proc.stops[0]).toEqual({ graceMs: 0, forceImmediately: true });
+    expect(afterInit.h.lines.map((l) => l.parsed.kind)).toEqual(['init', 'hook']);
+
+    const beforeInit = await harness(
+      (x) => {
+        x.proc.line({ type: 'system', subtype: 'hook_response' });
+        x.proc.line(init({ apiKeySource }));
+      },
+      { cfg: { auth }, proc: { onStop: 'exit' } },
+    );
+    expect(beforeInit.res.violation?.rule).toBe('hook_event');
+    expect(beforeInit.h.initCalls).toBe(0);
+  });
+
+  it.each([
+    ['tool_missing', { tools: ['Read', 'Edit'] }, 'requested builtin tool(s) missing from init: "Write", "Glob", "Grep"'],
+    ['extension', { skills: ['verify', 'evil-skill'] }, 'unexpected skills: "evil-skill"'],
+    [
+      'extension',
+      { claude_code_version: '2.1.999' },
+      'claude_code_version="2.1.999" differs from the probed CLI version "2.1.316"',
+    ],
+    [
+      'memory',
+      { memory_paths: { auto: '/m/MEMORY.md' } },
+      'memory_paths must be absent, null or empty (got {"auto":"/m/MEMORY.md"})',
+    ],
+    ['auth_source', { apiKeySource: 'apiKeyHelper' }, 'apiKeySource="apiKeyHelper" (expected "none" in oauth mode)'],
+  ] as const)('init rule %s => forced kill + security_violation', async (rule, over, detail) => {
+    const { h, res } = await harness(
+      (x) => {
+        x.proc.line(init(over));
+        x.proc.line(text('after violation'));
+      },
+      { proc: { onStop: 'exit' } },
+    );
+    expect(res.outcome).toBe('security_violation');
+    expect(res.violation).toEqual({ rule, detail });
+    expect(h.proc.stops[0]).toEqual({ graceMs: 0, forceImmediately: true });
+    expect(h.lines.map((l) => l.parsed.kind)).toEqual(['init']);
+  });
+
+  it('extension: a CLI version without a table entry fails closed and names the key', async () => {
+    const { res } = await harness((x) => x.proc.line(init()), {
+      cfg: { reviewedExtensions: {} },
+      proc: { onStop: 'exit' },
+    });
+    expect(res.violation).toEqual({
+      rule: 'extension',
+      detail: `no reviewed extension entry for "${CLI_VERSION}/${PLATFORM}/oauth" (CLAUDE_REVIEWED_EXTENSIONS)`,
+    });
+  });
+
+  // Host platform only (the probe creates real directories); the cross-platform matrix is in env.test.ts.
+  it.each([
+    [PLATFORM, 'oauth'],
+    [PLATFORM, 'api_key'],
+  ] as const)('credential transport %s/%s: fd 3 on POSIX oauth, env otherwise, never both', async (platform, mode) => {
+    const launcher = probing(() => {
+      const proc = createMemoryProcess();
+      setImmediate(() => proc.exit(1));
+      return proc;
+    });
+    const auth = mode === 'oauth' ? ({ mode, oauthToken: TOKEN } as const) : ({ mode, apiKey: API_KEY } as const);
+    const runner = createClaudeRunner(cfg({ platform, auth }), {
+      logger: silentLogger(),
+      secrets: createSecretRegistry(),
+      launcher,
+    });
+    await runner.run(request(), {
+      onSpawn: () => Promise.resolve(),
+      onInit: () => Promise.resolve(),
+      onLine: () => undefined,
+      onStderr: () => undefined,
+    });
+    const [spec] = runSpecs(launcher);
+    const env = spec?.env ?? {};
+    const credentialKeys = Object.keys(env).filter(
+      (k) => k === 'ANTHROPIC_API_KEY' || k.startsWith('CLAUDE_CODE_OAUTH_TOKEN'),
+    );
+    if (mode === 'api_key') {
+      expect(credentialKeys).toEqual(['ANTHROPIC_API_KEY']);
+      expect(env.ANTHROPIC_API_KEY).toBe(API_KEY);
+      expect(spec?.credentialFd).toBeUndefined();
+    } else if (platform === 'posix') {
+      expect(credentialKeys).toEqual(['CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR']);
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR).toBe('3');
+      expect(spec?.credentialFd).toBe(TOKEN);
+      expect(JSON.stringify(env)).not.toContain(TOKEN);
+    } else {
+      expect(credentialKeys).toEqual(['CLAUDE_CODE_OAUTH_TOKEN']);
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe(TOKEN);
+      expect(spec?.credentialFd).toBeUndefined();
+    }
+    expect(spec?.args.join(' ')).not.toContain(mode === 'oauth' ? TOKEN : API_KEY);
+  });
+
+  it('an unprobed runner probes once before its first run; the run keys on the probed version', async () => {
+    const proc = createMemoryProcess();
+    const launcher = probing(() => proc);
+    const runner = createClaudeRunner(cfg(), { logger: silentLogger(), secrets: createSecretRegistry(), launcher });
+    const handlers: ClaudeRunHandlers = {
+      onSpawn: () => {
+        setImmediate(() => {
+          proc.line(init());
+          proc.line(result());
+          setImmediate(() => proc.exit(0));
+        });
+        return Promise.resolve();
+      },
+      onInit: () => Promise.resolve(),
+      onLine: () => undefined,
+      onStderr: () => undefined,
+    };
+    await expect(runner.run(request(), handlers)).resolves.toMatchObject({ outcome: 'success' });
+    expect(launcher.specs.filter(isProbeSpec).map((s) => s.args[0])).toEqual(['--version', '--help']);
+    await runner.probe();
+    expect(launcher.specs.filter(isProbeSpec)).toHaveLength(4);
+  });
+
+  it('a run on a runner whose probe fails rejects before spawning Claude', async () => {
+    const launcher = createMemoryLauncher((spec) => {
+      const proc = createMemoryProcess();
+      setImmediate(() => {
+        proc.writeStdout(spec.args[0] === '--version' ? 'unknown\n' : '');
+        proc.exit(0);
+      });
+      return proc;
+    });
+    const runner = createClaudeRunner(cfg(), { logger: silentLogger(), secrets: createSecretRegistry(), launcher });
+    await expect(
+      runner.run(request(), {
+        onSpawn: () => Promise.resolve(),
+        onInit: () => Promise.resolve(),
+        onLine: () => undefined,
+        onStderr: () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: 'claude_probe_failed' });
+    expect(launcher.specs.every(isProbeSpec)).toBe(true);
+  });
+
+  it('a CLI that cannot be started on an unprobed runner => spawn_failed, nothing else spawned', async () => {
+    const enoent = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' });
+    const launcher = createMemoryLauncher(() => enoent);
+    const runner = createClaudeRunner(cfg(), { logger: silentLogger(), secrets: createSecretRegistry(), launcher });
+    const res = await runner.run(request(), {
+      onSpawn: () => Promise.resolve(),
+      onInit: () => Promise.resolve(),
+      onLine: () => undefined,
+      onStderr: () => undefined,
+    });
+    expect(res).toMatchObject({ outcome: 'spawn_failed', exitCode: null, init: null });
+    expect(launcher.specs.map((spec) => spec.args)).toEqual([['--version']]);
   });
 
   it('output limit => graceful stop, outcome output_limit, later output discarded', async () => {
@@ -273,18 +467,18 @@ describe('ClaudeRunner.run with an in-memory process', () => {
     const { h, res } = await harness(
       async (x) => {
         x.proc.line(init());
-        x.proc.line(text('y'.repeat(500)));
+        x.proc.line(text('y'.repeat(800)));
         x.proc.line(result());
         await tick();
         x.proc.exit(0);
       },
-      { cfg: { maxLineBytes: 300 } },
+      { cfg: { maxLineBytes: 500 } },
     );
     expect(res.outcome).toBe('success');
     const cut = h.lines[1]?.parsed;
     expect(cut?.kind).toBe('invalid');
-    expect(cut?.kind === 'invalid' ? cut.error : '').toContain('300');
-    expect(h.lines[1]?.raw.length).toBe(300);
+    expect(cut?.kind === 'invalid' ? cut.error : '').toContain('500');
+    expect(h.lines[1]?.raw.length).toBe(500);
   });
 
   it('abort(cancel) => graceful kill sequence and outcome cancelled', async () => {
@@ -324,7 +518,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
   it('an already aborted signal never spawns', async () => {
     const ac = new AbortController();
     ac.abort('cancel');
-    const launcher = createMemoryLauncher(() => createMemoryProcess());
+    const launcher = probing(() => createMemoryProcess());
     const runner = createClaudeRunner(cfg(), { logger: silentLogger(), secrets: createSecretRegistry(), launcher });
     const res = await runner.run(request({ signal: ac.signal }), {
       onSpawn: () => Promise.resolve(),
@@ -333,13 +527,13 @@ describe('ClaudeRunner.run with an in-memory process', () => {
       onStderr: () => undefined,
     });
     expect(res.outcome).toBe('cancelled');
-    expect(launcher.specs).toHaveLength(0);
+    expect(runSpecs(launcher)).toHaveLength(0);
   });
 
   it('an abort that arrives while spawn is pending still stops the process (no prompt written)', async () => {
     const ac = new AbortController();
     const proc = createMemoryProcess();
-    const launcher = createMemoryLauncher(() => {
+    const launcher = probing(() => {
       ac.abort('worker_shutdown');
       return proc;
     });
@@ -416,7 +610,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
     const runner = createClaudeRunner(cfg(), {
       logger: silentLogger(),
       secrets: createSecretRegistry(),
-      launcher: createMemoryLauncher(() => enoent),
+      launcher: probing(() => enoent),
     });
     const handlers: ClaudeRunHandlers = {
       onSpawn: () => Promise.resolve(),
@@ -429,7 +623,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
     const broken = createClaudeRunner(cfg(), {
       logger: silentLogger(),
       secrets: createSecretRegistry(),
-      launcher: createMemoryLauncher(() => new Error('runner connection lost')),
+      launcher: probing(() => new Error('runner connection lost')),
     });
     await expect(broken.run(request(), handlers)).rejects.toThrow('runner connection lost');
   });
@@ -439,7 +633,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
     const runner = createClaudeRunner(cfg(), {
       logger: silentLogger(),
       secrets: createSecretRegistry(),
-      launcher: createMemoryLauncher(() => proc),
+      launcher: probing(() => proc),
     });
     await expect(
       runner.run(request(), {
@@ -468,7 +662,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
   }, 15_000);
 
   it('rejects programmer errors before spawning (oversized Layer 1)', async () => {
-    const launcher = createMemoryLauncher(() => createMemoryProcess());
+    const launcher = probing(() => createMemoryProcess());
     const runner = createClaudeRunner(cfg(), { logger: silentLogger(), secrets: createSecretRegistry(), launcher });
     await expect(
       runner.run(request({ appendSystemPrompt: 'x'.repeat(9000) }), {
@@ -478,7 +672,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
         onStderr: () => undefined,
       }),
     ).rejects.toMatchObject({ code: 'prompt_too_large' });
-    expect(launcher.specs).toHaveLength(0);
+    expect(runSpecs(launcher)).toHaveLength(0);
   });
 
   it('never writes the API key or masked secrets into its own logs', async () => {
@@ -493,6 +687,7 @@ describe('ClaudeRunner.run with an in-memory process', () => {
     const text = log.lines.join('');
     expect(text).toContain('claude security violation');
     expect(text).not.toContain('sk-ant-FAKE');
-    expect(text).not.toContain(API_KEY);
+    expect(text).not.toContain(TOKEN);
+    expect(text).not.toContain(Buffer.from(TOKEN, 'utf8').toString('base64'));
   });
 });

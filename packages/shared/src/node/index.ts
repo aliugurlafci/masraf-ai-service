@@ -8,6 +8,7 @@ export type {
   EgressProxyConfig,
   DbCliConfig,
   RunnerConfig,
+  ClaudeAuth,
 } from './config';
 export {
   ConfigError,
@@ -22,6 +23,7 @@ export {
   DbCliConfigSchema,
   RunnerConfigSchema,
   SQL_LOGIN_PASSWORD_REGEX,
+  CLAUDE_OAUTH_TOKEN_REGEX,
   loadApiConfig,
   loadWorkerConfig,
   loadEgressProxyConfig,

@@ -17,7 +17,7 @@
 | [0013](0013-egress-proxy.md) | In-house CONNECT allow-list egress proxy |
 | [0014](0014-server-side-sessions-scrypt.md) | Server-side sessions, PATs and scrypt password hashing |
 | [0015](0015-bare-mirror-git-design.md) | Per-project bare mirror with per-attempt worktrees |
-| [0016](0016-claude-runner-bare-mode.md) | Claude runner uses --bare with an isolated config directory |
+| [0016](0016-claude-runner-bare-mode.md) | Claude runner uses --bare with an isolated config directory (Superseded by 0036) |
 | [0017](0017-redis-streams-live-output.md) | Redis Streams plus MSSQL chunks for live output |
 | [0018](0018-custom-migration-runner.md) | Custom SQL migration runner and raw mssql repositories |
 | [0019](0019-api-never-touches-repositories.md) | API never touches repositories or workspaces; diffs and patches live in MSSQL |
@@ -37,5 +37,7 @@
 | [0033](0033-local-transport-safe-directory.md) | safe.directory reaches the local-transport upload-pack through a per-call global config file |
 | [0034](0034-cbm-cache-anchor-dirs.md) | Runner anchors the codebase-memory-mcp cache structure dirs as root:worker-gid 1775 |
 | [0035](0035-diff-seeded-impact-analysis.md) | Impact analysis is seeded from the worker's diff (no git in the sandbox); CBM socket path length is validated |
+| [0036](0036-claude-subscription-oauth-auth.md) | Claude runs non-bare with subscription OAuth by default; one hardened argv for both auth modes (supersedes 0016) |
+| [0037](0037-claude-mcp-runtime-precheck.md) | Claude's MCP runtime directory is verified before every Claude spawn; MCP_REQUIRED and requireIndex fail closed per task |
 
 New ADRs: next free number, same section layout (Status, Context, Decision, Consequences, Alternatives considered, Rollback path).

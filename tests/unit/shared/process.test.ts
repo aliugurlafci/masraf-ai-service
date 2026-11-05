@@ -156,6 +156,106 @@ describe('spawnSupervised / killProcessTree', () => {
     );
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'credentialFd: delivers the value on fd 3 only (never argv or env) and ends the pipe',
+    { timeout: 30_000 },
+    async () => {
+      const secret = 'sk-ant-oat01-fd-transport-0123456789abcdefghij';
+      const script =
+        'const fs=require("fs");const v=fs.readFileSync(3,"utf8");' +
+        'const leaked=JSON.stringify(process.env).includes(v)||process.argv.join(" ").includes(v);' +
+        'process.stdout.write(JSON.stringify({v,leaked,fd:process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR}))';
+      const child = spawnSupervised(NODE, ['-e', script], {
+        cwd: dir,
+        env: { ...env, CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' },
+        credentialFd: secret,
+      });
+      const chunks: Buffer[] = [];
+      child.stdout.on('data', (c: Buffer) => chunks.push(c));
+      await child.exited;
+      await new Promise((r) => setTimeout(r, 50));
+      const out = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+      expect(out).toEqual({ v: secret, leaked: false, fd: '3' });
+    },
+  );
+
+  it('credentialFd: asks for four stdio pipes; without it the spawn options stay unchanged', () => {
+    const seen: unknown[] = [];
+    const fakeSpawn = ((cmd: string, args: readonly string[], opts: unknown) => {
+      seen.push(opts);
+      return spawn(NODE, ['-e', ''], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
+    }) as unknown as typeof spawn;
+    const withFd = spawnSupervised(NODE, [], {
+      cwd: dir,
+      env,
+      spawn: fakeSpawn,
+      platform: 'posix',
+      credentialFd: 'x',
+    });
+    const without = spawnSupervised(NODE, [], {
+      cwd: dir,
+      env,
+      spawn: fakeSpawn,
+      platform: 'posix',
+    });
+    expect(seen[0]).toMatchObject({ stdio: ['pipe', 'pipe', 'pipe', 'pipe'], shell: false });
+    expect('stdio' in (seen[1] as object)).toBe(false);
+    void withFd.exited;
+    void without.exited;
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'credentialFd: kills the already started child (whole group) when fd 3 is missing',
+    { timeout: 30_000 },
+    async () => {
+      let started: ReturnType<typeof spawn> | undefined;
+      const fakeSpawn = ((cmd: string, args: readonly string[], opts: object) => {
+        // Deliberately no fourth pipe: stdio[3] is undefined.
+        started = spawn(cmd, [...args], { ...opts, stdio: ['pipe', 'pipe', 'pipe'] });
+        return started;
+      }) as unknown as typeof spawn;
+      const secret = 'sk-ant-oat01-must-not-appear-0123456789abcdef';
+      let message = '';
+      try {
+        spawnSupervised(NODE, ['-e', 'setInterval(()=>{},1000)'], {
+          cwd: dir,
+          env,
+          spawn: fakeSpawn,
+          platform: 'posix',
+          credentialFd: secret,
+        });
+      } catch (e) {
+        message = JSON.stringify({
+          m: (e as Error).message,
+          d: (e as { details?: unknown }).details,
+        });
+      }
+      expect(message).toContain('credential_fd_missing');
+      expect(message).not.toContain(secret);
+      const child = started;
+      expect(child?.pid).toBeGreaterThan(0);
+      expect(await waitFor(() => !isProcessAlive(child?.pid ?? 0), 10_000)).toBe(true);
+    },
+  );
+
+  it('credentialFd: refused on win32 before any spawn (the fd path does not work there)', () => {
+    let spawned = false;
+    const fakeSpawn = (() => {
+      spawned = true;
+      throw new Error('must not spawn');
+    }) as unknown as typeof spawn;
+    expect(() =>
+      spawnSupervised(NODE, [], {
+        cwd: dir,
+        env,
+        spawn: fakeSpawn,
+        platform: 'win32',
+        credentialFd: 'x',
+      }),
+    ).toThrow(expect.objectContaining({ code: 'process_spawn_failed' }) as Error);
+    expect(spawned).toBe(false);
+  });
+
   it('killProcessTree on an exited pid is a no-op', { timeout: 30_000 }, async () => {
     const child = spawn(NODE, ['-e', ''], { stdio: 'ignore' });
     const pid = child.pid ?? 0;

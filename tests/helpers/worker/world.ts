@@ -25,7 +25,7 @@ import { openDb, openPool, query } from '../database/db';
 import { silentLogger, testEnv } from '../database/env';
 import { createUser, seededAgent, uniq, userActor } from '../database/fixtures';
 import { cleanupPrefix, rawRedis, testRedisFactory, uniquePrefix } from '../task-manager/redis';
-import { FAKE_CLAUDE_PATH, TEST_API_KEY } from '../claude/fake-claude';
+import { FAKE_CLAUDE_PATH, FAKE_OAUTH_TOKEN } from '../claude/fake-claude';
 import { FAKE_CBM_PATH } from '../mcp/support';
 import { createSourceRepo, makeTempDir, removeTempDir } from '../git/fixtures';
 import { waitFor } from '../common/wait-for';
@@ -157,8 +157,8 @@ export async function createWorkerWorld(o: WorldOptions = {}): Promise<WorkerWor
     SANDBOX_MODE: 'local',
     CLAUDE_BIN: process.execPath,
     CLAUDE_BIN_PREFIX_ARGS: JSON.stringify([FAKE_CLAUDE_PATH]),
-    CLAUDE_BARE: 'true',
-    ANTHROPIC_API_KEY: TEST_API_KEY,
+    CLAUDE_AUTH_MODE: 'oauth',
+    CLAUDE_CODE_OAUTH_TOKEN: FAKE_OAUTH_TOKEN,
     CLAUDE_INIT_TIMEOUT_MS: '30000',
     TEST_KILL_GRACE_MS: '1000',
     MCP_ENABLED: 'true',

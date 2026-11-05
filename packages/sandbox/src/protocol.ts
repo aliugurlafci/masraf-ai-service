@@ -16,6 +16,8 @@ export const MAX_ENV_KEYS = 256;
 export const MAX_PATH_LENGTH = 4096;
 export const MAX_MEASURE_ENTRIES = 50_000_000;
 export const MAX_STOP_GRACE_MS = 600_000;
+/** Decoded size limit of the `spawn` frame's `credentialFd {b64}` (contract §10.11 item 5, ADR-0036 m.4). */
+export const MAX_CREDENTIAL_FD_BYTES = 4096;
 
 export const WORKER_ID_REGEX = /^[A-Za-z0-9._-]{1,128}$/;
 /**
@@ -28,6 +30,13 @@ export const LEASE_KEY_REGEX =
 export const ENV_KEY_REGEX = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const ERROR_REASON_REGEX = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_B64_LENGTH = Math.ceil(MAX_CHUNK_BYTES / 3) * 4;
+const MAX_CREDENTIAL_B64_LENGTH = Math.ceil(MAX_CREDENTIAL_FD_BYTES / 3) * 4;
+
+/** Decoded byte length of a padded base64 string (`z.base64()` requires padding). */
+export function base64DecodedLength(s: string): number {
+  const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0;
+  return (s.length / 4) * 3 - pad;
+}
 
 const v = z.literal(PROTOCOL_VERSION);
 const guid = z.string().regex(GUID_REGEX, 'Expected a lower-case GUID');
@@ -109,6 +118,18 @@ export const LeaseMeasureRequestSchema = z.strictObject({
   maxEntries: posInt.max(MAX_MEASURE_ENTRIES),
 });
 export const LeaseListRequestSchema = z.strictObject({ v, type: z.literal('lease_list') });
+/**
+ * Credential for fd 3 (ADR-0036 m.4): 1..{@link MAX_CREDENTIAL_FD_BYTES} decoded bytes. The runner
+ * accepts it only for kind `claude` with `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3` in the env
+ * (`validateSpawnCredential`); it is never logged and never echoed in an error.
+ */
+export const CredentialFdSchema = z.strictObject({
+  b64: z
+    .base64()
+    .min(4)
+    .max(MAX_CREDENTIAL_B64_LENGTH)
+    .refine((s) => base64DecodedLength(s) <= MAX_CREDENTIAL_FD_BYTES, 'Credential too large'),
+});
 export const SpawnRequestSchema = z.strictObject({
   v,
   type: z.literal('spawn'),
@@ -118,6 +139,7 @@ export const SpawnRequestSchema = z.strictObject({
   cwd: pathString,
   env: envRecord,
   limits: LaunchLimitsSchema,
+  credentialFd: CredentialFdSchema.optional(),
 });
 
 export const RequestFrameSchema = z.discriminatedUnion('type', [
@@ -131,6 +153,7 @@ export const RequestFrameSchema = z.discriminatedUnion('type', [
 ]);
 export type RequestFrame = z.infer<typeof RequestFrameSchema>;
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
+export type CredentialFdFrame = z.infer<typeof CredentialFdSchema>;
 export type LeaseAcquireRequest = z.infer<typeof LeaseAcquireRequestSchema>;
 
 // ---- client -> server: frames of a spawn session (after `spawned`) -----------------------------

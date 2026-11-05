@@ -7,7 +7,15 @@ import type {
   ParsedClaudeLine,
   Uuid,
 } from '@orc/shared';
-import type { Env, HostPlatform, KillResult, LaunchLease, ProcessLauncher } from '@orc/shared/node';
+import type { ClaudeAuthMode } from '@orc/shared';
+import type {
+  ClaudeAuth,
+  Env,
+  HostPlatform,
+  KillResult,
+  LaunchLease,
+  ProcessLauncher,
+} from '@orc/shared/node';
 import type { EffectiveToolPolicy, SecretRegistry } from '@orc/security';
 import type { Logger } from '@orc/logger';
 
@@ -19,13 +27,24 @@ export interface ClaudeProxyConfig {
   token: string | null;
 }
 
+/** Names an init may report per extension kind (§10.6 extension rule, ADR-0036 Decision 5). */
+export interface ReviewedExtensions {
+  skills: readonly string[];
+  agents: readonly string[];
+  slashCommands: readonly string[];
+  plugins: readonly string[];
+}
+
+/** Keyed by `<cliVersion>/<posix|win32>/<oauth|api_key>` ({@link claudeExtensionKey}). */
+export type ReviewedExtensionTable = Readonly<Record<string, ReviewedExtensions>>;
+
 export interface ClaudeRunnerConfig {
   bin: string;
   binPrefixArgs: readonly string[];
-  bare: boolean;
   /** HOME / CLAUDE_CONFIG_DIR are per workspace below this root (§10.3). */
   claudeHomeRoot: string;
-  apiKey: string | null;
+  /** ADR-0036 Decision 1 (replaces `bare` and `apiKey`); transport per platform in §10.3. */
+  auth: ClaudeAuth;
   proxy: ClaudeProxyConfig;
   killGraceMs: number;
   initTimeoutMs: number;
@@ -36,6 +55,11 @@ export interface ClaudeRunnerConfig {
   workerId: string;
   /** CLAUDE_INIT_EXTRA_TOOLS */
   initExtraTools: readonly string[];
+  /**
+   * Optional extension of the contract type, for tests only: replaces {@link CLAUDE_REVIEWED_EXTENSIONS}
+   * (fake-claude reports its own names). The worker never sets it; there is no operator knob.
+   */
+  reviewedExtensions?: ReviewedExtensionTable;
 }
 
 /** `resume` always adds `--fork-session`. */
@@ -99,7 +123,17 @@ export type ClaudeOutcome =
   | 'quota'
   | 'spawn_failed';
 
-export type InitRule = 'permission_mode' | 'mcp_server' | 'tool' | 'cwd' | 'session_id' | 'hook_event';
+export type InitRule =
+  | 'permission_mode'
+  | 'mcp_server'
+  | 'tool'
+  | 'tool_missing'
+  | 'extension'
+  | 'memory'
+  | 'auth_source'
+  | 'cwd'
+  | 'session_id'
+  | 'hook_event';
 
 export interface InitViolation {
   rule: InitRule;
@@ -121,6 +155,11 @@ export interface ValidateInitExpectations {
   extraTools: readonly string[];
   mcpEnabled: boolean;
   platform: HostPlatform;
+  authMode: ClaudeAuthMode;
+  /** Version found by the probe (§10.9); `init.claude_code_version` must equal it. */
+  cliVersion: string;
+  /** Optional extension of the contract type: defaults to {@link CLAUDE_REVIEWED_EXTENSIONS}. */
+  reviewedExtensions?: ReviewedExtensionTable;
 }
 
 export interface ClaudeRunResult {

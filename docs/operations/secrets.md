@@ -18,7 +18,8 @@ pass `--force`, which replaces everything, or `--only <names> --force`, which re
 | `db_backup_password.txt` | SQL password | db-bootstrap; read on the host by `scripts/backup.mjs` |
 | `redis_password.txt` | 43-character base64url token | redis (`requirepass`, through a tmpfs config file), api, worker |
 | `egress_proxy_token.txt` | 43-character base64url token | egress-proxy (`EGRESS_AUTH_TOKEN_FILE`), worker (`EGRESS_PROXY_TOKEN_FILE`). Given only to Claude processes, as proxy credentials. |
-| `anthropic_api_key.txt` | supplied by the operator (`--anthropic-api-key-stdin` or `ANTHROPIC_API_KEY`) | worker only. Passed only to Claude processes. |
+| `claude_oauth_token.txt` | supplied by the operator: `claude setup-token`, then `--only claude_oauth_token --claude-oauth-token-stdin` | worker only (`CLAUDE_CODE_OAUTH_TOKEN_FILE`). Reaches Claude only through the runner socket and file descriptor 3. Empty (0 bytes) = not configured. |
+| `anthropic_api_key.txt` | supplied by the operator for `CLAUDE_AUTH_MODE=api_key` only (`--anthropic-api-key-stdin`) | worker only. Passed only to Claude processes. Empty (0 bytes) = not configured. |
 | `web_ca_cert.pem` / `web_ca_key.pem` | local web CA (10 years) | Not mounted. Import the certificate into browsers. The key signs the server certificate. |
 | `web_tls_cert.pem` / `web_tls_key.pem` | EC P-256 server certificate (825 days), SAN `localhost`, `127.0.0.1`, `WEB_SERVER_NAME`, `--san` | web (nginx, TLS on 8443) |
 | `db_ca_cert.pem` / `db_ca_key.pem` | private SQL Server CA | The certificate goes to api, worker, db-bootstrap, migrator and db-cli (`DB_CA_CERT_FILE`). The key is not mounted. |
@@ -88,14 +89,37 @@ node scripts/generate-secrets.mjs --only egress_proxy_token --force
 docker compose up -d --force-recreate egress-proxy worker
 ```
 
-### Anthropic API key
+### Claude OAuth token
+
+Renew (before expiry, or after a 401 / "Not logged in" failure) or rotate:
 
 ```bash
-node scripts/generate-secrets.mjs --only anthropic_api_key --force --anthropic-api-key-stdin < /path/to/new-key
-docker compose up -d --force-recreate worker
+claude setup-token                                   # prints the new sk-ant-oat01-... token
+node scripts/generate-secrets.mjs --only claude_oauth_token --force --claude-oauth-token-stdin < /path/to/new-token
+docker compose up -d --force-recreate worker         # the worker reads the file only at startup
 ```
 
-Revoke the old key in the Anthropic console afterwards.
+Delete the temporary token file. Revoke the old token in your Claude account settings; `setup-token` tokens
+stay valid until revoked or expired. An auth failure ends the attempt once; nothing retries it. Renew,
+restart the worker, then submit the task again. The command refuses a malformed token and never prints it.
+
+### Switching the auth mode
+
+Exactly one credential file is non-empty and it must match `CLAUDE_AUTH_MODE` (`oauth`, the default, or
+`api_key`, not recommended: the key can reach the Bash children of agents that have Bash rules enabled).
+`generate-secrets` refuses to write one credential while the other file is non-empty, and `compose-check`
+refuses to start the stack otherwise.
+
+```bash
+# oauth -> api_key: empty both files, install the key, select the mode
+: > secrets/anthropic_api_key.txt && : > secrets/claude_oauth_token.txt
+node scripts/generate-secrets.mjs --only anthropic_api_key --anthropic-api-key-stdin < /path/to/key-file
+CLAUDE_AUTH_MODE=api_key npm run compose:up
+```
+
+For the reverse direction, empty both files, install the token and start with the default mode. Set
+`CLAUDE_AUTH_MODE` in the shell or in `.env` for every `docker compose` call. Never set both credentials;
+the worker and the runner reject that combination.
 
 ### Web TLS certificate
 

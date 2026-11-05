@@ -47,6 +47,7 @@ const prodApiEnv = (extra: Env = {}): Env =>
     ...extra,
   });
 
+const OAUTH_TOKEN = 'sk-ant-oat01-hardening_Token-0123456789abcdefghij';
 const workerEnv = (extra: Env = {}): Env => ({
   NODE_ENV: 'development',
   DB_USER: 'orc_worker',
@@ -55,7 +56,7 @@ const workerEnv = (extra: Env = {}): Env => ({
   WORKSPACES_ROOT: abs('workspaces'),
   CLAUDE_HOME_ROOT: abs('claude-home'),
   CBM_CACHE_DIR: abs('cbm'),
-  ANTHROPIC_API_KEY: 'sk-ant-test-key-000000000000000000',
+  CLAUDE_CODE_OAUTH_TOKEN: OAUTH_TOKEN,
   WORKER_ID: 'worker-1',
   ...extra,
 });
@@ -174,19 +175,24 @@ describe('worker configuration (F7, T-m10, F1, F12, T-M9)', () => {
   it.skipIf(process.platform === 'win32')(
     'rejects a CBM_CACHE_DIR whose daemon socket cannot fit in runner mode with MCP enabled',
     () => {
-      expect(loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: '/var/lib/orc/cbm-cache' })).cbmCacheDir).toBe(
-        '/var/lib/orc/cbm-cache',
-      );
+      expect(
+        loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: '/var/lib/orc/cbm-cache' })).cbmCacheDir,
+      ).toBe('/var/lib/orc/cbm-cache');
       // 26 bytes fit the shortest (4-digit) sandbox uid; the worker re-checks the real range after `hello`
-      expect(loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: `/${'c'.repeat(25)}` })).sandboxMode).toBe('runner');
+      expect(
+        loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: `/${'c'.repeat(25)}` })).sandboxMode,
+      ).toBe('runner');
       const tooLong = `/${'c'.repeat(26)}`;
       expect(() => loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: tooLong }))).toThrow(
         /CBM_CACHE_DIR: Too long for the codebase-memory-mcp daemon socket/,
       );
-      expect(() => loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: tooLong }))).not.toThrow(/c{26}/);
-      expect(loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: tooLong, MCP_ENABLED: 'false' })).mcpEnabled).toBe(
-        false,
+      expect(() => loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: tooLong }))).not.toThrow(
+        /c{26}/,
       );
+      expect(
+        loadWorkerConfig(prodWorkerEnv({ CBM_CACHE_DIR: tooLong, MCP_ENABLED: 'false' }))
+          .mcpEnabled,
+      ).toBe(false);
       // local mode uses a short per-cache runtime dir below the OS temp dir instead
       expect(loadWorkerConfig(workerEnv({ CBM_CACHE_DIR: tooLong })).sandboxMode).toBe('local');
     },

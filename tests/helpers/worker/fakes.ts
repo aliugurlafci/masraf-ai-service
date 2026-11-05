@@ -98,6 +98,7 @@ export function orchestratorTestConfig(overrides: Partial<OrchestratorConfig> = 
     promptMaxBytes: 131_072,
     claudeMdMaxBytes: 16_384,
     mcpEnabled: true,
+    mcpRequired: false,
     testOutputMaxBytes: 10_485_760,
     junitMaxBytes: 20_971_520,
     testKillGraceMs: 500,

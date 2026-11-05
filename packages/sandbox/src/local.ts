@@ -3,6 +3,7 @@
 // argv checks, with one deliberate exception: the lease-containment check for path-valued env
 // (`validateSpawnEnvPaths`) is not applied. CBM_RUNTIME_DIR is only checked for kind (`mcp`) and for
 // being absolute, because local mode uses a per-cache temp dir outside the lease (ADR-0032).
+// `credentialFd` gets the runner's rules (`validateSpawnCredential`, ADR-0036 m.4).
 import { spawn as nodeSpawn } from 'node:child_process';
 import { realpath as fsRealpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -30,6 +31,7 @@ import {
   resolveInLease,
   validateLeaseKey,
   validateSpawnArgv,
+  validateSpawnCredential,
   validateSpawnEnv,
 } from './validation';
 
@@ -242,6 +244,7 @@ export function createLocalLauncher(o: LocalLauncherOptions = {}): LocalLauncher
         }
       }
       validateSpawnEnv(spec.kind, spec.env, platform === 'win32' ? WINDOWS_BASE_ENV : []);
+      validateSpawnCredential(spec.kind, spec.env, spec.credentialFd);
       const cwd = await resolveInLease(spec.cwd, r.paths, realpath, 'cwd_rejected');
       live(lease.id);
       const proc = spawnSupervised(spec.cmd, spec.args, {
@@ -249,6 +252,8 @@ export function createLocalLauncher(o: LocalLauncherOptions = {}): LocalLauncher
         env: { ...spec.env },
         spawn: spawnFn,
         platform,
+        // ADR-0036 m.4: fd 3 pipe, POSIX only (spawnSupervised rejects it on win32); never logged.
+        ...(spec.credentialFd === undefined ? {} : { credentialFd: spec.credentialFd }),
       });
       r.sessions.set(proc.pid, proc);
       void proc.exited.then(() => {

@@ -4,7 +4,7 @@
 import type { IsoDateTime, Uuid } from '../primitives';
 import type { KillResult, SupervisedProcess } from './process';
 
-/** What is being launched; the runner applies per-kind env rules (ANTHROPIC_API_KEY only for `claude`). */
+/** What is being launched; the runner applies per-kind env rules (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and `credentialFd` only for `claude`). */
 export type LaunchKind = 'claude' | 'test' | 'mcp';
 
 /** Per-process rlimits applied by the runner (`prlimit`); omitted values use the runner defaults. */
@@ -58,6 +58,13 @@ export interface LaunchSpec {
   /** Final child environment (already allowlisted by the caller; re-checked by the runner). */
   env: Record<string, string>;
   limits?: LaunchLimits;
+  /**
+   * Credential delivered on file descriptor 3 (ADR-0036; kind `claude` only, POSIX only; the env then names the
+   * fd with `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3` and never carries the value). Local launcher: passed to
+   * `spawnSupervised({credentialFd})`. Runner client: sent in the `spawn` frame as `credentialFd {b64}`
+   * (<= 4 KiB). Never logged.
+   */
+  credentialFd?: string;
 }
 
 export interface LeaseInfo {

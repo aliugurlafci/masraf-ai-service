@@ -8,7 +8,13 @@
 import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PLATFORM_DISALLOWED_RULES, computeToolPolicy, UnsafeArgumentError } from '@orc/security';
+import {
+  CLAUDE_ENV_ALLOWLIST,
+  PLATFORM_DISALLOWED_RULES,
+  WINDOWS_BASE_ENV,
+  computeToolPolicy,
+  UnsafeArgumentError,
+} from '@orc/security';
 import type { AttemptRecord, TaskRecord } from '@orc/database';
 import { resetDb } from '../helpers/database/db';
 import { hashTree } from '../helpers/git/fixtures';
@@ -169,7 +175,19 @@ describe('workspace isolation through the worker pipeline', () => {
         expect(name).not.toMatch(/^(DB_|REDIS_|MSSQL_|SESSION_|npm_|NODE_OPTIONS$)|_FILE$|PASSWORD|EGRESS_PROXY_TOKEN/i);
       }
       expect(r.envNames).toEqual(expect.arrayContaining(['HOME', 'CLAUDE_CONFIG_DIR', 'CBM_ALLOWED_ROOT', 'ORC_ATTEMPT_ID']));
-      expect(r.hasApiKey).toBe(true);
+      // oauth is the default auth mode (ADR-0036): never both credentials, so no API key here.
+      expect(r.hasApiKey).toBe(false);
+      const upper = r.envNames.map((n) => n.toUpperCase());
+      expect(upper).toContain(
+        process.platform === 'win32' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+      );
+      expect(upper).not.toContain('ANTHROPIC_API_KEY');
+      const allowed = new Set([...CLAUDE_ENV_ALLOWLIST, ...WINDOWS_BASE_ENV].map((k) => k.toUpperCase()));
+      // libuv (Windows only) copies these from the parent; outside the runner's control.
+      const libuvInjected = new Set(
+        process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH', 'LOGONSERVER', 'USERDOMAIN', 'USERNAME'] : [],
+      );
+      for (const name of upper) expect(allowed.has(name) || libuvInjected.has(name), name).toBe(true);
     }
   });
 

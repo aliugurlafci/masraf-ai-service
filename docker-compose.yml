@@ -252,7 +252,10 @@ services:
       PROJECTS_ROOT: /var/lib/orc/projects
       GIT_HOOKS_DIR: /opt/orc/git/empty-hooks
       CLAUDE_BIN: /usr/local/bin/claude
-      CLAUDE_BARE: 'true'
+      # ADR-0036: oauth (default; claude_oauth_token) or api_key (anthropic_api_key). Exactly one of the two
+      # credential files is non-empty (the unused one is empty = not configured); compose-check enforces it.
+      CLAUDE_AUTH_MODE: ${CLAUDE_AUTH_MODE:-oauth}
+      CLAUDE_CODE_OAUTH_TOKEN_FILE: /run/secrets/claude_oauth_token
       CODEBASE_MEMORY_MCP_BIN: /usr/local/bin/codebase-memory-mcp
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
       # Handed only to Claude processes, with credentials from EGRESS_PROXY_TOKEN (§10.3); the
@@ -262,7 +265,7 @@ services:
       EGRESS_PROXY_TOKEN_FILE: /run/secrets/egress_proxy_token
       MCP_ENABLED: ${MCP_ENABLED:-true}
       MCP_REQUIRED: ${MCP_REQUIRED:-false}
-    secrets: [db_worker_password, redis_password, anthropic_api_key, egress_proxy_token, db_ca_cert]
+    secrets: [db_worker_password, redis_password, claude_oauth_token, anthropic_api_key, egress_proxy_token, db_ca_cert]
     volumes:
       - workspaces:/var/lib/orc/workspaces
       - claude-home:/var/lib/orc/claude
@@ -455,6 +458,8 @@ secrets:
     file: ${ORC_SECRETS_DIR:-./secrets}/db_backup_password.txt
   redis_password:
     file: ${ORC_SECRETS_DIR:-./secrets}/redis_password.txt
+  claude_oauth_token:
+    file: ${ORC_SECRETS_DIR:-./secrets}/claude_oauth_token.txt
   anthropic_api_key:
     file: ${ORC_SECRETS_DIR:-./secrets}/anthropic_api_key.txt
   egress_proxy_token:

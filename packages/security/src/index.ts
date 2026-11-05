@@ -36,12 +36,20 @@ export {
   SECRET_VALUE_PATTERNS,
 } from './masking.js';
 export {
+  assertNoClaudeCredential,
+  assertSingleClaudeCredential,
   buildChildEnv,
+  buildClaudeAppDataEnv,
+  buildClaudeCredentialEnv,
+  CLAUDE_CREDENTIAL_FD,
   CLAUDE_ENV_ALLOWLIST,
+  CLAUDE_FIXED_ENV,
+  CLAUDE_NEVER_ENV,
   GIT_ENV_ALLOWLIST,
   TEST_ENV_ALLOWLIST,
   WINDOWS_BASE_ENV,
 } from './env.js';
+export type { ClaudeAuthInput, ClaudeCredentialEnv } from './env.js';
 export type { EffectiveToolPolicy, ToolPolicyOptions } from './tool-policy.js';
 export {
   computeToolPolicy,

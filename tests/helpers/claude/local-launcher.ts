@@ -94,7 +94,11 @@ export function createTestLocalLauncher(): TestLocalLauncher {
         return Promise.reject(new Error(`lease ${lease.key} is not live`));
       }
       try {
-        const proc = spawnSupervised(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env });
+        const proc = spawnSupervised(spec.cmd, spec.args, {
+          cwd: spec.cwd,
+          env: spec.env,
+          ...(spec.credentialFd !== undefined ? { credentialFd: spec.credentialFd } : {}),
+        });
         state.procs.push(proc);
         state.info.pids.push(proc.pid);
         launches.push({ leaseKey: lease.key, spec, proc });

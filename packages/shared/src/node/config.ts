@@ -5,7 +5,13 @@ import { readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
-import { NODE_ENVS, TASK_TEXT_MAX_BYTES, type NodeEnv } from '../constants';
+import {
+  CLAUDE_AUTH_MODES,
+  NODE_ENVS,
+  TASK_TEXT_MAX_BYTES,
+  type ClaudeAuthMode,
+  type NodeEnv,
+} from '../constants';
 import { OrcError, type OrcErrorOptions } from '../errors';
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -122,6 +128,7 @@ export const SECRET_ENV_KEYS: Readonly<Record<AppName, readonly string[]>> = Obj
     'DB_PASSWORD',
     'REDIS_PASSWORD',
     'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_OAUTH_TOKEN',
     'EGRESS_PROXY_TOKEN',
     'DB_CA_CERT',
   ]),
@@ -340,6 +347,62 @@ export function cbmSocketPathProblem(cacheRoot: string, maxUid: number): string 
   );
 }
 
+/**
+ * Long-lived subscription token from `claude setup-token` (ADR-0036): `sk-ant-oat`, two digits, `-`, then
+ * 20..500 URL-safe characters. `scripts/lib/claude-credentials.mjs` copies this expression verbatim
+ * (a unit test asserts equality).
+ */
+export const CLAUDE_OAUTH_TOKEN_REGEX = /^sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,500}$/;
+
+/** Claude credential inputs (ADR-0036). Not camelized: the output is `claudeAuth`, a union on the mode. */
+const claudeAuthShape = {
+  CLAUDE_AUTH_MODE: z.enum(CLAUDE_AUTH_MODES).default('oauth'),
+  CLAUDE_CODE_OAUTH_TOKEN: z.string().min(1).optional(),
+  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+  /** Removed by ADR-0036; parsed only so that a leftover setting fails loudly. */
+  CLAUDE_BARE: z.string().optional(),
+};
+
+/** Claude credentials as the worker passes them to the runner config (ADR-0036 Decision 1). */
+export type ClaudeAuth =
+  | { readonly mode: Extract<ClaudeAuthMode, 'oauth'>; readonly oauthToken: string }
+  | { readonly mode: Extract<ClaudeAuthMode, 'api_key'>; readonly apiKey: string };
+
+const OAUTH_TOKEN_PREFIX = 'sk-ant-oat';
+
+/** Credential problems as [key, message]; messages name keys only, never values. */
+function claudeAuthProblems(e: z.output<z.ZodObject<typeof claudeAuthShape>>): {
+  problems: [string, string][];
+  auth: ClaudeAuth | null;
+} {
+  const problems: [string, string][] = [];
+  if (e.CLAUDE_BARE !== undefined) problems.push(['CLAUDE_BARE', 'Removed by ADR-0036; unset it']);
+  if (e.CLAUDE_AUTH_MODE === 'oauth') {
+    if (e.ANTHROPIC_API_KEY !== undefined) {
+      problems.push(['ANTHROPIC_API_KEY', 'Must not be set when CLAUDE_AUTH_MODE=oauth']);
+    }
+    const token = e.CLAUDE_CODE_OAUTH_TOKEN;
+    if (token === undefined) {
+      problems.push(['CLAUDE_CODE_OAUTH_TOKEN', 'Required when CLAUDE_AUTH_MODE=oauth']);
+    } else if (!CLAUDE_OAUTH_TOKEN_REGEX.test(token)) {
+      problems.push(['CLAUDE_CODE_OAUTH_TOKEN', 'Does not match the sk-ant-oat token format']);
+    }
+    if (problems.length > 0 || token === undefined) return { problems, auth: null };
+    return { problems, auth: { mode: 'oauth', oauthToken: token } };
+  }
+  if (e.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
+    problems.push(['CLAUDE_CODE_OAUTH_TOKEN', 'Must not be set when CLAUDE_AUTH_MODE=api_key']);
+  }
+  const key = e.ANTHROPIC_API_KEY;
+  if (key === undefined) {
+    problems.push(['ANTHROPIC_API_KEY', 'Required when CLAUDE_AUTH_MODE=api_key']);
+  } else if (key.startsWith(OAUTH_TOKEN_PREFIX)) {
+    problems.push(['ANTHROPIC_API_KEY', 'Holds an OAuth token; use CLAUDE_AUTH_MODE=oauth']);
+  }
+  if (problems.length > 0 || key === undefined) return { problems, auth: null };
+  return { problems, auth: { mode: 'api_key', apiKey: key } };
+}
+
 const workerShape = {
   WORKER_ID: z
     .string()
@@ -387,8 +450,6 @@ const workerShape = {
   COMMITS_MAX: int(500, 1),
   CLAUDE_BIN: textD('claude'),
   CLAUDE_BIN_PREFIX_ARGS: jsonStringArray(),
-  CLAUDE_BARE: bool(true),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
   CLAUDE_KILL_GRACE_MS: int(10_000, 0),
   CLAUDE_INIT_TIMEOUT_MS: int(60_000, 1000),
   CLAUDE_MAX_TIMEOUT_SECONDS: int(14_400, 60, 86_400),
@@ -620,19 +681,15 @@ export const ApiConfigSchema = z.object({ ...commonShape(10), ...apiShape }).tra
 export type ApiConfig = z.output<typeof ApiConfigSchema>;
 
 export const WorkerConfigSchema = z
-  .object({ ...commonShape(5), ...workerShape })
+  .object({ ...commonShape(5), ...workerShape, ...claudeAuthShape })
   .transform((e, ctx) => {
     const p = commonProblems(e, true);
     const workerId = e.WORKER_ID ?? hostname();
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(workerId)) {
       p.push(['WORKER_ID', 'Host name is not a valid worker id; set WORKER_ID']);
     }
-    if (!e.CLAUDE_BARE && e.NODE_ENV !== 'development') {
-      p.push(['CLAUDE_BARE', 'false is allowed only when NODE_ENV=development']);
-    }
-    if (e.CLAUDE_BARE && e.ANTHROPIC_API_KEY === undefined) {
-      p.push(['ANTHROPIC_API_KEY', 'Required when CLAUDE_BARE=true']);
-    }
+    const credentials = claudeAuthProblems(e);
+    p.push(...credentials.problems);
     if (e.NODE_ENV === 'production' && e.HTTPS_PROXY === undefined) {
       p.push(['HTTPS_PROXY', 'Required when NODE_ENV=production']);
     }
@@ -679,11 +736,12 @@ export const WorkerConfigSchema = z
         p.push(['CLAUDE_INIT_EXTRA_TOOLS', `${tool} may not be whitelisted`]);
       }
     }
-    if (report(ctx, p)) return z.NEVER;
+    if (report(ctx, p) || credentials.auth === null) return z.NEVER;
     return {
       app: 'worker' as const,
       ...commonOut(e, 'orc-worker'),
       ...camelize(workerShape, e),
+      claudeAuth: credentials.auth,
       workerId,
       sandboxMode,
       selfFenceAfterMs,

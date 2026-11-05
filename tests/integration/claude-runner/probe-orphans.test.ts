@@ -12,7 +12,7 @@ import {
 } from '@orc/claude-runner';
 import { createFileProcessRegistry } from '@orc/shared/node';
 import { isProcessAlive, waitFor } from '../../helpers/common';
-import { ATTEMPT_ID, hostPlatform } from '../../helpers/claude/fake-claude';
+import { ATTEMPT_ID, FAKE_CLI_VERSION, hostPlatform } from '../../helpers/claude/fake-claude';
 import { useRunnerEnv } from '../../helpers/claude/integration';
 
 const env = useRunnerEnv();
@@ -37,7 +37,7 @@ describe('claude CLI probe (integration, fake-claude)', () => {
   it('accepts the recorded 2.1.316 help output', async () => {
     const e = env();
     const res = await e.runner().probe();
-    expect(res).toMatchObject({ ok: true, version: '2.1.316', missingFlags: [] });
+    expect(res).toMatchObject({ ok: true, version: FAKE_CLI_VERSION, missingFlags: [] });
     expect(res.permissionModes).toContain('dontAsk');
   });
 

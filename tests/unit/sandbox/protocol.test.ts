@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  base64DecodedLength,
   checkRunnerHello,
+  MAX_CREDENTIAL_FD_BYTES,
   ClientFrameSchema,
   encodeFrame,
   FrameDecoder,
@@ -88,6 +90,34 @@ describe('protocol v1 schemas', () => {
       },
     ];
     for (const f of bad) expect(RequestFrameSchema.safeParse(f).success).toBe(false);
+  });
+
+  it('spawn credentialFd {b64}: optional, strict, 1..4096 decoded bytes (ADR-0036 m.4)', () => {
+    const b64 = (n: number): string => Buffer.alloc(n, 0x41).toString('base64');
+    const withCred = (credentialFd: unknown) => ({ ...spawnFrame, kind: 'claude', credentialFd });
+    expect(RequestFrameSchema.safeParse(spawnFrame).success).toBe(true);
+    for (const n of [1, 2, 3, 40, MAX_CREDENTIAL_FD_BYTES - 1, MAX_CREDENTIAL_FD_BYTES]) {
+      expect(RequestFrameSchema.safeParse(withCred({ b64: b64(n) })).success, String(n)).toBe(true);
+    }
+    // The schema does not decide per kind: the runner answers `env_rejected` (validateSpawnCredential).
+    expect(
+      RequestFrameSchema.safeParse({ ...spawnFrame, credentialFd: { b64: b64(8) } }).success,
+    ).toBe(true);
+    for (const bad of [
+      { b64: b64(MAX_CREDENTIAL_FD_BYTES + 1) },
+      { b64: b64(MAX_CREDENTIAL_FD_BYTES + 2) },
+      { b64: '' },
+      { b64: 'not base64!' },
+      { b64: 'QUFB' , fd: 3 },
+      'QUFB',
+      null,
+    ]) {
+      expect(RequestFrameSchema.safeParse(withCred(bad)).success, JSON.stringify(bad)).toBe(false);
+    }
+    expect(ClientFrameSchema.safeParse(withCred({ b64: b64(8) })).success).toBe(true);
+    for (const n of [0, 1, 2, 3, 4, 4096, 4097, 4098]) {
+      expect(base64DecodedLength(b64(n)), String(n)).toBe(n);
+    }
   });
 
   it('session frames carry bounded base64 only', () => {

@@ -25,6 +25,7 @@ import {
   type ServerFrame,
   type SpawnRequest,
 } from './protocol';
+import { encodeCredentialFd, validateSpawnCredential } from './validation';
 
 export interface ReleaseOutcome {
   kill: KillResult;
@@ -196,6 +197,8 @@ export function createRunnerClient(o: RunnerClientOptions): RunnerClient {
   }
 
   function openSession(frame: SpawnRequest): Promise<SupervisedProcess> {
+    // The session object keeps only the lease id, never the frame (it may carry `credentialFd`).
+    const leaseId = frame.leaseId;
     return new Promise<SupervisedProcess>((resolve, reject) => {
       let conn: Duplex;
       try {
@@ -245,7 +248,7 @@ export function createRunnerClient(o: RunnerClientOptions): RunnerClient {
             if (f.type !== 'spawned')
               throw protocolError(`Unexpected ${f.type} frame before spawned`);
             clearTimeout(timer);
-            proc = new RemoteProcess(conn, f, frame.leaseId, o);
+            proc = new RemoteProcess(conn, f, leaseId, o);
             resolve(proc);
           }
         } catch (e) {
@@ -295,6 +298,8 @@ export function createRunnerClient(o: RunnerClientOptions): RunnerClient {
       if (spec.limits?.nproc !== undefined) limits.nproc = spec.limits.nproc;
       if (spec.limits?.nofile !== undefined) limits.nofile = spec.limits.nofile;
       if (spec.limits?.fsizeBytes !== undefined) limits.fsizeBytes = spec.limits.fsizeBytes;
+      // The runner re-checks; failing here keeps a misrouted credential off the socket.
+      validateSpawnCredential(spec.kind, spec.env, spec.credentialFd);
       return openSession({
         v: PROTOCOL_VERSION,
         type: 'spawn',
@@ -304,6 +309,9 @@ export function createRunnerClient(o: RunnerClientOptions): RunnerClient {
         cwd: spec.cwd,
         env: { ...spec.env },
         limits,
+        ...(spec.credentialFd === undefined
+          ? {}
+          : { credentialFd: encodeCredentialFd(spec.credentialFd) }),
       });
     },
     async listLeases() {

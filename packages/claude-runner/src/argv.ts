@@ -9,7 +9,7 @@ import {
   UnsafeArgumentError,
   utf8ByteLength,
 } from '@orc/security';
-import { CLAUDE_PERMISSION_MODE } from './constants';
+import { CLAUDE_HARDENED_SETTINGS, CLAUDE_PERMISSION_MODE } from './constants';
 import type { ClaudeRunRequest } from './types';
 
 /** Model ids: no leading '-', no whitespace/control characters (`claude-x`, `x[1m]`, `arn:...:profile/x`). */
@@ -18,8 +18,8 @@ const MODEL_REGEX = /^[A-Za-z0-9][A-Za-z0-9._:/[\]@-]{0,255}$/;
 const RESUME_SESSION_REGEX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const MAX_BUDGET_USD = 1_000_000;
 
+/** The argv has no input per auth mode (ADR-0036 Decision 3): it is identical for oauth and api_key. */
 export interface BuildArgvOptions {
-  bare: boolean;
   platform: HostPlatform;
 }
 
@@ -36,7 +36,7 @@ function assertRuleValues(rules: readonly string[], flag: string): void {
   }
 }
 
-/** §10.2 rows 1-16 in order; ends with `assertSafeArgv(argv, {platform})`. Excludes bin + prefix args. */
+/** §10.2 rows 1-18 in order; ends with `assertSafeArgv(argv, {platform})`. Excludes bin + prefix args. */
 export function buildClaudeArgv(r: ClaudeRunRequest, o: BuildArgvOptions): string[] {
   if (typeof r.model !== 'string' || !MODEL_REGEX.test(r.model)) {
     throw unsafe('invalid_model', 'Invalid model name');
@@ -72,8 +72,9 @@ export function buildClaudeArgv(r: ClaudeRunRequest, o: BuildArgvOptions): strin
   }
 
   const argv: string[] = ['-p', '--output-format', 'stream-json', '--verbose'];
-  if (o.bare) argv.push('--bare');
+  argv.push('--include-hook-events', '--restricted');
   argv.push('--setting-sources', 'user');
+  argv.push('--settings', CLAUDE_HARDENED_SETTINGS);
   argv.push('--model', r.model);
   if (r.effort !== null) argv.push('--effort', r.effort);
   argv.push('--permission-mode', CLAUDE_PERMISSION_MODE);

@@ -42,7 +42,7 @@ const SECRETS: Record<string, readonly string[]> = {
   ],
   migrator: ['db_migrator_password', 'db_ca_cert'],
   api: ['db_api_password', 'redis_password', 'db_ca_cert'],
-  worker: ['db_worker_password', 'redis_password', 'anthropic_api_key', 'egress_proxy_token', 'db_ca_cert'],
+  worker: ['db_worker_password', 'redis_password', 'anthropic_api_key', 'claude_oauth_token', 'egress_proxy_token', 'db_ca_cert'],
   runner: [],
   'egress-proxy': ['egress_proxy_token'],
   web: ['web_tls_cert', 'web_tls_key'],
@@ -183,6 +183,8 @@ describe('docker-compose.yml: least-privilege containers (§19, ADR-0024)', () =
     }
     const sa = services.filter((s) => s.secrets.includes('mssql_sa_password')).map((s) => s.name);
     expect(sa.sort()).toEqual(['db-bootstrap', 'mssql']);
+    const oauth = services.filter((s) => s.secrets.includes('claude_oauth_token')).map((s) => s.name);
+    expect(oauth).toEqual(['worker']);
     const apiKey = services.filter((s) => s.secrets.includes('anthropic_api_key')).map((s) => s.name);
     expect(apiKey).toEqual(['worker']);
     // Secrets are files, never values in the compose environment.
@@ -246,10 +248,11 @@ describe('docker-compose.yml: least-privilege containers (§19, ADR-0024)', () =
     }
   });
 
-  it('the worker runs untrusted code only through the runner (SANDBOX_MODE=runner, bare Claude)', () => {
+  it('the worker runs untrusted code only through the runner (SANDBOX_MODE=runner, non-bare Claude, oauth)', () => {
     const env = requireService(PROD, 'worker').environment;
     expect(env['SANDBOX_MODE']).toBe('runner');
-    expect(env['CLAUDE_BARE']).toBe('true');
+    expect(env).not.toHaveProperty('CLAUDE_BARE');
+    expect(env['CLAUDE_AUTH_MODE']).toMatch(/oauth/);
     expect(env['NODE_ENV']).toBe('production');
   });
 });

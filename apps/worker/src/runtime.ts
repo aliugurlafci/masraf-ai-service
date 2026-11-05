@@ -1,6 +1,6 @@
 // Worker runtime (contract §14.1-§14.6): composition, startup sequence, heartbeat, control channel,
 // BullMQ workers, health server and graceful shutdown.
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import path from 'node:path';
 import { QueueEvents, Worker } from 'bullmq';
@@ -47,7 +47,15 @@ import {
   createTaskStreamPublisher,
 } from '@orc/task-manager';
 import type { QueueRegistry, RedisFactory } from '@orc/task-manager';
-import { claudeRunnerConfig, gitManagerConfig, hostPlatform, mcpManagerConfig, orchestratorConfig } from './config.js';
+import {
+  claudeRunnerConfig,
+  claudeStartupWarnings,
+  gitManagerConfig,
+  hostPlatform,
+  mcpManagerConfig,
+  orchestratorConfig,
+  PTRACE_SCOPE_PATH,
+} from './config.js';
 import { createHealthServer } from './health.js';
 import { createRunnerLossMonitor } from './launcher.js';
 import type { CheckResult, HealthServer } from './health.js';
@@ -121,7 +129,8 @@ function redisLike(r: Redis): RedisLike {
 export function createWorkerRuntime(config: WorkerConfig, overrides: WorkerRuntimeOverrides = {}): WorkerRuntime {
   const platform: HostPlatform = hostPlatform();
   const secrets = overrides.secrets ?? createSecretRegistry();
-  for (const s of [config.db.password, config.redis.password, config.anthropicApiKey, config.egressProxyToken]) secrets.add(s);
+  const claudeCredential = config.claudeAuth.mode === 'oauth' ? config.claudeAuth.oauthToken : config.claudeAuth.apiKey;
+  for (const s of [config.db.password, config.redis.password, claudeCredential, config.egressProxyToken]) secrets.add(s);
   const logger =
     overrides.logger ??
     createLogger({
@@ -246,6 +255,12 @@ export function createWorkerRuntime(config: WorkerConfig, overrides: WorkerRunti
 
   async function start(): Promise<void> {
     // 1. directories (+ DB name guard)
+    for (const w of await claudeStartupWarnings(config, {
+      osPlatform: process.platform,
+      readPtraceScope: () => readFile(PTRACE_SCOPE_PATH, 'utf8'),
+    })) {
+      logger.warn({ event: w.event, ...(w.ptraceScope !== undefined ? { ptraceScope: w.ptraceScope } : {}) }, w.message);
+    }
     launcher = await buildLauncher();
     let dbRef: Database | null = null;
     const gitRecorder = {

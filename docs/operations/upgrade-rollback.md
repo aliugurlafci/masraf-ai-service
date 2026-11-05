@@ -88,6 +88,19 @@ probes the CLI at startup and refuses to start if a required flag or permission 
    JUnit report and the masked transcript under `docs/operations/evidence/<cli-version>/`.
 6. Roll out with a new `ORC_IMAGE_TAG`. To roll back, use the previous tag; no data migration is involved.
 
+**Fail-closed on a CLI update (ADR-0036).** The runner validates Claude's `init` message against a table of
+the extensions, memory paths and tools expected for the pinned version. A CLI that reports anything outside
+the table makes the attempt end as `security_violation` (the process is killed). After a pin change,
+`test:claude-live` (`probe-init`) must re-verify the table and the owning team updates it; do not roll out
+a new pin without that. Rolling back to the previous tag restores the previous table.
+
+**Upgrading from a release that used `CLAUDE_BARE` and the API key.** Remove `CLAUDE_BARE` from every `.env`
+and override file (the worker fails at startup otherwise). To keep the API key, set `CLAUDE_AUTH_MODE=api_key`
+and keep `anthropic_api_key.txt`; create the new empty `claude_oauth_token.txt` with
+`node scripts/generate-secrets.mjs --only claude_oauth_token`. To move to the subscription token, follow
+[secrets.md](secrets.md#switching-the-auth-mode). To roll back, use the previous image tag together with the
+previous compose file.
+
 ## codebase-memory-mcp pin upgrade
 
 1. Update `CBM_VERSION`, `CBM_ASSET`, `CBM_CHECKSUMS_SHA256` (SHA-256 of the release's `checksums.txt`) and

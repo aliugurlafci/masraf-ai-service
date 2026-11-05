@@ -4,8 +4,8 @@ import { posix, win32 } from 'node:path';
 import type { Env, LaunchLease, ProcessLauncher, SupervisedProcess } from '@orc/shared/node';
 import type { Logger } from '@orc/logger';
 import { serializeError } from '@orc/logger';
+import { buildClaudeAppDataEnv } from '@orc/security';
 import {
-  CLAUDE_BARE_FLAG,
   CLAUDE_FLAG_ALIASES,
   CLAUDE_PERMISSION_MODE,
   CLAUDE_PROBE_MAX_OUTPUT_BYTES,
@@ -36,9 +36,9 @@ export function parsePermissionModes(help: string): string[] {
   return [...(match[1] ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? '').filter((m) => m.length > 0);
 }
 
-/** Flags required for this configuration (`--bare` only when CLAUDE_BARE=true). */
-export function requiredClaudeFlags(bare: boolean): string[] {
-  return bare ? [...CLAUDE_REQUIRED_FLAGS, CLAUDE_BARE_FLAG] : [...CLAUDE_REQUIRED_FLAGS];
+/** Flags the CLI must document (§10.9); the same for both auth modes (ADR-0036 Decision 6). */
+export function requiredClaudeFlags(): string[] {
+  return [...CLAUDE_REQUIRED_FLAGS];
 }
 
 export interface ProbeEvaluation extends ClaudeProbeResult {
@@ -47,13 +47,9 @@ export interface ProbeEvaluation extends ClaudeProbeResult {
 }
 
 /** Pure evaluation of the `--version` and `--help` outputs. */
-export function evaluateClaudeProbe(
-  versionOutput: string,
-  helpOutput: string,
-  opts: { bare: boolean },
-): ProbeEvaluation {
+export function evaluateClaudeProbe(versionOutput: string, helpOutput: string): ProbeEvaluation {
   const version = VERSION_REGEX.exec(versionOutput)?.[1] ?? null;
-  const missingFlags = requiredClaudeFlags(opts.bare).filter(
+  const missingFlags = requiredClaudeFlags().filter(
     (flag) =>
       !helpHasFlag(helpOutput, flag) &&
       !(CLAUDE_FLAG_ALIASES[flag] ?? []).some((alias) => helpHasFlag(helpOutput, alias)),
@@ -146,6 +142,10 @@ export async function probeClaude(
   const p = cfg.platform === 'win32' ? win32 : posix;
   const probeDir = p.resolve(cfg.claudeHomeRoot, 'probe');
   await mkdir(probeDir, { recursive: true, mode: 0o700 });
+  // B-020: on win32 the probe gets its own AppData layout below the probe directory.
+  for (const dir of Object.values(buildClaudeAppDataEnv('probe', probeDir, cfg.platform))) {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+  }
   const env = buildProbeEnv(cfg, probeDir, deps.env);
   let lease: LaunchLease;
   try {
@@ -192,7 +192,7 @@ export async function probeClaude(
   try {
     const version = await run('--version');
     const help = await run('--help');
-    evaluation = evaluateClaudeProbe(version.stdout, help.stdout, { bare: cfg.bare });
+    evaluation = evaluateClaudeProbe(version.stdout, help.stdout);
   } finally {
     await lease.release().catch((e: unknown) => {
       deps.logger.warn({ err: serializeError(e) }, 'claude probe lease release failed');

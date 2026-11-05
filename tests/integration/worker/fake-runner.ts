@@ -82,6 +82,7 @@ function localBackedManager(
         args,
         cwd: input.cwd,
         env: input.env,
+        ...(input.credentialFd !== undefined ? { credentialFd: input.credentialFd } : {}),
       });
       return { proc, uid: null };
     },

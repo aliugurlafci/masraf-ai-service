@@ -10,6 +10,7 @@ interface DevEnvModule {
   parseEnvFile(text: string): Record<string, string>;
   serializeEnvFile(values: Record<string, string>): string;
   devPaths(env: Env, repoRoot: string): Record<string, string>;
+  oauthTokenFileToCheck(env: Env): string | null;
   buildChildEnv(
     profile: string,
     o: { shellEnv: Env; devValues: Record<string, string>; paths: Record<string, string> },
@@ -74,8 +75,42 @@ describe('dev environment', () => {
       CLAUDE_HOME_ROOT: paths.claude,
       CBM_CACHE_DIR: paths.cbmCache,
       GIT_HOOKS_DIR: paths.emptyHooks,
-      CLAUDE_BARE: 'false',
+      CLAUDE_AUTH_MODE: 'oauth',
     });
+    expect(env.CLAUDE_BARE).toBeUndefined();
+  });
+
+  it('worker oauth mode defaults CLAUDE_CODE_OAUTH_TOKEN_FILE to the repo secret path', () => {
+    const env = lib.buildChildEnv('worker', { shellEnv: {}, devValues: PASSWORDS, paths });
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN_FILE).toBe(paths.oauthTokenFile);
+    expect(paths.oauthTokenFile).toBe(resolve('/repo', 'secrets', 'claude_oauth_token.txt'));
+    expect(lib.oauthTokenFileToCheck(env)).toBe(paths.oauthTokenFile);
+  });
+
+  it('keeps an explicit token variable or file from the shell or dev.env', () => {
+    const byToken = lib.buildChildEnv('worker', {
+      shellEnv: { CLAUDE_CODE_OAUTH_TOKEN: 'x' },
+      devValues: PASSWORDS,
+      paths,
+    });
+    expect(byToken.CLAUDE_CODE_OAUTH_TOKEN_FILE).toBeUndefined();
+    expect(lib.oauthTokenFileToCheck(byToken)).toBeNull();
+    const byFile = lib.buildChildEnv('worker', {
+      shellEnv: {},
+      devValues: { ...PASSWORDS, CLAUDE_CODE_OAUTH_TOKEN_FILE: '/elsewhere/t.txt' },
+      paths,
+    });
+    expect(byFile.CLAUDE_CODE_OAUTH_TOKEN_FILE).toBe('/elsewhere/t.txt');
+  });
+
+  it('api_key mode (shell) gets no token file default', () => {
+    const env = lib.buildChildEnv('worker', {
+      shellEnv: { CLAUDE_AUTH_MODE: 'api_key' },
+      devValues: PASSWORDS,
+      paths,
+    });
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN_FILE).toBeUndefined();
+    expect(lib.oauthTokenFileToCheck(env)).toBeNull();
   });
 
   it('bootstrap profile carries every login password; db profile only the migrator', () => {

@@ -48,6 +48,8 @@ export function mcpManagerConfig(c: WorkerConfig): McpManagerConfig {
     resultMaxBytes: c.mcpResultMaxBytes,
     appVersion: c.appVersion,
     workerId: c.workerId,
+    // ADR-0036 Decision 7: in api_key mode the key must not reach codebase-memory-mcp's environment.
+    ...(c.claudeAuth.mode === 'api_key' ? { claudeEnvScrub: ['ANTHROPIC_API_KEY'] as const } : {}),
   };
 }
 
@@ -55,9 +57,9 @@ export function claudeRunnerConfig(c: WorkerConfig, platform: HostPlatform): Cla
   return {
     bin: c.claudeBin,
     binPrefixArgs: c.claudeBinPrefixArgs,
-    bare: c.claudeBare,
     claudeHomeRoot: c.claudeHomeRoot,
-    apiKey: c.anthropicApiKey ?? null,
+    // ADR-0036: the mode and its single credential; the reviewed extension table is never configurable.
+    auth: c.claudeAuth,
     proxy: {
       https: c.httpsProxy ?? null,
       http: c.httpProxy ?? null,
@@ -73,6 +75,50 @@ export function claudeRunnerConfig(c: WorkerConfig, platform: HostPlatform): Cla
     workerId: c.workerId,
     initExtraTools: c.claudeInitExtraTools,
   };
+}
+
+/** Yama setting that keeps same-uid tool children out of Claude's memory (ADR-0036 Decision 9). */
+export const PTRACE_SCOPE_PATH = '/proc/sys/kernel/yama/ptrace_scope';
+
+export interface ClaudeStartupWarning {
+  event: 'claude_api_key_mode' | 'ptrace_scope_unprotected';
+  message: string;
+  /** ptrace_scope value read (null = missing or unreadable). */
+  ptraceScope?: number | null;
+}
+
+/**
+ * Startup warnings of the Claude credential setup, logged once by the worker:
+ * - api_key mode (ADR-0036 Decision 7): the key still reaches Claude's Bash children; not recommended.
+ * - local mode on Linux (Decision 9): Yama `ptrace_scope` missing or < 1 lets a same-uid tool child read
+ *   the token from Claude's memory. Runner mode is checked by the runner itself.
+ */
+export async function claudeStartupWarnings(
+  c: Pick<WorkerConfig, 'claudeAuth' | 'sandboxMode'>,
+  o: { osPlatform: NodeJS.Platform; readPtraceScope: () => Promise<string> },
+): Promise<ClaudeStartupWarning[]> {
+  const out: ClaudeStartupWarning[] = [];
+  if (c.claudeAuth.mode === 'api_key') {
+    out.push({
+      event: 'claude_api_key_mode',
+      message:
+        'CLAUDE_AUTH_MODE=api_key is not recommended: the API key reaches the Bash children of Claude (ADR-0036); prefer oauth',
+    });
+  }
+  if (c.sandboxMode === 'local' && o.osPlatform === 'linux') {
+    // Missing (no Yama), unreadable or unparsable counts as unprotected.
+    const text = await o.readPtraceScope().catch(() => '');
+    const m = /^\s*(\d+)\s*$/.exec(text);
+    const scope = m?.[1] !== undefined ? Number.parseInt(m[1], 10) : null;
+    if (scope === null || scope < 1) {
+      out.push({
+        event: 'ptrace_scope_unprotected',
+        message: `kernel.yama.ptrace_scope is ${scope === null ? 'missing' : String(scope)} (< 1): a same-uid process can read the Claude credential from memory; set it to 1 on the host`,
+        ptraceScope: scope,
+      });
+    }
+  }
+  return out;
 }
 
 export function orchestratorConfig(c: WorkerConfig, platform: HostPlatform, cliVersion: string | null): OrchestratorConfig {
@@ -92,6 +138,7 @@ export function orchestratorConfig(c: WorkerConfig, platform: HostPlatform, cliV
     promptMaxBytes: c.promptMaxBytes,
     claudeMdMaxBytes: c.promptClaudeMdMaxBytes,
     mcpEnabled: c.mcpEnabled,
+    mcpRequired: c.mcpRequired,
     testOutputMaxBytes: c.testOutputMaxBytes,
     junitMaxBytes: c.junitMaxBytes,
     testKillGraceMs: c.testKillGraceMs,

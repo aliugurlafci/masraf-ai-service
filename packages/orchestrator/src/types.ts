@@ -55,6 +55,8 @@ export interface OrchestratorConfig {
   promptMaxBytes: number;
   claudeMdMaxBytes: number;
   mcpEnabled: boolean;
+  /** MCP_REQUIRED: a rejected Claude MCP runtime directory fails the attempt closed (ADR-0037). */
+  mcpRequired: boolean;
   testOutputMaxBytes: number;
   junitMaxBytes: number;
   testKillGraceMs: number;

@@ -19,23 +19,33 @@ export type {
   InitViolation,
   PromptContinuation,
   PromptInput,
+  ReviewedExtensions,
+  ReviewedExtensionTable,
   ValidateInitExpectations,
 } from './types';
 export {
   CBM_MCP_SERVER_NAME,
-  CLAUDE_BARE_FLAG,
   CLAUDE_FLAG_ALIASES,
+  CLAUDE_HARDENED_SETTINGS,
   CLAUDE_INTERNAL_TOOL_NAMES,
   CLAUDE_MARKER_ENV,
   CLAUDE_PERMISSION_MODE,
   CLAUDE_PROBE_TIMEOUT_MS,
   CLAUDE_REQUIRED_FLAGS,
+  CLAUDE_REVIEWED_EXTENSIONS,
   MCP_RESOURCE_TOOL_NAMES,
 } from './constants';
 export { ClaudeProbeError } from './errors';
 export { buildClaudeArgv } from './argv';
-export { assertClaudeEnv, buildClaudeEnv, buildProbeEnv, proxyUrlWithToken } from './env';
-export { validateInit } from './init-validation';
+export type { ClaudeLaunchEnv } from './env';
+export {
+  assertClaudeEnv,
+  buildClaudeEnv,
+  buildClaudeLaunchEnv,
+  buildProbeEnv,
+  proxyUrlWithToken,
+} from './env';
+export { claudeExtensionKey, validateInit } from './init-validation';
 export type { ProbeEvaluation } from './probe';
 export {
   evaluateClaudeProbe,

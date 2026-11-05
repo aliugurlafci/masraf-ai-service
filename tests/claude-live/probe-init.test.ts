@@ -2,15 +2,16 @@
 // (contract §10.2, §10.9, §10.3, §18.1). The init test plants decoys a real CLI would pick up if the isolation
 // failed: a project `.mcp.json` with an extra server and a project `.claude/settings.json` whose SessionStart hook
 // writes a marker file. The run must report exactly the allow-listed MCP server, emit no hook event, never execute
-// the hook and pass `validateInit`. Without ANTHROPIC_API_KEY this is a non-bare dev-mode run in the isolated
-// per-workspace config dir: it is not logged in, so it ends with a synthetic error result after init (no tokens).
+// the hook and pass `validateInit` against the PRODUCTION CLAUDE_REVIEWED_EXTENSIONS table (ADR-0036 Decision 5/11:
+// this is the offline re-verification of the table for the installed CLI version, platform and auth mode). Default
+// auth mode is oauth (CLAUDE_LIVE_AUTH_MODE); the init test needs a real credential and skips without one.
 import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CBM_MCP_SERVER_NAME, CLAUDE_PERMISSION_MODE, requiredClaudeFlags } from '@orc/claude-runner';
 import { SESSION_ID, recordingHandlers } from '../helpers/claude/fake-claude';
-import { HAS_API_KEY, createLiveEnv } from './live-env';
+import { HAS_CREDENTIAL, LIVE_AUTH_MODE, createLiveEnv } from './live-env';
 import type { LiveEnv } from './live-env';
 
 let env: LiveEnv | null = null;
@@ -29,12 +30,13 @@ describe('claude-live: probe', () => {
     expect(probe.ok).toBe(true);
     expect(probe.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(probe.permissionModes).toContain(CLAUDE_PERMISSION_MODE);
-    expect(requiredClaudeFlags(env.bare).length).toBeGreaterThan(0);
+    expect(requiredClaudeFlags()).toEqual(expect.arrayContaining(['--settings', '--include-hook-events', '--restricted']));
+    expect(requiredClaudeFlags()).not.toContain('--bare');
   });
 });
 
 describe('claude-live: init validation and isolation', () => {
-  it('reports only the allow-listed MCP server, loads no project/user hooks and passes validateInit', async () => {
+  it.skipIf(!HAS_CREDENTIAL)('reports only the allow-listed MCP server, loads no project/user hooks and passes validateInit (skipped without a credential)', async () => {
     env = await createLiveEnv();
     const { layout } = env;
     const marker = path.join(env.dir.path, 'hook-ran.marker');
@@ -61,8 +63,11 @@ describe('claude-live: init validation and isolation', () => {
 
     expect(rec.inits).toHaveLength(1);
     const { init, validation } = rec.inits[0] ?? { init: null, validation: null };
+    // A violation here for rule `extension` means the installed CLI needs a new reviewed table entry (ADR-0036).
     expect(validation?.violations).toEqual([]);
     expect(validation?.ok).toBe(true);
+    expect(init?.apiKeySource).toBe(LIVE_AUTH_MODE === 'oauth' ? 'none' : 'ANTHROPIC_API_KEY');
+    expect(init?.memory_paths ?? null).toBeNull();
     expect(validation?.mcpConnected).toBe(true);
     expect(init?.mcp_servers.map((s) => s.name)).toEqual([CBM_MCP_SERVER_NAME]);
     expect(init?.mcp_servers[0]?.status).toBe('connected');
@@ -76,11 +81,11 @@ describe('claude-live: init validation and isolation', () => {
     const spawned = env.launcher.launches[0]?.spec.env ?? {};
     expect(spawned['CLAUDE_CONFIG_DIR']).toBe(path.join(layout.claudeHomeRoot, 'w', '33333333-4444-4555-8666-777777777777', 'config'));
     expect(spawned['HOME']).toBe(path.join(layout.claudeHomeRoot, 'w', '33333333-4444-4555-8666-777777777777', 'home'));
-    expect('ANTHROPIC_API_KEY' in spawned).toBe(HAS_API_KEY);
+    expect('ANTHROPIC_API_KEY' in spawned).toBe(LIVE_AUTH_MODE === 'api_key');
+    expect(Object.keys(spawned).includes('CLAUDE_CODE_OAUTH_TOKEN')).toBe(LIVE_AUTH_MODE === 'oauth' && process.platform === 'win32');
 
     expect(result.violation).toBeNull();
-    // with a key the tiny run succeeds; without one the isolated dev-mode CLI is not logged in
-    expect(result.outcome).toBe(HAS_API_KEY ? 'success' : 'result_error');
+    expect(result.outcome).toBe('success');
     expect(result.init?.session_id).toBe(SESSION_ID);
   });
 });

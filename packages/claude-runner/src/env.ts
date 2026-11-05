@@ -3,8 +3,13 @@ import { posix, win32 } from 'node:path';
 import { GUID_REGEX, OrcError } from '@orc/shared';
 import type { Env, HostPlatform } from '@orc/shared/node';
 import {
+  assertNoClaudeCredential,
+  assertSingleClaudeCredential,
   buildChildEnv,
+  buildClaudeAppDataEnv,
+  buildClaudeCredentialEnv,
   CLAUDE_ENV_ALLOWLIST,
+  CLAUDE_FIXED_ENV,
   UnsafeArgumentError,
   WINDOWS_BASE_ENV,
 } from '@orc/security';
@@ -64,22 +69,30 @@ function workspaceDirs(
   return { home: p.join(base, 'home'), config: p.join(base, 'config') };
 }
 
-/** §10.3 values for an attempt run. */
-export function buildClaudeEnv(
+/** Env of a Claude spawn plus the credential that travels on fd 3 (`LaunchSpec.credentialFd`). */
+export interface ClaudeLaunchEnv {
+  env: Record<string, string>;
+  /** oauth on POSIX: the token for fd 3 (never in env); otherwise null. */
+  credentialFd: string | null;
+}
+
+/**
+ * §10.3 values for an attempt run (ADR-0036 Decision 4): the credential per auth mode and platform
+ * (oauth/posix: `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3` + token for fd 3; oauth/win32: token in env;
+ * api_key: key in env), the fixed memory/CLAUDE.md switches, and on win32 the per-workspace AppData
+ * (B-020). Never both credentials.
+ */
+export function buildClaudeLaunchEnv(
   cfg: ClaudeRunnerConfig,
   r: ClaudeRunRequest,
   source: Env,
-): Record<string, string> {
+): ClaudeLaunchEnv {
   if (!GUID_REGEX.test(r.attemptId)) {
     throw new UnsafeArgumentError('Invalid attempt id', { details: { reason: 'invalid_id' } });
   }
-  if (cfg.bare && (cfg.apiKey === null || cfg.apiKey.length === 0)) {
-    throw new OrcError('config_invalid', 'ANTHROPIC_API_KEY is required when CLAUDE_BARE=true', {
-      details: { key: 'ANTHROPIC_API_KEY' },
-    });
-  }
   const p = pathFor(cfg.platform);
   const dirs = workspaceDirs(cfg, r.workspaceId);
+  const credential = buildClaudeCredentialEnv(cfg.auth, cfg.platform);
   const overrides: Record<string, string> = {
     HOME: dirs.home,
     CLAUDE_CONFIG_DIR: dirs.config,
@@ -88,16 +101,18 @@ export function buildClaudeEnv(
     DISABLE_AUTOUPDATER: '1',
     DISABLE_TELEMETRY: '1',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    ...CLAUDE_FIXED_ENV,
     CBM_CACHE_DIR: r.mcp?.cacheDir ?? p.resolve(cfg.cbmCacheRoot, 'w', r.workspaceId),
     CBM_ALLOWED_ROOT: r.cwd,
     [CLAUDE_MARKER_ENV]: r.attemptId,
+    ...credential.env,
   };
   if (cfg.platform === 'win32') {
     overrides.USERPROFILE = dirs.home;
     overrides.TEMP = r.tmpDir;
     overrides.TMP = r.tmpDir;
+    Object.assign(overrides, buildClaudeAppDataEnv('claude', dirs.home, cfg.platform));
   }
-  if (cfg.apiKey !== null && cfg.apiKey.length > 0) overrides.ANTHROPIC_API_KEY = cfg.apiKey;
   if (cfg.proxy.https !== null && cfg.proxy.https.length > 0) {
     overrides.HTTPS_PROXY = proxyUrlWithToken(cfg.proxy.https, cfg.proxy.token);
   }
@@ -107,10 +122,23 @@ export function buildClaudeEnv(
   }
   const env = buildChildEnv(INHERITED_KEYS, source, overrides, cfg.platform);
   assertClaudeEnv(env, cfg.platform);
-  return env;
+  assertSingleClaudeCredential(env);
+  return { env, credentialFd: credential.credentialFd };
 }
 
-/** §10.9: allowlisted env without ANTHROPIC_API_KEY (and without proxy credentials). */
+/** §10.3 env of an attempt run (the fd 3 credential, if any, is returned by {@link buildClaudeLaunchEnv}). */
+export function buildClaudeEnv(
+  cfg: ClaudeRunnerConfig,
+  r: ClaudeRunRequest,
+  source: Env,
+): Record<string, string> {
+  return buildClaudeLaunchEnv(cfg, r, source).env;
+}
+
+/**
+ * §10.9: allowlisted env without any credential variable, without fd 3 and without proxy credentials;
+ * on win32 the AppData layout below the probe directory (B-020).
+ */
 export function buildProbeEnv(
   cfg: ClaudeRunnerConfig,
   probeDir: string,
@@ -124,13 +152,16 @@ export function buildProbeEnv(
     DISABLE_AUTOUPDATER: '1',
     DISABLE_TELEMETRY: '1',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    ...CLAUDE_FIXED_ENV,
   };
   if (cfg.platform === 'win32') {
     overrides.USERPROFILE = probeDir;
     overrides.TEMP = probeDir;
     overrides.TMP = probeDir;
+    Object.assign(overrides, buildClaudeAppDataEnv('probe', probeDir, cfg.platform));
   }
   const env = buildChildEnv(INHERITED_KEYS, source, overrides, cfg.platform);
   assertClaudeEnv(env, cfg.platform);
+  assertNoClaudeCredential(env);
   return env;
 }

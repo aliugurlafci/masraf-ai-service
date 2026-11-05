@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import {
   evaluateClaudeProbe,
   helpHasFlag,
   parsePermissionModes,
+  requiredClaudeFlags,
   type ClaudeRunnerConfig,
 } from '@orc/claude-runner';
 import { LeaseAcquireRequestSchema, resolveLeasePaths } from '@orc/sandbox';
@@ -17,6 +18,9 @@ import { createSecretRegistry } from '@orc/security';
 import type { LaunchLeaseRequest } from '@orc/shared/node';
 import { FAKE_HELP_PATH } from '../../helpers/claude/fake-claude';
 import { createMemoryLauncher, createMemoryProcess, silentLogger } from '../../helpers/claude/memory-process';
+
+const PROBE_TOKEN = `sk-ant-oat01-${'P'.repeat(40)}`;
+const PROBE_KEY = 'sk-ant-api03-PROBEUNIT000000000000000000000';
 
 /** `claude --help` of the pinned CLI 2.1.316, recorded verbatim. */
 const REAL_HELP = readFileSync(FAKE_HELP_PATH, 'utf8');
@@ -31,7 +35,7 @@ function withoutLinesMatching(help: string, flag: string): string {
 
 describe('evaluateClaudeProbe (§10.9)', () => {
   it('accepts the recorded help/version output of CLI 2.1.316', () => {
-    expect(evaluateClaudeProbe(REAL_VERSION, REAL_HELP, { bare: true })).toEqual({
+    expect(evaluateClaudeProbe(REAL_VERSION, REAL_HELP)).toEqual({
       ok: true,
       reason: 'ok',
       version: '2.1.316',
@@ -40,12 +44,12 @@ describe('evaluateClaudeProbe (§10.9)', () => {
     });
   });
 
-  it.each([...CLAUDE_REQUIRED_FLAGS, '--bare'])('reports %s as missing when the help lacks it', (flag) => {
+  it.each([...CLAUDE_REQUIRED_FLAGS])('reports %s as missing when the help lacks it', (flag) => {
     let help = withoutLinesMatching(REAL_HELP, flag);
     if (flag === '-p') help = withoutLinesMatching(help, '--print');
     if (flag === '--allowed-tools') help = withoutLinesMatching(help, '--allowedTools');
     if (flag === '--disallowed-tools') help = withoutLinesMatching(help, '--disallowedTools');
-    const r = evaluateClaudeProbe(REAL_VERSION, help, { bare: true });
+    const r = evaluateClaudeProbe(REAL_VERSION, help);
     expect(r.ok).toBe(false);
     expect(r.missingFlags).toContain(flag);
   });
@@ -60,15 +64,19 @@ describe('evaluateClaudeProbe (§10.9)', () => {
       ),
       '  (choices: "dontAsk")',
     ].join('\n');
-    const r = evaluateClaudeProbe('1.0.0', help, { bare: false });
+    const r = evaluateClaudeProbe('1.0.0', help);
     expect(r.missingFlags).toEqual([]);
     expect(r.ok).toBe(true);
   });
 
-  it('requires --bare only when CLAUDE_BARE=true', () => {
+  it('requires the hardened flags and never --bare (ADR-0036 Decision 6)', () => {
+    expect(requiredClaudeFlags()).toEqual([...CLAUDE_REQUIRED_FLAGS]);
+    for (const flag of ['--settings', '--include-hook-events', '--restricted']) {
+      expect(CLAUDE_REQUIRED_FLAGS).toContain(flag);
+    }
+    expect(CLAUDE_REQUIRED_FLAGS).not.toContain('--bare');
     const help = withoutLinesMatching(REAL_HELP, '--bare');
-    expect(evaluateClaudeProbe(REAL_VERSION, help, { bare: false }).ok).toBe(true);
-    expect(evaluateClaudeProbe(REAL_VERSION, help, { bare: true }).missingFlags).toEqual(['--bare']);
+    expect(evaluateClaudeProbe(REAL_VERSION, help).ok).toBe(true);
   });
 
   it('does not accept a flag that only appears as a prefix of another word', () => {
@@ -81,13 +89,13 @@ describe('evaluateClaudeProbe (§10.9)', () => {
   });
 
   it('fails without a version or without dontAsk', () => {
-    expect(evaluateClaudeProbe('Claude Code', REAL_HELP, { bare: true })).toMatchObject({
+    expect(evaluateClaudeProbe('Claude Code', REAL_HELP)).toMatchObject({
       ok: false,
       reason: 'version_unrecognized',
       version: null,
     });
     const noDontAsk = REAL_HELP.replaceAll('dontAsk', 'dontaskx');
-    expect(evaluateClaudeProbe(REAL_VERSION, noDontAsk, { bare: true })).toMatchObject({
+    expect(evaluateClaudeProbe(REAL_VERSION, noDontAsk)).toMatchObject({
       ok: false,
       reason: 'permission_mode_missing',
     });
@@ -116,9 +124,8 @@ describe('ClaudeRunner.probe', () => {
     return {
       bin: '/opt/claude/bin/claude',
       binPrefixArgs: ['--prefix'],
-      bare: true,
       claudeHomeRoot: join(root, 'claude-home'),
-      apiKey: 'sk-ant-api03-PROBEUNIT000000000000000000000',
+      auth: { mode: 'oauth', oauthToken: PROBE_TOKEN },
       proxy: { https: null, http: null, noProxy: null, token: null },
       killGraceMs: 100,
       initTimeoutMs: 1000,
@@ -144,9 +151,12 @@ describe('ClaudeRunner.probe', () => {
     });
   }
 
-  it('runs --version and --help through the launcher without the API key', async () => {
+  it.each([
+    ['oauth', { mode: 'oauth', oauthToken: PROBE_TOKEN }],
+    ['api_key', { mode: 'api_key', apiKey: PROBE_KEY }],
+  ] as const)('runs --version and --help without any credential or fd 3 (%s)', async (_mode, auth) => {
     const launcher = launcherFor({ '--version': REAL_VERSION, '--help': REAL_HELP });
-    const runner = createClaudeRunner(cfg(), { logger: silentLogger(), secrets: createSecretRegistry(), launcher });
+    const runner = createClaudeRunner(cfg({ auth }), { logger: silentLogger(), secrets: createSecretRegistry(), launcher });
     const result = await runner.probe();
     expect(result).toMatchObject({ ok: true, version: '2.1.316', missingFlags: [] });
     expect(launcher.specs.map((s) => [s.kind, s.cmd, ...s.args])).toEqual([
@@ -154,8 +164,34 @@ describe('ClaudeRunner.probe', () => {
       ['claude', '/opt/claude/bin/claude', '--prefix', '--help'],
     ]);
     for (const spec of launcher.specs) {
-      expect(spec.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+      expect(spec.credentialFd).toBeUndefined();
+      const keys = Object.keys(spec.env).map((k) => k.toUpperCase());
+      for (const k of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR']) {
+        expect(keys).not.toContain(k);
+      }
+      expect(JSON.stringify(spec.env)).not.toContain(PROBE_TOKEN);
+      expect(JSON.stringify(spec.env)).not.toContain(PROBE_KEY);
       expect(spec.env.CLAUDE_CONFIG_DIR).toBe(join(root, 'claude-home', 'probe'));
+      expect(spec.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+      expect(spec.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBe('1');
+    }
+  });
+
+  it('win32: the probe gets its own AppData layout (0700 dirs below the probe dir); POSIX: none', async () => {
+    const launcher = launcherFor({ '--version': REAL_VERSION, '--help': REAL_HELP });
+    const runner = createClaudeRunner(cfg(), { logger: silentLogger(), secrets: createSecretRegistry(), launcher });
+    await runner.probe();
+    const probeDir = join(root, 'claude-home', 'probe');
+    const env = launcher.specs[0]?.env ?? {};
+    if (process.platform === 'win32') {
+      expect(env.APPDATA).toBe(join(probeDir, 'AppData', 'Roaming'));
+      expect(env.LOCALAPPDATA).toBe(join(probeDir, 'AppData', 'Local'));
+      expect(statSync(join(probeDir, 'AppData', 'Roaming')).isDirectory()).toBe(true);
+      expect(statSync(join(probeDir, 'AppData', 'Local')).isDirectory()).toBe(true);
+    } else {
+      expect(env).not.toHaveProperty('APPDATA');
+      expect(env).not.toHaveProperty('LOCALAPPDATA');
+      expect(statSync(probeDir).mode & 0o777).toBe(0o700);
     }
   });
 

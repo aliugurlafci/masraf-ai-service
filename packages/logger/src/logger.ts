@@ -10,8 +10,9 @@ import type {
   LoggerOptions as PinoLoggerOptions,
 } from 'pino';
 import type { NodeEnv } from '@orc/shared';
-import { REDACT_KEYS, maskText } from '@orc/security';
+import { REDACT_KEYS } from '@orc/security';
 import type { SecretRegistry } from '@orc/security';
+import { maskSecretText } from './oauth-mask.js';
 import { getLogContext } from './context.js';
 import { serializeErrorWith } from './serialize-error.js';
 
@@ -58,9 +59,19 @@ const MAX_MASK_DEPTH = 16;
 const REDACT_KEY_SET: ReadonlySet<string> = new Set(REDACT_KEYS);
 const REDACT_KEY_SUFFIXES = ['password', '_secret', '_token'] as const;
 
+function maskString(text: string, registry: SecretRegistry | undefined): string {
+  return maskSecretText(text, registry);
+}
+
 function isRedactKey(key: string): boolean {
   const lower = key.toLowerCase();
-  return REDACT_KEY_SET.has(lower) || REDACT_KEY_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+  return (
+    REDACT_KEY_SET.has(lower) ||
+    REDACT_KEY_SUFFIXES.some((suffix) => lower.endsWith(suffix)) ||
+    lower.startsWith('claude_code_oauth_token') ||
+    lower === 'credentialfd' ||
+    lower === 'credentialb64'
+  );
 }
 
 function isPlainObject(value: object): value is Record<string, unknown> {
@@ -79,7 +90,7 @@ function maskLogValue(
   depth: number,
   seen: WeakSet<object>,
 ): unknown {
-  if (typeof value === 'string') return maskText(value, registry);
+  if (typeof value === 'string') return maskString(value, registry);
   if (value === null || typeof value !== 'object') return value;
   if (value instanceof Error) return serializeErrorWith(value, registry);
   if (depth >= MAX_MASK_DEPTH) return value;
@@ -178,7 +189,7 @@ export function createLogger(opts: LoggerOptions): Logger {
     mixin: () => ({ ...getLogContext() }),
     serializers: {
       err: (value: unknown) => serializeErrorWith(value, registry),
-      msg: (value: unknown) => (typeof value === 'string' ? maskText(value, registry) : value),
+      msg: (value: unknown) => (typeof value === 'string' ? maskString(value, registry) : value),
     },
     formatters: {
       bindings: (bindings) => maskRecord(bindings, registry),

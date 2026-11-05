@@ -1,10 +1,13 @@
 // Runner server <-> client over a real Unix socket (contract §10.11 item 9). POSIX only: win32 has
 // no Unix-domain socket file semantics, uid switching, /proc or prlimit. Uid switching runs only as
 // root (e.g. inside the Linux container verification).
+import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, chmodSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { dirname, join } from 'node:path';
+import { Writable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createLogger, type Logger } from '@orc/logger';
 import {
   createDefaultLaunch,
   createFileLeaseStateStore,
@@ -51,7 +54,7 @@ interface Harness {
 
 async function startHarness(
   identity: IdentityMode,
-  over: { leaseTtlMs?: number } = {},
+  over: { leaseTtlMs?: number; logger?: Logger } = {},
 ): Promise<Harness> {
   const r = makeRoots();
   const socketPath = join(r.base, 'sock', 'runner.sock');
@@ -69,7 +72,7 @@ async function startHarness(
     limits: { nproc: 512, nofile: 4096, fsizeBytes: 2 ** 31 },
     identity,
     prlimitPath: detected.prlimitPath,
-    logger: silentLogger(),
+    logger: over.logger ?? silentLogger(),
     stateStore: createFileLeaseStateStore(stateDir),
     launch: createDefaultLaunch(),
     ...(identity === 'switch' ? { processTable: createProcfsTable() } : {}),
@@ -80,7 +83,7 @@ async function startHarness(
     socketPath,
     manager,
     hello: { uidBase: UID_BASE, maxLeases: 4, leaseTtlMs, caps: detected.caps },
-    logger: silentLogger(),
+    logger: over.logger ?? silentLogger(),
     maxConnections: 32,
     socketGroup: identity === 'switch' ? WORKER_UID : null,
     killGraceMs: 300,
@@ -157,6 +160,113 @@ const attemptLease = (h: Harness, task: string, id = ATTEMPT_ID) => {
     },
   };
 };
+
+// Not `sk-ant-oat…`: the logger's redaction must not be what keeps the value out of the logs.
+const CREDENTIAL = 'fd3-credential-TESTONLY-91c4e7a2b5d8f0e3';
+const CREDENTIAL_B64 = Buffer.from(CREDENTIAL, 'utf8').toString('base64');
+const FD_ENV = { ...ENV, CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' };
+
+function captureLogger(): { logger: Logger; text: () => string } {
+  const chunks: string[] = [];
+  const destination = new Writable({
+    write(chunk: Buffer | string, _enc, cb) {
+      chunks.push(String(chunk));
+      cb();
+    },
+  });
+  return {
+    logger: createLogger({ service: 'runner', level: 'trace', version: 'test', env: 'test', destination }),
+    text: () => chunks.join(''),
+  };
+}
+
+describe.skipIf(IS_WIN)(
+  'runner credentialFd over a Unix socket (ADR-0036 m.4; POSIX only: fd 3 pipes)',
+  () => {
+    let h: Harness;
+    const log = captureLogger();
+    beforeAll(async () => {
+      h = await startHarness('none', { logger: log.logger });
+    });
+    afterAll(async () => {
+      await h.close();
+    });
+
+    it('kind claude reads the credential on fd 3 to EOF; env and runner logs never carry it', async () => {
+      const { a, req } = attemptLease(h, 't-cred');
+      const lease = await h.client.acquire(req);
+      const script = [
+        'const fs = require("fs");',
+        'const v = fs.readFileSync(3);',
+        'const sha = require("crypto").createHash("sha256").update(v).digest("hex");',
+        'const inEnv = Object.values(process.env).some((x) => x.includes(v.toString()));',
+        'process.stdout.write(JSON.stringify({ sha, len: v.length, inEnv, names: Object.keys(process.env).sort() }));',
+      ].join('\n');
+      const proc = await h.client.spawn(lease, {
+        kind: 'claude',
+        cmd: NODE,
+        args: ['-e', script],
+        cwd: a.worktree,
+        env: FD_ENV,
+        credentialFd: CREDENTIAL,
+      });
+      const out = collect(proc.stdout);
+      proc.stdin.end();
+      expect((await proc.exited).exitCode).toBe(0);
+      const report = JSON.parse((await out).toString('utf8')) as {
+        sha: string;
+        len: number;
+        inEnv: boolean;
+        names: string[];
+      };
+      expect(report.sha).toBe(createHash('sha256').update(CREDENTIAL).digest('hex'));
+      expect(report.len).toBe(Buffer.byteLength(CREDENTIAL));
+      expect(report.inEnv).toBe(false);
+      expect(report.names).not.toContain('CLAUDE_CODE_OAUTH_TOKEN');
+      expect(readFileSync(join(h.stateDir, 'leases', `${lease.id}.json`), 'utf8')).not.toContain(
+        CREDENTIAL_B64,
+      );
+      expect((await lease.release()).reclaimed).toBe(true);
+      expect(log.text()).not.toContain(CREDENTIAL);
+      expect(log.text()).not.toContain(CREDENTIAL_B64);
+    });
+
+    it('the runner rejects credentialFd for test and mcp, without fd 3, and two credentials together', async () => {
+      const { a, req } = attemptLease(h, 't-cred-rej');
+      const lease = await h.client.acquire(req);
+      const base = { v: 1, type: 'spawn', leaseId: lease.id, argv: [NODE, '-v'], cwd: a.worktree, limits: {} };
+      const cred = { b64: CREDENTIAL_B64 };
+      const frames = [
+        { ...base, kind: 'test', env: ENV, credentialFd: cred },
+        { ...base, kind: 'mcp', env: ENV, credentialFd: cred },
+        { ...base, kind: 'claude', env: ENV, credentialFd: cred },
+        { ...base, kind: 'claude', env: FD_ENV },
+        { ...base, kind: 'claude', env: { ...FD_ENV, ANTHROPIC_API_KEY: CREDENTIAL }, credentialFd: cred },
+        { ...base, kind: 'claude', env: { ...ENV, ANTHROPIC_API_KEY: CREDENTIAL, CLAUDE_CODE_OAUTH_TOKEN: CREDENTIAL } },
+      ];
+      for (const f of frames) {
+        const res = await rawExchange(h.socketPath, `${JSON.stringify(f)}\n`);
+        expect(res.closed).toBe(true);
+        expect(JSON.parse(res.text.trim()), JSON.stringify(f.kind)).toMatchObject({
+          type: 'error',
+          code: 'unsafe_argument',
+          reason: 'env_rejected',
+        });
+        expect(res.text).not.toContain(CREDENTIAL);
+        expect(res.text).not.toContain(CREDENTIAL_B64);
+      }
+      // The client refuses the same misrouting before anything reaches the socket.
+      expect(
+        await orcReason(
+          h.client.spawn(lease, { kind: 'test', cmd: NODE, args: ['-v'], cwd: a.worktree, env: ENV, credentialFd: CREDENTIAL }),
+        ),
+      ).toEqual(['unsafe_argument', 'env_rejected']);
+      expect((await lease.release()).reclaimed).toBe(true);
+      expect(log.text()).not.toContain(CREDENTIAL);
+      expect(log.text()).not.toContain(CREDENTIAL_B64);
+    });
+  },
+);
 
 describe.skipIf(IS_WIN)(
   'runner over a Unix socket (POSIX only; skipped on win32: no Unix socket files, uid switching, /proc or prlimit)',

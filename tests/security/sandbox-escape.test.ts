@@ -11,6 +11,7 @@ import {
   resolveLeasePaths,
   validateLeaseKey,
   validateSpawnArgv,
+  validateSpawnCredential,
   validateSpawnEnv,
 } from '@orc/sandbox';
 import { OrcError } from '@orc/shared';
@@ -168,6 +169,43 @@ describe('lease and spawn validation (runner side, §10.11 items 3 and 5)', () =
     expect(() => validateSpawnEnv('test', { ANTHROPIC_API_KEY: 'k' })).toThrow(OrcError);
     expect(() => validateSpawnEnv('mcp', { HTTPS_PROXY: 'http://orc:t@egress-proxy:3128' })).toThrow(OrcError);
     expect(() => validateSpawnEnv('claude', { ANTHROPIC_API_KEY: 'k', PATH: '/usr/bin' })).not.toThrow();
+  });
+
+  it('keeps the OAuth credential (CLAUDE_CODE_OAUTH_TOKEN*, credentialFd) to kind claude, one credential at a time (ADR-0036 m.4)', async () => {
+    const token = 'sk-ant-oat01-SANDBOXESCAPE_SEC_000000000000000000';
+    for (const kind of ['test', 'mcp'] as const) {
+      for (const key of ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', 'CLAUDE_CODE_OAUTH_TOKEN_FILE']) {
+        expect(allowedEnvKeys(kind).has(key), `${kind}:${key}`).toBe(false);
+        expect(await rejection(() => validateSpawnEnv(kind, { [key]: key.endsWith('DESCRIPTOR') ? '3' : token })), `${kind}:${key}`).toBe(
+          'env_rejected',
+        );
+      }
+      expect(await rejection(() => validateSpawnCredential(kind, {}, token)), kind).toBe('env_rejected');
+    }
+    // claude: each credential alone is accepted; any two together, a "never set" key or the _FILE form are not.
+    expect(() => validateSpawnEnv('claude', { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' })).not.toThrow();
+    expect(() => validateSpawnCredential('claude', { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' }, token)).not.toThrow();
+    expect(() => validateSpawnEnv('claude', { CLAUDE_CODE_OAUTH_TOKEN: token })).not.toThrow();
+    const refused: Record<string, string>[] = [
+      { ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: token },
+      { ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' },
+      { CLAUDE_CODE_OAUTH_TOKEN: token, CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' },
+      { CLAUDE_CODE_OAUTH_TOKEN_FILE: '/run/secrets/claude_oauth_token' },
+      { ANTHROPIC_AUTH_TOKEN: token },
+      { ANTHROPIC_BASE_URL: 'https://evil.example.invalid' },
+      { CLAUDE_CODE_SIMPLE: '1' },
+    ];
+    for (const env of refused) {
+      expect(await rejection(() => validateSpawnEnv('claude', env)), Object.keys(env).join('+')).toBe('env_rejected');
+    }
+    // The fd variable only together with a credential, and only naming fd 3.
+    expect(await rejection(() => validateSpawnCredential('claude', { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' }, undefined))).toBe(
+      'env_rejected',
+    );
+    expect(await rejection(() => validateSpawnCredential('claude', { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '4' }, token))).toBe(
+      'env_rejected',
+    );
+    expect(await rejection(() => validateSpawnCredential('claude', {}, token))).toBe('env_rejected');
   });
 
   it('validates lease keys and argv (no NUL, bounded size)', async () => {

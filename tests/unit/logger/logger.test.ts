@@ -206,6 +206,58 @@ describe('createLogger', () => {
   });
 });
 
+describe('OAuth credential redaction (ADR-0036)', () => {
+  const OAT = `sk-ant-oat01-${'A'.repeat(40)}`;
+
+  it('masks the token value in msg, string fields and nested objects', () => {
+    const { logger, raw } = capture();
+    logger.info({ note: `token ${OAT} used`, nested: { deep: [OAT] } }, `got ${OAT}`);
+    expect(raw()).not.toContain(OAT);
+    expect(raw()).toContain(R);
+  });
+
+  it('censors CLAUDE_CODE_OAUTH_TOKEN* keys at any depth', () => {
+    const { logger, records } = capture();
+    logger.info({
+      env: { CLAUDE_CODE_OAUTH_TOKEN: 'v1', CLAUDE_CODE_OAUTH_TOKEN_FILE: '/run/secrets/x', keep: 'ok' },
+    });
+    const env = last(records()).env as Record<string, unknown>;
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe(R);
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN_FILE).toBe(R);
+    expect(env.keep).toBe('ok');
+  });
+
+  it('masks base64 and base64url forms at byte offsets 0, 1 and 2 without a registry, in errors too', () => {
+    const { logger, raw } = capture();
+    const encoded: string[] = [];
+    for (const lead of ['', 'x', 'xy', '{"chunk":"']) {
+      const b64 = Buffer.from(`${lead}${OAT}\n`).toString('base64');
+      encoded.push(b64, b64.replaceAll('+', '-').replaceAll('/', '_'));
+    }
+    for (const enc of encoded) {
+      logger.info(`frame ${enc}`);
+      logger.error({ err: new Error(`bad chunk ${enc}`) }, 'err');
+      logger.error(new Error(`direct ${enc}`));
+    }
+    const out = raw();
+    for (const enc of encoded) expect(out).not.toContain(enc.slice(4, 40));
+  });
+
+  it('keeps ordinary text and short base64 untouched', () => {
+    const { logger, raw } = capture();
+    logger.info('c2stYW50 and sk-ant-api03 are not OAuth tokens, nor is Y2xhdWRl');
+    expect(raw()).toContain('c2stYW50 and sk-ant-api03');
+  });
+
+  it('censors credentialFd including its b64 payload and the base64 form of a token', () => {
+    const { logger, raw } = capture();
+    const b64 = Buffer.from(OAT).toString('base64');
+    logger.info({ frame: { type: 'spawn', credentialFd: { b64 } }, other: b64 });
+    expect(raw()).not.toContain(b64);
+    expect(raw()).toContain('"type":"spawn"');
+  });
+});
+
 describe('serializeError', () => {
   it('serializes Error instances with type, masked message, code and stack', () => {
     const err = Object.assign(new RangeError('bad token=abc123456789'), { code: 'E_RANGE' });

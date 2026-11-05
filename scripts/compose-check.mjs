@@ -17,6 +17,10 @@ import {
   runCli,
 } from './lib/common.mjs';
 import { SQL_LOGIN_PASSWORD_REGEX } from './generate-secrets.mjs';
+import { credentialPermissionWarnings, evaluateCredentials } from './lib/claude-credentials.mjs';
+
+/** Credential files may be empty (0 bytes = not configured); evaluateCredentials() checks them as a pair. */
+const CREDENTIAL_SECRETS = ['claude_oauth_token', 'anthropic_api_key'];
 
 /** Value rules the services enforce at startup (§4.2, §16), checked here so `up` fails early. */
 const PROXY_TOKEN_REGEX = /^[A-Za-z0-9_-]{24,256}$/;
@@ -29,7 +33,6 @@ const VALUE_RULES = {
   egress_proxy_token: { pattern: PROXY_TOKEN_REGEX, rule: '/^[A-Za-z0-9_-]{24,256}$/' },
   // Written into redis.conf as `requirepass <value>`: one printable token without whitespace.
   redis_password: { pattern: /^[\x21-\x7e]{16,512}$/, rule: '16-512 printable characters' },
-  anthropic_api_key: { pattern: /^[\x21-\x7e]{20,512}$/, rule: '20-512 printable characters' },
 };
 
 const CERT_PAIRS = [
@@ -52,10 +55,14 @@ async function main() {
   const problems = [];
   const warnings = [];
   const files = new Map();
+  const credentialFiles = new Map();
   for (const [name, secret] of Object.entries(config.secrets ?? {})) {
     if (typeof secret.file !== 'string') continue;
     if (!existsSync(secret.file) || !statSync(secret.file).isFile()) {
       problems.push(`secret ${name}: ${secret.file} does not exist`);
+    } else if (CREDENTIAL_SECRETS.includes(name)) {
+      credentialFiles.set(name, secret.file);
+      warnings.push(...credentialPermissionWarnings(name, statSync(secret.file)));
     } else if (statSync(secret.file).size === 0) {
       problems.push(`secret ${name}: ${secret.file} is empty`);
     } else {
@@ -72,6 +79,22 @@ async function main() {
           `secret ${name}: ${secret.file} is not world-readable; its container user may fail to read it (chmod 0644, keep the directory 0700)`,
         );
       }
+    }
+  }
+
+  if (config.services?.worker) {
+    const mode = String(config.services.worker.environment?.CLAUDE_AUTH_MODE ?? 'oauth');
+    if (credentialFiles.size === CREDENTIAL_SECRETS.length) {
+      const read = (name) => readSecretFile(credentialFiles.get(name));
+      for (const problem of evaluateCredentials({
+        mode,
+        oauthToken: read('claude_oauth_token'),
+        apiKey: read('anthropic_api_key'),
+      })) {
+        problems.push(`claude credentials (CLAUDE_AUTH_MODE=${mode}): ${problem}`);
+      }
+    } else {
+      problems.push('claude credentials: the claude_oauth_token and anthropic_api_key secrets must both be defined');
     }
   }
 

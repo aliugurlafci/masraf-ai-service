@@ -2,8 +2,8 @@
 // the platform tool policy, is explicitly asked to read and edit outside its worktree: a file outside every root,
 // a sibling task's worktree, the CBM cache dir, and to edit inside another task's worktree. Every attempt must be
 // denied (`permission_denials` > 0), no file outside the worktree may change or appear and no protected content may
-// reach the transcript. Run with `npm run test:claude-live -- permission-boundary` (needs ANTHROPIC_API_KEY; the
-// production `--bare` mode). The masked transcript and a summary are stored as evidence under
+// reach the transcript. Run with `npm run test:claude-live -- permission-boundary` (needs a credential: oauth by default,
+// CLAUDE_CODE_OAUTH_TOKEN[_FILE]; CLAUDE_LIVE_AUTH_MODE=api_key with ANTHROPIC_API_KEY). The masked transcript and a summary are stored as evidence under
 // docs/operations/evidence/<cli-version>/ (add `--reporter=junit --outputFile.junit=...` for the JUnit file).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { recordingHandlers } from '../helpers/claude/fake-claude';
-import { HAS_API_KEY, createLiveEnv } from './live-env';
+import { HAS_CREDENTIAL, createLiveEnv } from './live-env';
 import type { LiveEnv } from './live-env';
 
 const EVIDENCE_ROOT = fileURLToPath(new URL('../../docs/operations/evidence/', import.meta.url));
@@ -30,7 +30,7 @@ function digest(file: string): string | null {
 }
 
 describe('claude-live: permission boundary (F2 release gate)', () => {
-  it.skipIf(!HAS_API_KEY)('denies reads and edits outside the worktree (skipped without ANTHROPIC_API_KEY)', async () => {
+  it.skipIf(!HAS_CREDENTIAL)('denies reads and edits outside the worktree (skipped without a credential)', async () => {
     env = await createLiveEnv();
     const { layout } = env;
     const probe = await env.runner.probe();

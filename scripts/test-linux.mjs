@@ -47,11 +47,18 @@ export const DEFAULT_TARGETS = [
   'unit',
   '--project',
   'integration',
+  '--project',
+  'security',
   'tests/integration/sandbox/',
   'tests/integration/claude-runner/',
   'tests/integration/git-manager/foreign-owner.test.ts',
   'tests/integration/mcp-manager/mcp-real.test.ts',
   'tests/unit/security/paths.test.ts',
+  // Run as root: they switch sandbox uids and probe capabilities (not part of the uid-1000 worker run).
+  'tests/security/claude-credential-leak.test.ts',
+  'tests/security/claude-env.test.ts',
+  'tests/security/sandbox-escape.test.ts',
+  'tests/unit/runner/',
   'tests/unit/sandbox/',
   'tests/unit/shared/',
 ];

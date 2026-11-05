@@ -1,6 +1,7 @@
-// Runner composition (contract §10.11, §16.7): caps self-check, codebase-memory-mcp cache anchors
-// (ADR-0034), lease manager with restart recovery, socket server, reaper, graceful shutdown.
-import { chmod, mkdir } from 'node:fs/promises';
+// Runner composition (contract §10.11, §16.7): caps self-check, Yama ptrace_scope check (§10.11
+// item 10, ADR-0036 m.9), codebase-memory-mcp cache anchors (ADR-0034), lease manager with restart
+// recovery, socket server, reaper, graceful shutdown.
+import { chmod, mkdir, readFile } from 'node:fs/promises';
 import type { Logger } from '@orc/logger';
 import {
   anchorCbmCacheDirs,
@@ -37,6 +38,8 @@ export interface RunnerRuntimeOverrides {
   anchorFs?: AnchorFs;
   /** Reaper period override (tests). */
   reapIntervalMs?: number;
+  /** Reads the Yama ptrace_scope file; null = missing or unreadable (tests). */
+  readPtraceScope?: () => Promise<string | null>;
 }
 
 export interface RunnerRuntime {
@@ -46,6 +49,42 @@ export interface RunnerRuntime {
   readonly identity: IdentityMode | null;
   readonly caps: RunnerCaps | null;
   readonly recovery: RecoveryReport | null;
+  /** Yama ptrace_scope read at start (null: missing, unreadable or not an integer). */
+  readonly ptraceScope: number | null;
+}
+
+/** Host kernel setting that guards `/proc/<claude>/mem` (not namespaced; compose cannot set it). */
+export const YAMA_PTRACE_SCOPE_PATH = '/proc/sys/kernel/yama/ptrace_scope';
+
+export interface PtraceScopeAssessment {
+  /** Parsed value; null when the file is missing, unreadable or not an integer. */
+  value: number | null;
+  /** True only for a value >= 1. */
+  ok: boolean;
+  reason: 'ok' | 'missing' | 'invalid' | 'disabled';
+}
+
+/**
+ * Contract §10.11 item 10 / ADR-0036 m.9: the OAuth token in the Claude CLI's memory is protected
+ * from other processes of the same lease uid only by Yama `ptrace_scope >= 1`. A missing file
+ * (no Yama), an unparsable value and `0` all fail the check.
+ */
+export function assessPtraceScope(raw: string | null): PtraceScopeAssessment {
+  if (raw === null) return { value: null, ok: false, reason: 'missing' };
+  const text = raw.trim();
+  if (!/^[0-9]{1,3}$/.test(text)) return { value: null, ok: false, reason: 'invalid' };
+  const value = Number(text);
+  return value >= 1
+    ? { value, ok: true, reason: 'ok' }
+    : { value, ok: false, reason: 'disabled' };
+}
+
+async function readPtraceScopeFile(): Promise<string | null> {
+  try {
+    return await readFile(YAMA_PTRACE_SCOPE_PATH, 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 /** Children run under sandbox uids only when every privileged primitive is available. */
@@ -61,6 +100,7 @@ export function createRunnerRuntime(
   let identity: IdentityMode | null = null;
   let caps: RunnerCaps | null = null;
   let recovery: RecoveryReport | null = null;
+  let ptraceScope: number | null = null;
   let manager: LeaseManager | null = null;
   let server: RunnerServer | null = null;
   let stopping: Promise<void> | null = null;
@@ -80,6 +120,20 @@ export function createRunnerRuntime(
       logger.warn(
         { missing },
         'runner capability self-check failed; development mode without full isolation',
+      );
+    }
+    // Production refuses to become healthy (start fails, the socket never opens); dev/test only warn.
+    const ptrace = assessPtraceScope(await (overrides.readPtraceScope ?? readPtraceScopeFile)());
+    ptraceScope = ptrace.value;
+    if (!ptrace.ok) {
+      if (config.nodeEnv === 'production') {
+        throw new OrcError('config_invalid', 'Yama ptrace_scope must be at least 1', {
+          details: { reason: `ptrace_scope_${ptrace.reason}`, ptraceScope: ptrace.value },
+        });
+      }
+      logger.warn(
+        { ptraceScope: ptrace.value, reason: ptrace.reason },
+        'Yama ptrace_scope is missing or 0: same-uid processes can read the Claude CLI memory (dev only)',
       );
     }
     identity = identityFor(caps);
@@ -171,6 +225,7 @@ export function createRunnerRuntime(
       {
         identity,
         caps,
+        ptraceScope,
         uidBase: config.runnerUidBase,
         maxLeases: config.runnerMaxLeases,
         leaseTtlMs: config.runnerLeaseTtlMs,
@@ -200,6 +255,9 @@ export function createRunnerRuntime(
     },
     get recovery() {
       return recovery;
+    },
+    get ptraceScope() {
+      return ptraceScope;
     },
   };
 }

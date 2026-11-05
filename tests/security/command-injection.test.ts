@@ -157,8 +157,9 @@ describe('dynamic: shell metacharacters stay literal argv', () => {
       signal: new AbortController().signal,
     };
     for (const platform of ['posix', 'win32'] as const) {
-      const argv = buildClaudeArgv(request, { bare: true, platform });
+      const argv = buildClaudeArgv(request, { platform });
       expect(argv.join('\u0000')).not.toContain('PWNED');
+      expect(argv).not.toContain('--bare');
       expect(argv).toContain('--permission-mode');
       expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('dontAsk');
     }
@@ -186,7 +187,7 @@ describe('dynamic: shell metacharacters stay literal argv', () => {
           deadlineAt: new Date(Date.now() + 60_000),
           signal: new AbortController().signal,
         },
-        { bare: true, platform: 'posix' },
+        { platform: 'posix' },
       ),
     ).toThrow(ToolPolicyError);
   });

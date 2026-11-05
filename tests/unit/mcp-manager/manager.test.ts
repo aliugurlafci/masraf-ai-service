@@ -218,16 +218,27 @@ describe('local runtime dir ownership (B-014, CWE-377)', () => {
   interface Rules {
     parent?: Forge;
     runtime?: Forge;
+    tmpdir?: Forge;
   }
   const GOOD: Forge = { uid: UID, mode: PRIVATE_DIR };
   let parent: string;
 
-  /** lstat answers `rules.parent` for the runtime parent and `rules.runtime` for every entry below it. */
+  /**
+   * lstat answers `rules.parent` for the runtime parent and `rules.runtime` for every entry below it;
+   * `rules.tmpdir` (default: private, owned by the pinned uid) for os.tmpdir() itself (ADR-0037).
+   */
   function forgeLstat(rules: Rules): void {
     const impl = async (p: PathLike, opts?: StatOptions): Promise<Stats | BigIntStats> => {
       const st = await realLstat(p, opts);
       const path = String(p);
-      const rule = path === parent ? rules.parent : dirname(path) === parent ? rules.runtime : undefined;
+      const rule =
+        path === tmpdir()
+          ? (rules.tmpdir ?? GOOD)
+          : path === parent
+            ? rules.parent
+            : dirname(path) === parent
+              ? rules.runtime
+              : undefined;
       return rule === undefined ? st : Object.assign(st, rule);
     };
     lstatMock.mockImplementation(impl);
@@ -326,6 +337,110 @@ describe('local runtime dir ownership (B-014, CWE-377)', () => {
     await ctx.manager.deleteIndex(ctx.workspace, { lease });
     expect(existsSync(ctx.manager.cacheDir(ctx.workspace))).toBe(false);
     expect(existsSync(rt)).toBe(true);
+  });
+
+  describe('os.tmpdir() check and ensureClaudeMcpRuntime (ADR-0037)', () => {
+    const SCOPE_RULES: Rules = { parent: GOOD, runtime: GOOD };
+    const tmpdirRejections: { name: string; forge: Forge; reason: string }[] = [
+      { name: 'a tmpdir owned by another uid', forge: { uid: FOREIGN_UID, mode: constants.S_IFDIR | 0o1777 }, reason: 'tmpdir_owner' },
+      { name: 'a 0777 tmpdir without sticky bit', forge: { uid: 0, mode: constants.S_IFDIR | 0o777 }, reason: 'tmpdir_world_writable' },
+      { name: 'a symlinked tmpdir', forge: { uid: UID, mode: constants.S_IFLNK | 0o777 }, reason: 'symlink' },
+    ];
+
+    it.each(tmpdirRejections)('rejects $name before any mkdir or spawn', async ({ forge, reason }) => {
+      forgeLstat({ ...SCOPE_RULES, tmpdir: forge });
+      await expect(ctx.manager.ensureClaudeMcpRuntime(ctx.workspace)).rejects.toMatchObject({
+        code: 'path_escape',
+        details: { role: 'tmpdir', reason },
+      });
+      expect(existsSync(parent)).toBe(false);
+      const lease = await attemptLease(ctx);
+      const out = await ctx.manager.index(ctx.workspace, { mode: 'fast', kind: 'task_index', lease });
+      expect(out).toMatchObject({ status: 'failed', result: { error: { reason: 'path_escape' } } });
+      expect((await ctx.manager.probe()).ok).toBe(false);
+      expect(ctx.launcher.spawns).toEqual([]);
+      expect(ctx.factory.connects).toEqual([]);
+    });
+
+    it.each([
+      { name: 'root 1777', forge: { uid: 0, mode: constants.S_IFDIR | 0o1777 } },
+      { name: 'uid-owned 0700', forge: { uid: UID, mode: constants.S_IFDIR | 0o700 } },
+    ])('accepts a tmpdir that is $name', async ({ forge }) => {
+      forgeLstat({ ...SCOPE_RULES, tmpdir: forge });
+      await expect(ctx.manager.ensureClaudeMcpRuntime(ctx.workspace)).resolves.toBeUndefined();
+      expect(existsSync(runtimeDirOf(ctx))).toBe(true);
+    });
+
+    it('local: ensureClaudeMcpRuntime creates and verifies the parent and runtime dir, no spawn', async () => {
+      forgeLstat(SCOPE_RULES);
+      await ctx.manager.ensureClaudeMcpRuntime(ctx.workspace);
+      const rt = runtimeDirOf(ctx);
+      expect(existsSync(rt)).toBe(true);
+      const checked = lstatMock.mock.calls.map(([p]) => String(p)).filter((p) => p === parent || dirname(p) === parent);
+      expect(checked).toEqual([parent, rt]);
+      expect(ctx.launcher.spawns).toEqual([]);
+      expect(ctx.factory.connects).toEqual([]);
+    });
+
+    it.each([
+      { name: 'parent', rules: { parent: { uid: FOREIGN_UID, mode: PRIVATE_DIR } }, role: 'parent' },
+      { name: 'runtime dir', rules: { parent: GOOD, runtime: { uid: FOREIGN_UID, mode: PRIVATE_DIR } }, role: 'runtime' },
+    ] as { name: string; rules: Rules; role: string }[])('rejects a foreign $name without a spawn', async ({ rules, role }) => {
+      forgeLstat(rules);
+      await expect(ctx.manager.ensureClaudeMcpRuntime(ctx.workspace)).rejects.toMatchObject({
+        code: 'path_escape',
+        details: { role, reason: 'foreign_owner' },
+      });
+      expect(ctx.launcher.spawns).toEqual([]);
+      expect(ctx.factory.connects).toEqual([]);
+    });
+
+    it('runner mode: no-op, lstat is never called', async () => {
+      const runner = await setup('runner');
+      cleanups.push(runner);
+      lstatMock.mockClear();
+      await expect(runner.manager.ensureClaudeMcpRuntime(runner.workspace)).resolves.toBeUndefined();
+      expect(lstatMock).not.toHaveBeenCalled();
+      expect(runner.launcher.spawns).toEqual([]);
+    });
+  });
+
+  describe('claudeEnvScrub (ADR-0036 item 7)', () => {
+    it('blanks ANTHROPIC_API_KEY in the Claude mcp.json env when configured', async () => {
+      const c = await setup('local', { claudeEnvScrub: ['ANTHROPIC_API_KEY'] });
+      cleanups.push(c);
+      const env = c.manager.claudeMcpConfig(c.workspace).mcpServers['codebase-memory-mcp'].env;
+      expect(env).toHaveProperty('ANTHROPIC_API_KEY', '');
+      expect(env['CBM_CACHE_DIR']).toBeDefined();
+    });
+
+    it('adds no key when not configured (absent or empty list)', async () => {
+      expect(ctx.manager.claudeMcpConfig(ctx.workspace).mcpServers['codebase-memory-mcp'].env).not.toHaveProperty(
+        'ANTHROPIC_API_KEY',
+      );
+      const c = await setup('local', { claudeEnvScrub: [] });
+      cleanups.push(c);
+      expect(c.manager.claudeMcpConfig(c.workspace).mcpServers['codebase-memory-mcp'].env).not.toHaveProperty(
+        'ANTHROPIC_API_KEY',
+      );
+    });
+
+    it('rejects any other name through the schema', async () => {
+      const tmp = await createTempRoot();
+      try {
+        const bad = { ...config(tmp), claudeEnvScrub: ['PATH'] } as unknown as McpManagerConfig;
+        expect(() =>
+          createMcpManager(bad, {
+            logger: createTestLogger().logger,
+            factory: createScriptedFactory(),
+            recorder: createMemoryRecorder(),
+            launcher: createTestLauncher({ mode: 'local' }),
+          }),
+        ).toThrow();
+      } finally {
+        await tmp.cleanup();
+      }
+    });
   });
 
   it('fits the daemon socket below /tmp for the longest uid (ADR-0035, sun_path)', () => {

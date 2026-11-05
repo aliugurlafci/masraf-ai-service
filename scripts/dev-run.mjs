@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { REPO_ROOT, CliError, runCli } from './lib/common.mjs';
-import { buildChildEnv, devEnvPath, devPaths, parseEnvFile } from './lib/dev-env.mjs';
+import { buildChildEnv, devEnvPath, devPaths, oauthTokenFileToCheck, parseEnvFile } from './lib/dev-env.mjs';
 
 const TARGETS = {
   api: { profileName: 'api', npmArgs: ['run', 'dev', '--workspace', '@orc/api'] },
@@ -62,6 +62,23 @@ async function main() {
     env = buildChildEnv(target.profileName, { shellEnv: process.env, devValues, paths: devPaths() });
   } catch (err) {
     throw new CliError(`${err.message}; rerun \`npm run dev:setup\``);
+  }
+  if (name === 'worker') {
+    const tokenFile = oauthTokenFileToCheck(env);
+    if (tokenFile !== null && !existsSync(tokenFile)) {
+      throw new CliError(
+        `the Claude OAuth token file ${tokenFile} does not exist.\n` +
+          '  1. Run `claude setup-token` and copy the printed token (sk-ant-oat...).\n' +
+          '  2. Install it: node scripts/generate-secrets.mjs --only claude_oauth_token --claude-oauth-token-stdin\n' +
+          '     (paste the token on stdin), or write it to that file, or set CLAUDE_CODE_OAUTH_TOKEN_FILE / CLAUDE_CODE_OAUTH_TOKEN.\n' +
+          '  API-key alternative (not recommended): CLAUDE_AUTH_MODE=api_key with ANTHROPIC_API_KEY in dev.env or the shell.',
+      );
+    }
+    if (env.CLAUDE_AUTH_MODE === 'oauth' && env.ANTHROPIC_API_KEY !== undefined) {
+      // oauth mode refuses a set ANTHROPIC_API_KEY (ADR-0036); an ambient one of the shell is not meant for the worker.
+      delete env.ANTHROPIC_API_KEY;
+      console.log('[dev] ANTHROPIC_API_KEY removed from the worker environment (CLAUDE_AUTH_MODE=oauth)');
+    }
   }
   const [cmd, prefix] = npmInvocation();
   const args = [...prefix, ...target.npmArgs, ...(target.forwardArgs && rest.length > 0 ? ['--', ...rest] : [])];

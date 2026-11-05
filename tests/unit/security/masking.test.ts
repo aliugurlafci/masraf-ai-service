@@ -136,6 +136,68 @@ describe('SecretRegistry (dynamic secret values)', () => {
     expect(out).toBe(`a ${R} b ${R} c ${R} d ${R}`);
   });
 
+  describe('encoded variants (ADR-0036 m.8: a credential inside an encoded payload)', () => {
+    const SECRET = 'credprobe.UNIT.5e1c9a7f3b2d8064aa1f.reg';
+    const b64 = (s: string, enc: 'base64' | 'base64url' = 'base64'): string => Buffer.from(s, 'utf8').toString(enc);
+    /** Base64 groups that lie entirely inside the secret: present in any encoding of it at that alignment. */
+    const groupCore = (offset: number, enc: 'base64' | 'base64url'): string => {
+      const bytes = Buffer.from(SECRET, 'utf8');
+      const encoded = Buffer.concat([Buffer.alloc(offset, 0x78), bytes]).toString(enc);
+      return encoded.slice(Math.ceil(offset / 3) * 4, Math.floor((offset + bytes.length) / 3) * 4);
+    };
+
+    it.each(['', 'x', 'xy', 'xyz', '{"chunk":"', 'stdout: line 1\n'])(
+      'masks the base64/base64url form behind the prefix %j, keeping the surrounding text',
+      (prefix) => {
+        const registry = createSecretRegistry();
+        registry.add(SECRET);
+        for (const enc of ['base64', 'base64url'] as const) {
+          const encoded = b64(`${prefix}${SECRET}\n-- trailing bytes`, enc);
+          const out = maskText(`before ${encoded} after`, registry);
+          expect(out).toContain(R);
+          expect(out.startsWith('before ')).toBe(true);
+          expect(out.endsWith(' after')).toBe(true);
+          for (const offset of [0, 1, 2]) expect(out, `${enc}@${offset}`).not.toContain(groupCore(offset, enc));
+        }
+      },
+    );
+
+    it('masks the full base64 form, hex (both cases) and the JSON-escaped form', () => {
+      const registry = createSecretRegistry();
+      const quoted = 'with "quotes" and \\ backslash 0123';
+      registry.add(SECRET);
+      registry.add(quoted);
+      const hex = Buffer.from(SECRET, 'utf8').toString('hex');
+      const escaped = JSON.stringify(quoted).slice(1, -1);
+      const out = maskText(`a ${b64(SECRET)} b ${hex} c ${hex.toUpperCase()} d ${escaped} e`, registry);
+      expect(out).toBe(`a ${R} b ${R} c ${R} d ${R} e`);
+    });
+
+    it('registers no encoded form below 16 characters (no masking of short base64 runs)', () => {
+      const registry = createSecretRegistry();
+      registry.add('abcdefgh');
+      for (const v of registry.values()) expect(v.length === 8 || v.length >= 16, v).toBe(true);
+      expect(registry.values()).not.toContain(b64('abcdefgh'));
+      expect(maskText(`x ${b64('abcdefgh')} y`, registry)).toBe(`x ${b64('abcdefgh')} y`);
+      // Unrelated base64 stays untouched.
+      const unrelated = b64('a completely unrelated payload of some length');
+      registry.add(SECRET);
+      expect(maskText(unrelated, registry)).toBe(unrelated);
+    });
+
+    it('re-registering a value or its own base64 (as createClaudeRunner does) is harmless', () => {
+      const registry = createSecretRegistry();
+      registry.add(SECRET);
+      const once = [...registry.values()];
+      registry.add(SECRET);
+      expect(registry.values()).toEqual(once);
+      registry.add(b64(SECRET));
+      registry.add(b64(SECRET));
+      expect(new Set(registry.values()).size).toBe(registry.values().length);
+      expect(maskText(`${SECRET} ${b64(SECRET)} ${b64(`x${SECRET}`)}`, registry)).not.toMatch(/[A-Za-z0-9+/]{16,}/);
+    });
+  });
+
   it('ignores values shorter than 8 characters and empty input', () => {
     const registry = createSecretRegistry();
     registry.add('short');

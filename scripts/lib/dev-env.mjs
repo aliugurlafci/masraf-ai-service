@@ -78,6 +78,7 @@ export function devPaths(env = process.env, repoRoot = REPO_ROOT) {
     claude: join(dir, 'claude'),
     cbmCache: join(dir, 'cbm-cache'),
     emptyHooks: join(dir, 'empty-hooks'),
+    oauthTokenFile: join(repoRoot, 'secrets', 'claude_oauth_token.txt'),
   };
 }
 
@@ -101,7 +102,7 @@ export function profileEnv(profile, devValues, paths) {
         CLAUDE_HOME_ROOT: paths.claude,
         CBM_CACHE_DIR: paths.cbmCache,
         GIT_HOOKS_DIR: paths.emptyHooks,
-        CLAUDE_BARE: 'false',
+        CLAUDE_AUTH_MODE: 'oauth',
       };
     case 'db':
       return { DB_USER: 'orc_migrator', DB_PASSWORD: need(devValues, 'DEV_MIGRATOR_PASSWORD') };
@@ -134,5 +135,25 @@ export function buildChildEnv(profile, { shellEnv, devValues, paths }) {
     if (merged[key] === undefined || merged[key] === '') merged[key] = value;
   }
   for (const key of DEV_PASSWORD_KEYS) delete merged[key];
+  if (profile === 'worker') applyOAuthTokenDefault(merged, paths);
   return merged;
+}
+
+/**
+ * Worker in oauth mode (ADR-0036) without any token variable in the shell or dev.env: the token comes from
+ * the compose secret file. Only the path is set here; dev-run checks that the file exists and never reads it.
+ */
+function applyOAuthTokenDefault(env, paths) {
+  const unset = (k) => env[k] === undefined || env[k] === '';
+  if (env.CLAUDE_AUTH_MODE !== 'oauth') return;
+  if (unset('CLAUDE_CODE_OAUTH_TOKEN') && unset('CLAUDE_CODE_OAUTH_TOKEN_FILE')) {
+    env.CLAUDE_CODE_OAUTH_TOKEN_FILE = paths.oauthTokenFile;
+  }
+}
+
+/** The file the worker will read its OAuth token from, or null when the token is given directly / not needed. */
+export function oauthTokenFileToCheck(env) {
+  if (env.CLAUDE_AUTH_MODE !== 'oauth') return null;
+  if (env.CLAUDE_CODE_OAUTH_TOKEN) return null;
+  return env.CLAUDE_CODE_OAUTH_TOKEN_FILE || null;
 }

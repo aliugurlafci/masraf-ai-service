@@ -111,6 +111,37 @@ Logging is local only. There is no external log, metrics or monitoring service (
 The procedures for each secret are in [secrets.md](secrets.md#rotation). In short: generate the new value
 with `scripts/generate-secrets.mjs --only <name> --force`, apply it, then recreate the consumers.
 
+## Claude credential (OAuth token)
+
+- **Expired or revoked token:** tasks fail with an authentication error (401, "Not logged in"). The worker
+  log shows the failure once per attempt; there is no automatic retry.
+- **Renew (401 step):** run `claude setup-token` on a logged-in machine, install the token with
+  `node scripts/generate-secrets.mjs --only claude_oauth_token --force --claude-oauth-token-stdin`, run
+  `docker compose up -d --force-recreate worker`, then resubmit the failed tasks. Revocation and details:
+  [secrets.md](secrets.md#claude-oauth-token).
+- **Revoke (leak suspected, person left, or before decommissioning):**
+  1. Revoke the token in your Claude account settings (claude.ai, Settings; the `setup-token` entry). Tasks fail
+     with an authentication error from then on.
+  2. Create the replacement with `claude setup-token` and install it as in the renewal step above.
+  3. Delete every temporary copy of the old and new token (shell history, files, clipboard managers).
+  4. Check `docker compose logs worker runner | grep -c sk-ant-oat` prints `0` (logs are masked; any hit is a bug to report).
+- **Permissions:** the worker (uid 1000) reads `secrets/claude_oauth_token.txt` through the bind mount. Keep
+  the file at mode `0400` or `0600` owned by uid 1000 and the directory at `0700`; `npm run compose:config`
+  warns about a world-readable credential file.
+- **Auth failure steps (until B-022 gives it a dedicated outcome):** the attempt fails once and is not retried.
+  1. Confirm in the worker log that the failure is an authentication error (401, "Not logged in", quota).
+  2. Check the token has not been revoked or expired; renew it as above (`claude setup-token`,
+     `generate-secrets --only claude_oauth_token --force --claude-oauth-token-stdin`).
+  3. Restart the worker: `docker compose up -d --force-recreate worker` (the file is read at startup only).
+  4. Resubmit the failed tasks. A quota error needs no new token; wait for the limit to reset.
+- **Mode switch:** [secrets.md](secrets.md#switching-the-auth-mode).
+- **`ptrace_scope` (Linux Docker host):** the protection of `/proc/<claude>/mem` needs Yama
+  `kernel.yama.ptrace_scope >= 1`, a host kernel setting that compose cannot set. Check with
+  `cat /proc/sys/kernel/yama/ptrace_scope`. Persist with
+  `echo 'kernel.yama.ptrace_scope = 1' | sudo tee /etc/sysctl.d/10-orc-ptrace.conf && sudo sysctl --system`.
+  With `NODE_ENV=production` the runner refuses to become healthy when the value is missing or `0`
+  (a development or test host only logs a warning).
+
 ## Disk and workspace pressure
 
 | Signal | Meaning | Action |

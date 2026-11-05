@@ -3,6 +3,8 @@ import { realpath as fsRealpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
   assertSafeArgv,
+  assertSingleClaudeCredential,
+  CLAUDE_CREDENTIAL_FD,
   CLAUDE_ENV_ALLOWLIST,
   realpathWithin,
   TEST_ENV_ALLOWLIST,
@@ -10,7 +12,12 @@ import {
 import { isOrcError } from '@orc/shared';
 import type { LaunchKind, LaunchLimits } from '@orc/shared/node';
 import { runnerError } from './errors';
-import { ENV_KEY_REGEX, LEASE_KEY_REGEX } from './protocol';
+import {
+  ENV_KEY_REGEX,
+  LEASE_KEY_REGEX,
+  MAX_CREDENTIAL_FD_BYTES,
+  type CredentialFdFrame,
+} from './protocol';
 
 /** codebase-memory-mcp variables (contract §10.11 item 5). */
 export const MCP_ENV_KEYS: readonly string[] = Object.freeze([
@@ -24,13 +31,24 @@ export const MCP_ENV_KEYS: readonly string[] = Object.freeze([
  * gets its own runtime dir (runner mode: inside the lease, see `validateSpawnEnvPaths`).
  */
 export const MCP_ONLY_ENV_KEYS: readonly string[] = Object.freeze(['CBM_RUNTIME_DIR']);
-/** Accepted only for kind `claude`: test and MCP processes stay offline and never see the key. */
+/**
+ * Accepted only for kind `claude` (contract §10.11 item 5, ADR-0036 m.4): test and MCP processes
+ * stay offline and never see a credential. Kept in sync with `CLAUDE_ENV_ALLOWLIST` of
+ * `@orc/security` (every credential, proxy and `CLAUDE_CODE_DISABLE_*` key there is listed here;
+ * enforced by `tests/unit/sandbox/validation.test.ts`).
+ */
 export const CLAUDE_ONLY_ENV_KEYS: readonly string[] = Object.freeze([
   'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+  'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
+  'CLAUDE_CODE_DISABLE_CLAUDE_MDS',
   'HTTPS_PROXY',
   'HTTP_PROXY',
   'NO_PROXY',
 ]);
+/** The env variable naming the credential fd; its only accepted value is `3` (ADR-0036 m.4). */
+export const CREDENTIAL_FD_ENV_KEY = 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR';
 
 const CLAUDE_ONLY = new Set(CLAUDE_ONLY_ENV_KEYS);
 /** Environment values that name a directory the child writes to (kind `mcp`). */
@@ -73,6 +91,92 @@ export function validateSpawnEnv(
       throw runnerError('unsafe_argument', 'env_rejected', `${key} must be an absolute path`);
     }
   }
+  assertOneCredential(env);
+}
+
+/**
+ * ADR-0036 m.1/m.4: an env never carries `ANTHROPIC_API_KEY` together with any
+ * `CLAUDE_CODE_OAUTH_TOKEN*` (nor both OAuth variables), nor a "never set" key. Only the rule is
+ * named; the security error (and with it any detail) is not attached as the cause.
+ */
+function assertOneCredential(env: Readonly<Record<string, string>>): void {
+  try {
+    assertSingleClaudeCredential(env);
+  } catch (e) {
+    const reason = isOrcError(e) ? e.details?.reason : undefined;
+    throw runnerError(
+      'unsafe_argument',
+      'env_rejected',
+      reason === 'env_forbidden'
+        ? 'Environment carries a forbidden Claude variable'
+        : 'Environment carries more than one Claude credential',
+    );
+  }
+}
+
+/**
+ * Credential delivered on fd 3 (contract §10.11 item 5, ADR-0036 m.4); runner and local launcher.
+ * Throws `unsafe_argument` (reason `env_rejected`); the value and its length are never echoed.
+ * - `credentialFd` only for kind `claude` and only when the env names fd 3
+ *   (`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3`); 1..4096 bytes, no NUL;
+ * - conversely the fd variable is never accepted without a `credentialFd`, so a child never reads
+ *   whatever else might be open as fd 3.
+ */
+export function validateSpawnCredential(
+  kind: LaunchKind,
+  env: Readonly<Record<string, string>>,
+  credentialFd: string | undefined,
+): void {
+  const named = Object.hasOwn(env, CREDENTIAL_FD_ENV_KEY);
+  if (credentialFd === undefined) {
+    if (named) {
+      throw runnerError(
+        'unsafe_argument',
+        'env_rejected',
+        `${CREDENTIAL_FD_ENV_KEY} requires a credentialFd`,
+      );
+    }
+    return;
+  }
+  if (kind !== 'claude') {
+    throw runnerError(
+      'unsafe_argument',
+      'env_rejected',
+      `credentialFd is not allowed for kind ${kind}`,
+    );
+  }
+  if (!named || env[CREDENTIAL_FD_ENV_KEY] !== String(CLAUDE_CREDENTIAL_FD)) {
+    throw runnerError(
+      'unsafe_argument',
+      'env_rejected',
+      `credentialFd requires ${CREDENTIAL_FD_ENV_KEY}=${CLAUDE_CREDENTIAL_FD}`,
+    );
+  }
+  if (
+    typeof credentialFd !== 'string' ||
+    credentialFd.length === 0 ||
+    credentialFd.includes('\0') ||
+    Buffer.byteLength(credentialFd, 'utf8') > MAX_CREDENTIAL_FD_BYTES
+  ) {
+    throw runnerError('unsafe_argument', 'env_rejected', 'Invalid credentialFd');
+  }
+}
+
+/** Client side: `credentialFd {b64}` of the `spawn` frame. */
+export function encodeCredentialFd(value: string): CredentialFdFrame {
+  return { b64: Buffer.from(value, 'utf8').toString('base64') };
+}
+
+/** Runner side: the decoded credential; bytes that are not valid UTF-8 are rejected (`env_rejected`). */
+export function decodeCredentialFd(frame: CredentialFdFrame): string {
+  const bytes = Buffer.from(frame.b64, 'base64');
+  const value = bytes.toString('utf8');
+  if (!Buffer.from(value, 'utf8').equals(bytes)) {
+    bytes.fill(0);
+    throw runnerError('unsafe_argument', 'env_rejected', 'Invalid credentialFd');
+  }
+  bytes.fill(0);
+  return value;
 }
 
 /**

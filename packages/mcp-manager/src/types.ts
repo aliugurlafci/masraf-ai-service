@@ -24,6 +24,8 @@ export interface McpManagerConfig {
   appVersion?: string;
   /** WORKER_ID, used for internally acquired launcher leases. Default `<hostname>-<pid>`. */
   workerId?: string;
+  /** ADR-0036 item 7: names given an empty value in Claude's mcp.json `env` (api_key mode). Only this name is allowed. */
+  claudeEnvScrub?: ReadonlyArray<'ANTHROPIC_API_KEY'>;
 }
 
 export interface McpToolInfo {
@@ -152,6 +154,11 @@ export interface McpManager {
   /** delete_project + rm -rf cache dir; idempotent. */
   deleteIndex(scope: IndexScope, o?: { lease?: LaunchLease; signal?: AbortSignal }): Promise<void>;
   claudeMcpConfig(scope: WorkspaceScope): ClaudeMcpConfigFile;
+  /**
+   * ADR-0037: local mode verifies the runtime dir (and POSIX `os.tmpdir()`) Claude's MCP server will use;
+   * runner mode is a no-op. Throws `PathEscapeError` (`path_escape`) or the fs error.
+   */
+  ensureClaudeMcpRuntime(scope: WorkspaceScope): Promise<void>;
   indexName(scope: IndexScope): string;
   cacheDir(scope: IndexScope): string;
 }

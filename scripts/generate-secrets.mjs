@@ -2,22 +2,27 @@
 // Compose secrets for the production stack (contract §19, §16, ADR-0025, ADR-0026).
 //
 //   node scripts/generate-secrets.mjs [--dir <secrets dir>] [--force] [--only <name>[,<name>...]]
-//        [--anthropic-api-key-stdin] [--skip-certs] [--web-server-name <host>] [--san <name>]...
+//        [--claude-oauth-token-stdin | --anthropic-api-key-stdin] [--skip-certs] [--web-server-name <host>] [--san <name>]...
 //
 // Writes <dir>/<name>.txt for every secret below (default dir: ORC_SECRETS_DIR or ./secrets) and
 // then the TLS material of scripts/generate-certs.mjs. Existing files are never overwritten
 // unless --force (all) or --only <names> --force (selected) is given.
 //   SQL login passwords: 32 characters of SQL_LOGIN_PASSWORD_REGEX's alphabet with upper, lower,
 //   digit and symbol (contract §4.2). Tokens: 43 base64url characters (256 bits).
-//   anthropic_api_key.txt cannot be generated: it is taken from ANTHROPIC_API_KEY or, with
-//   --anthropic-api-key-stdin, from the first line of stdin, and otherwise left for the operator.
+//   Claude credentials (ADR-0036) cannot be generated. claude_oauth_token.txt (CLAUDE_AUTH_MODE=oauth, the
+//   default) comes from the first stdin line with --claude-oauth-token-stdin, or from CLAUDE_CODE_OAUTH_TOKEN
+//   when claude_oauth_token is in --only; anthropic_api_key.txt (api_key mode) likewise from
+//   --anthropic-api-key-stdin / ANTHROPIC_API_KEY. Both files always exist: the unused one is empty
+//   (0 bytes = not configured). One credential is never written while the other file is non-empty.
+//   Values are never echoed.
 import { randomBytes, randomInt } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CliError, resolveSecretsDir, runCli } from './lib/common.mjs';
 import { generateCerts } from './generate-certs.mjs';
+import { isApiKey, isOAuthToken } from './lib/claude-credentials.mjs';
 
 /** SQL_LOGIN_PASSWORD_REGEX (contract §4.2): no quote, bracket, backslash, `$` or whitespace. */
 export const SQL_LOGIN_PASSWORD_REGEX = /^[A-Za-z0-9!#%*+,./:;=?@^_~-]{16,128}$/;
@@ -36,6 +41,7 @@ export const SECRETS = [
   { name: 'db_backup_password', kind: 'password' },
   { name: 'redis_password', kind: 'token' },
   { name: 'egress_proxy_token', kind: 'token' },
+  { name: 'claude_oauth_token', kind: 'external' },
   { name: 'anthropic_api_key', kind: 'external' },
 ];
 
@@ -57,31 +63,40 @@ export function generateToken() {
   return randomBytes(32).toString('base64url');
 }
 
-function writeSecret(path, value) {
+function writeSecret(path, value, mode = 0o644) {
   const tmp = `${path}.tmp-${randomBytes(6).toString('hex')}`;
-  writeFileSync(tmp, value, { mode: 0o644, flag: 'wx' });
-  chmodSync(tmp, 0o644);
+  writeFileSync(tmp, value, { mode, flag: 'wx' });
+  chmodSync(tmp, mode);
   renameSync(tmp, path);
 }
 
-function readFirstStdinLine() {
+function readFirstStdinLine(flag) {
   let data;
   try {
     data = readFileSync(0, 'utf8');
   } catch {
-    throw new CliError('--anthropic-api-key-stdin: stdin could not be read');
+    throw new CliError(`${flag}: stdin could not be read`);
   }
   return data.split(/\r?\n/)[0]?.trim() ?? '';
 }
 
 function validateApiKey(value) {
-  if (!/^[\x21-\x7e]{20,512}$/.test(value)) {
+  if (!isApiKey(value)) {
     throw new CliError(
-      'the Anthropic API key must be 20-512 printable characters without whitespace',
+      'the Anthropic API key must be 20-512 printable characters without whitespace and must not be an OAuth token (sk-ant-oat...)',
     );
   }
   return value;
 }
+
+function validateOAuthToken(value) {
+  if (!isOAuthToken(value)) {
+    throw new CliError('the Claude OAuth token must look like sk-ant-oatNN-<20-500 characters of A-Z a-z 0-9 _ ->; create one with `claude setup-token`');
+  }
+  return value;
+}
+
+const isNonEmptyFile = (path) => existsSync(path) && statSync(path).size > 0;
 
 async function main() {
   const { values } = parseArgs({
@@ -90,6 +105,7 @@ async function main() {
       force: { type: 'boolean', default: false },
       only: { type: 'string' },
       'anthropic-api-key-stdin': { type: 'boolean', default: false },
+      'claude-oauth-token-stdin': { type: 'boolean', default: false },
       'skip-certs': { type: 'boolean', default: false },
       'web-server-name': { type: 'string' },
       san: { type: 'string', multiple: true },
@@ -101,7 +117,7 @@ async function main() {
   if (values.help) {
     console.log(
       'usage: node scripts/generate-secrets.mjs [--dir <secrets dir>] [--force] [--only <name>[,<name>...]]\n' +
-        '         [--anthropic-api-key-stdin] [--skip-certs] [--web-server-name <host>] [--san <name>]...\n' +
+        '         [--claude-oauth-token-stdin | --anthropic-api-key-stdin] [--skip-certs] [--web-server-name <host>] [--san <name>]...\n' +
         `secrets: ${SECRETS.map((s) => s.name).join(', ')}; certificate sets (--only): web, db`,
     );
     return;
@@ -125,31 +141,60 @@ async function main() {
   if (process.platform !== 'win32') chmodSync(dir, 0o700);
   console.log(`secrets directory: ${dir}`);
 
-  const apiKeyInput = values['anthropic-api-key-stdin']
-    ? validateApiKey(readFirstStdinLine())
-    : process.env.ANTHROPIC_API_KEY
-      ? validateApiKey(process.env.ANTHROPIC_API_KEY.trim())
-      : null;
+  if (values['anthropic-api-key-stdin'] && values['claude-oauth-token-stdin']) {
+    throw new CliError('--anthropic-api-key-stdin and --claude-oauth-token-stdin are mutually exclusive');
+  }
+  // Environment fallbacks apply only when the secret is named in --only (an ambient ANTHROPIC_API_KEY of
+  // the operator's shell must not leak into the secrets directory).
+  const credentialInput = {
+    claude_oauth_token: values['claude-oauth-token-stdin']
+      ? validateOAuthToken(readFirstStdinLine('--claude-oauth-token-stdin'))
+      : only?.includes('claude_oauth_token') && process.env.CLAUDE_CODE_OAUTH_TOKEN
+        ? validateOAuthToken(process.env.CLAUDE_CODE_OAUTH_TOKEN.trim())
+        : null,
+    anthropic_api_key: values['anthropic-api-key-stdin']
+      ? validateApiKey(readFirstStdinLine('--anthropic-api-key-stdin'))
+      : only?.includes('anthropic_api_key') && process.env.ANTHROPIC_API_KEY
+        ? validateApiKey(process.env.ANTHROPIC_API_KEY.trim())
+        : null,
+  };
+  const otherCredential = { claude_oauth_token: 'anthropic_api_key', anthropic_api_key: 'claude_oauth_token' };
 
-  let missingApiKey = false;
   for (const secret of SECRETS) {
     if (!selected(secret.name)) continue;
     const path = join(dir, `${secret.name}.txt`);
     const exists = existsSync(path);
+    if (secret.kind === 'external') {
+      const input = credentialInput[secret.name];
+      if (input === null) {
+        if (!exists) {
+          writeSecret(path, '');
+          console.log(`generated ${secret.name}.txt (empty = not configured)`);
+        } else {
+          console.log(`kept      ${secret.name}.txt`);
+        }
+        continue;
+      }
+      if (isNonEmptyFile(path) && !values.force) {
+        console.log(`kept      ${secret.name}.txt (use --force to replace it)`);
+        continue;
+      }
+      const other = otherCredential[secret.name];
+      if (isNonEmptyFile(join(dir, `${other}.txt`))) {
+        throw new CliError(
+          `${other}.txt is non-empty: refusing to write ${secret.name}.txt. Switching auth modes is an operator step: empty ${other}.txt first (docs/operations/secrets.md)`,
+        );
+      }
+      const replaced = isNonEmptyFile(path);
+      writeSecret(path, input, 0o600);
+      console.log(`${replaced ? 'replaced ' : 'generated'} ${secret.name}.txt`);
+      continue;
+    }
     if (exists && !values.force) {
       console.log(`kept      ${secret.name}.txt`);
       continue;
     }
-    if (secret.kind === 'external') {
-      if (apiKeyInput === null) {
-        if (!exists) missingApiKey = true;
-        else console.log(`kept      ${secret.name}.txt (no new key supplied)`);
-        continue;
-      }
-      writeSecret(path, apiKeyInput);
-    } else {
-      writeSecret(path, secret.kind === 'password' ? generatePassword() : generateToken());
-    }
+    writeSecret(path, secret.kind === 'password' ? generatePassword() : generateToken());
     console.log(`${exists ? 'replaced ' : 'generated'} ${secret.name}.txt`);
     if (exists && secret.name === 'mssql_sa_password') {
       console.log(
@@ -178,11 +223,13 @@ async function main() {
     }
   }
 
-  if (missingApiKey) {
+  const credentialFiles = ['claude_oauth_token', 'anthropic_api_key'].map((n) => join(dir, `${n}.txt`));
+  if (credentialFiles.every((f) => existsSync(f)) && !credentialFiles.some(isNonEmptyFile)) {
     console.log(
-      `\nmissing   anthropic_api_key.txt: provide the key with\n` +
-        `  node scripts/generate-secrets.mjs --only anthropic_api_key --anthropic-api-key-stdin < key-file\n` +
-        `  (or write it to ${join(dir, 'anthropic_api_key.txt')}); npm run compose:up refuses to start without it.`,
+      '\nmissing   Claude credential: run `claude setup-token`, then\n' +
+        '  node scripts/generate-secrets.mjs --only claude_oauth_token --claude-oauth-token-stdin < token-file\n' +
+        `  (or write the token to ${credentialFiles[0]}); npm run compose:up refuses to start without it.\n` +
+        '  API-key mode (not recommended): --only anthropic_api_key --anthropic-api-key-stdin with CLAUDE_AUTH_MODE=api_key.',
     );
   }
 }

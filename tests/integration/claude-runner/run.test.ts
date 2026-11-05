@@ -2,11 +2,15 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { CLAUDE_HARDENED_SETTINGS } from '@orc/claude-runner';
 import { CLAUDE_ENV_ALLOWLIST, WINDOWS_BASE_ENV } from '@orc/security';
 import { isProcessAlive } from '../../helpers/common';
 import {
   directivePrompt,
   FAKE_CLAUDE_PATH,
+  FAKE_CLI_VERSION,
+  FAKE_OAUTH_TOKEN,
+  fakeAuth,
   makeRunRequest,
   recordingHandlers,
   SESSION_ID,
@@ -16,6 +20,11 @@ import {
 import { useRunnerEnv } from '../../helpers/claude/integration';
 
 const env = useRunnerEnv();
+
+/** Print-mode spawns only: an unprobed runner first spawns `--version` and `--help` (contract §10.9). */
+function runLaunches(e: ReturnType<typeof env>): ReturnType<typeof env>['launcher']['launches'] {
+  return e.launcher.launches.filter((l) => l.spec.args.includes('-p'));
+}
 
 function event(rec: ReturnType<typeof recordingHandlers>['rec'], subtype: string): Record<string, unknown> {
   const hit = rec.lines.find((l) => systemSubtype(l.parsed) === subtype);
@@ -39,7 +48,7 @@ describe('claude-runner with fake-claude (integration)', () => {
       violation: null,
       result: { subtype: 'success', is_error: false, total_cost_usd: 0.42, usage: { input_tokens: 120, output_tokens: 34 } },
     });
-    expect(res.init).toMatchObject({ session_id: SESSION_ID, permissionMode: 'dontAsk', claude_code_version: '2.1.316' });
+    expect(res.init).toMatchObject({ session_id: SESSION_ID, permissionMode: 'dontAsk', claude_code_version: FAKE_CLI_VERSION });
     expect(rec.spawn?.pid).toBeGreaterThan(0);
     expect(rec.inits).toHaveLength(1);
     expect(rec.inits[0]?.validation).toEqual({ ok: true, violations: [], mcpConnected: false });
@@ -56,13 +65,22 @@ describe('claude-runner with fake-claude (integration)', () => {
     const res = await runner.run(req, handlers);
     e.trackPids(rec.spawn?.pid);
     expect(res.outcome).toBe('success');
-    expect(event(rec, 'fake_argv').argv).toEqual(runner.buildArgv(req));
-    const launch = e.launcher.launches[0];
+    const argv = event(rec, 'fake_argv').argv as string[];
+    expect(argv).toEqual(runner.buildArgv(req));
+    // ADR-0036 Decision 3: one hardened non-bare argv for both modes.
+    expect(argv).not.toContain('--bare');
+    expect(argv.slice(0, 3)).toEqual(['-p', '--output-format', 'stream-json']);
+    for (const flag of ['--verbose', '--include-hook-events', '--restricted']) expect(argv).toContain(flag);
+    expect(argv[argv.indexOf('--setting-sources') + 1]).toBe('user');
+    expect(argv[argv.indexOf('--settings') + 1]).toBe(CLAUDE_HARDENED_SETTINGS);
+    const launch = runLaunches(e)[0];
     expect(launch?.spec).toMatchObject({ kind: 'claude', cmd: process.execPath, cwd: e.layout.worktree });
     expect(launch?.spec.args.slice(0, 1)).toEqual([FAKE_CLAUDE_PATH]);
 
     const fakeEnv = event(rec, 'fake_env');
-    expect(fakeEnv.hasApiKey).toBe(true);
+    // Default auth is oauth: no API key; the token is on fd 3 (POSIX) or in the env (win32, dev only).
+    expect(fakeEnv.hasApiKey).toBe(false);
+    expect(fakeEnv.authSource).toBe(process.platform === 'win32' ? 'oauth_env' : 'oauth_fd');
     const allowed = new Set(
       [...CLAUDE_ENV_ALLOWLIST, ...(process.platform === 'win32' ? WINDOWS_BASE_ENV : [])].map((k) => k.toUpperCase()),
     );
@@ -77,8 +95,9 @@ describe('claude-runner with fake-claude (integration)', () => {
     );
     const names = fakeEnv.names as string[];
     expect(names.filter((n) => !allowed.has(n.toUpperCase()) && !libuvInjected.has(n.toUpperCase()))).toEqual([]);
+    expect(names).not.toContain('ANTHROPIC_API_KEY');
     expect(names.filter((n) => /^(DB_|REDIS_|SESSION_|NODE_OPTIONS$|npm_)|_FILE$/i.test(n))).toEqual([]);
-    expect(names).toEqual(expect.arrayContaining(['ORC_ATTEMPT_ID', 'CLAUDE_CONFIG_DIR', 'HOME', 'ANTHROPIC_API_KEY']));
+    expect(names).toEqual(expect.arrayContaining(['ORC_ATTEMPT_ID', 'CLAUDE_CONFIG_DIR', 'HOME', 'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_CODE_DISABLE_CLAUDE_MDS']));
   });
 
   it('keeps stdout (stream-json) and stderr separate', async () => {
@@ -137,6 +156,7 @@ describe('claude-runner with fake-claude (integration)', () => {
     expect(raw).not.toContain('sk-ant-FAKE');
     expect(raw).toContain('[REDACTED]');
     expect(raw).not.toContain(TEST_API_KEY);
+    expect(raw).not.toContain(FAKE_OAUTH_TOKEN);
   });
 
   it('resume: --resume <id> --fork-session yields a new session id', async () => {
@@ -232,5 +252,77 @@ describe('claude-runner with fake-claude (integration)', () => {
     expect(res.outcome).toBe('success');
     expect(rec.inits[0]?.validation).toEqual({ ok: true, violations: [], mcpConnected: true });
     expect(res.init?.tools).toContain('mcp__codebase-memory-mcp__search_graph');
+  });
+
+  describe('credential transport (ADR-0036)', () => {
+    it.skipIf(process.platform === 'win32')('oauth on POSIX: token on fd 3, env names the fd, fd closed after the read', async () => {
+      const e = env();
+      const { handlers, rec } = recordingHandlers();
+      const res = await e
+        .runner()
+        .run(makeRunRequest(e.layout, { lease: e.lease, directives: ['@@fake echo-env', '@@fake echo-fds'] }), handlers);
+      e.trackPids(rec.spawn?.pid);
+      expect(res.outcome).toBe('success');
+      expect(res.init).toMatchObject({ apiKeySource: 'none' });
+      const launch = runLaunches(e)[0];
+      expect(launch?.spec.credentialFd).toBe(FAKE_OAUTH_TOKEN);
+      expect(launch?.spec.env['CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR']).toBe('3');
+      expect(Object.keys(launch?.spec.env ?? {})).not.toContain('CLAUDE_CODE_OAUTH_TOKEN');
+      expect(Object.values(launch?.spec.env ?? {})).not.toContain(FAKE_OAUTH_TOKEN);
+      expect(event(rec, 'fake_env')).toMatchObject({ authSource: 'oauth_fd', hasOauthToken: false, hasOauthFdVar: true });
+      // The credential channel (a pipe or, via libuv, a socketpair) is gone: no open fd points at its identity (fd numbers are reused by the runtime's own
+      // handles, so the numbers are not compared).
+      const fdsEvent = event(rec, 'fake_fds');
+      const identity = fdsEvent.credentialFdTarget;
+      expect(identity).toMatch(/^(pipe|socket):\[\d+\]$/);
+      const targets = (fdsEvent.fds as { fd: number; target: string | null }[]).map((f) => f.target);
+      expect(targets).not.toContain(identity);
+    });
+
+    it.skipIf(process.platform !== 'win32')('oauth on win32: token in the env, no fd', async () => {
+      const e = env();
+      const { handlers, rec } = recordingHandlers();
+      const res = await e.runner().run(makeRunRequest(e.layout, { lease: e.lease, directives: ['@@fake echo-env'] }), handlers);
+      e.trackPids(rec.spawn?.pid);
+      expect(res.outcome).toBe('success');
+      const launch = runLaunches(e)[0];
+      expect(launch?.spec.credentialFd).toBeUndefined();
+      expect(launch?.spec.env['CLAUDE_CODE_OAUTH_TOKEN']).toBe(FAKE_OAUTH_TOKEN);
+      expect(event(rec, 'fake_env')).toMatchObject({ authSource: 'oauth_env', hasOauthToken: true, hasOauthFdVar: false });
+    });
+
+    it('api_key: key in the env, no oauth variable, apiKeySource ANTHROPIC_API_KEY, init valid', async () => {
+      const e = env();
+      const { handlers, rec } = recordingHandlers();
+      const res = await e
+        .runner({ auth: fakeAuth('api_key') })
+        .run(makeRunRequest(e.layout, { lease: e.lease, directives: ['@@fake echo-env'] }), handlers);
+      e.trackPids(rec.spawn?.pid);
+      expect(res.outcome).toBe('success');
+      expect(res.init).toMatchObject({ apiKeySource: 'ANTHROPIC_API_KEY' });
+      expect(rec.inits[0]?.validation.ok).toBe(true);
+      const launch = runLaunches(e)[0];
+      expect(launch?.spec.credentialFd).toBeUndefined();
+      expect(launch?.spec.env['ANTHROPIC_API_KEY']).toBe(TEST_API_KEY);
+      expect(Object.keys(launch?.spec.env ?? {}).filter((n) => n.startsWith('CLAUDE_CODE_OAUTH_TOKEN'))).toEqual([]);
+      expect(event(rec, 'fake_env')).toMatchObject({ authSource: 'api_key', hasApiKey: true, hasOauthToken: false });
+    });
+
+    it.each(['401', 'not-logged-in'] as const)('auth-error %s: one spawn, settles once, no automatic retry', async (kind) => {
+      const e = env();
+      const { handlers, rec } = recordingHandlers();
+      const res = await e
+        .runner()
+        .run(makeRunRequest(e.layout, { lease: e.lease, directives: [`@@fake auth-error ${kind}`] }), handlers);
+      e.trackPids(rec.spawn?.pid);
+      // The mapping to its own outcome is deferred to B-022; here: a failure, never success, exactly one process.
+      expect(res.outcome).not.toBe('success');
+      expect(res.exitCode).toBe(1);
+      expect(res.result).toMatchObject({ is_error: true });
+      expect(JSON.stringify(res.result)).toContain(kind === '401' ? '401' : 'Not logged in');
+      expect(runLaunches(e)).toHaveLength(1);
+      expect(rec.inits).toHaveLength(1);
+      expect(isProcessAlive(rec.spawn?.pid ?? 0)).toBe(false);
+    });
   });
 });

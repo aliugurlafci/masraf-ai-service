@@ -8,7 +8,11 @@ search for in the logs.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `compose-check` reports a missing or invalid secret | The file is absent, empty, or does not match its rule (for example, an Anthropic key containing whitespace). | Run `npm run secrets:generate`, or regenerate one file with `--only <name> --force`. Provide the key with `--anthropic-api-key-stdin`. |
+| `compose-check` reports a missing or invalid secret | The file is absent, empty, or does not match its rule (for example, an Anthropic key containing whitespace). | Run `npm run secrets:generate`, or regenerate one file with `--only <name> --force`. Provide the token with `--only claude_oauth_token --claude-oauth-token-stdin` (after `claude setup-token`). |
+| `compose-check` reports `claude credentials` | Both credential files are empty or both are set, the set one does not match `CLAUDE_AUTH_MODE`, or the token does not match `sk-ant-oatNN-...`. | Exactly one of `claude_oauth_token.txt` / `anthropic_api_key.txt` may be non-empty. See [secrets.md](secrets.md#switching-the-auth-mode). |
+| Worker exits saying `CLAUDE_BARE` was removed by ADR-0036 | The variable is still set in `.env`, the shell or a compose override. | Remove `CLAUDE_BARE`; select the mode with `CLAUDE_AUTH_MODE`. |
+| Tasks fail with 401 or "Not logged in" | The OAuth token expired or was revoked. | Renew it and restart the worker: [runbook](runbook.md#claude-credential-oauth-token). |
+| Runner is unhealthy in production with a `ptrace_scope` message | Yama `ptrace_scope` is `0` or unreadable on the Docker host. | Set `kernel.yama.ptrace_scope` to `1` or higher on the host and persist it: [runbook](runbook.md#claude-credential-oauth-token). |
 | `generate-secrets` fails in `generate-certs` | openssl runs in `mcr.microsoft.com/mssql/server:2022-latest`, and the image is not pulled yet. | Run `docker pull mcr.microsoft.com/mssql/server:2022-latest`, or pass `--image <image with openssl>`. |
 | mssql never becomes healthy | Not enough memory (mssql needs 2 GB or more); the EULA was not accepted; mssql cannot read the TLS key. | Run `docker compose logs mssql`. Raise Docker's memory. Make sure `mssql_tls_key.pem` is readable (`0644`). On a fresh host, regenerate the db set with `--only db --force`. |
 | `db-bootstrap` fails with `Login failed for user 'sa'` | An existing `mssql-data` volume was created with a different sa password. | Restore the old `mssql_sa_password.txt`, or change sa as described in [secrets.md](secrets.md#sql-server-sa-password). |

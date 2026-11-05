@@ -55,8 +55,10 @@ import type {
 } from '@orc/claude-runner';
 import { serializeError } from '@orc/logger';
 import type { Logger } from '@orc/logger';
+import { ensureClaudeAppDataDirs } from './claude-home.js';
 import { AbortedSignal, SettleSignal, SupersededSignal, WorkspaceBusySignal } from './errors.js';
 import { createAttemptLogSink } from './log-sink.js';
+import { mcpRuntimeDecision } from './mcp-runtime.js';
 import { claudeSessionStatusFor, mapAbortReason, mapClaudeOutcome, pendingTestReason } from './outcome.js';
 import { createTestRunner } from './test-runner.js';
 import { DbWriteAbandonedError, errorMessage, isBusyError, sleep, withDbRetry, withTimeout } from './util.js';
@@ -170,6 +172,8 @@ class AttemptRun {
   private claudeSpawned = false;
   private reviewStored = false;
   private indexAvailable = false;
+  /** ADR-0037: false when `ensureClaudeMcpRuntime` rejected; Claude then runs without MCP. */
+  private mcpRuntimeOk = true;
   private pendingTest: FailureReason | null = null;
   private baseBranch = '';
 
@@ -361,6 +365,7 @@ class AttemptRun {
   private async stages(): Promise<AttemptOutcome> {
     await this.prepare();
     await this.indexStage();
+    await this.mcpRuntimeStage();
     await this.runningStage();
     if (this.project?.testCommand) await this.testingStage();
     return this.reviewingStage();
@@ -564,7 +569,9 @@ class AttemptRun {
     await mkdir(resolveWithin(metaDir, 'test-tmp'), { recursive: true, mode: 0o700 });
     this.metaDir = await realpathWithin(this.cfg.workspacesRoot, projectId, taskId, `a${n}.meta`);
     const home = resolveWithin(this.cfg.claudeHomeRoot, 'w', ws.id);
-    await mkdir(resolveWithin(home, 'home'), { recursive: true, mode: 0o700 });
+    const homeDir = resolveWithin(home, 'home');
+    await mkdir(homeDir, { recursive: true, mode: 0o700 });
+    await ensureClaudeAppDataDirs(homeDir, this.cfg.platform); // B-020: win32 APPDATA/LOCALAPPDATA
     await mkdir(resolveWithin(home, 'config'), { recursive: true, mode: 0o700 });
     await writeFile(resolveWithin(home, 'config', 'settings.json'), '{}\n', { mode: 0o600 });
     this.scope = {
@@ -763,6 +770,31 @@ class AttemptRun {
     await this.transition('running');
   }
 
+  /**
+   * ADR-0037: verify Claude's MCP runtime directory before every Claude spawn. Failure either fails the attempt
+   * closed (`MCP_REQUIRED` or the project's `requireIndex`) or starts Claude without `--mcp-config`.
+   */
+  private async mcpRuntimeStage(): Promise<void> {
+    this.checkpoint();
+    this.mcpRuntimeOk = true;
+    if (!this.cfg.mcpEnabled) return;
+    const project = this.project as ProjectRecord;
+    try {
+      await this.d.mcp.ensureClaudeMcpRuntime(this.scope as WorkspaceScope);
+    } catch (err) {
+      if (this.signal.aborted || this.superseded()) throw err;
+      this.checkpoint();
+      this.mcpRuntimeOk = false;
+      const decision = mcpRuntimeDecision(err, { mcpRequired: this.cfg.mcpRequired, requireIndex: project.requireIndex });
+      if ('settle' in decision) {
+        this.systemLine(`MCP runtime rejected (${decision.settle[1]})`, 'mcp');
+        throw new SettleSignal(decision.settle[0], decision.settle[1], decision.settle[2]);
+      }
+      await this.event('warning', { warning: decision.warn.warning, errorCode: decision.warn.errorCode });
+      this.systemLine(`MCP runtime rejected (${decision.warn.errorCode}); starting Claude without MCP`, 'mcp');
+    }
+  }
+
   // ---- running ------------------------------------------------------------------------------------------
 
   private continuation(prevReason: FailureReason | null): PromptContinuation {
@@ -798,7 +830,7 @@ class AttemptRun {
       tools = computeToolPolicy(
         { allowedTools: agent.allowedTools, disallowedTools: agent.disallowedTools },
         {
-          mcpEnabled: this.cfg.mcpEnabled,
+          mcpEnabled: this.cfg.mcpEnabled && this.mcpRuntimeOk,
           worktreePath: worktree,
           workspacesRoot: this.cfg.workspacesRoot,
           projectsRoot: this.cfg.projectsRoot,
@@ -824,8 +856,8 @@ class AttemptRun {
           claudeMd: this.claudeMd,
         },
         index: {
-          available: this.indexAvailable,
-          indexName: this.indexAvailable ? this.d.mcp.indexName(this.scope as WorkspaceScope) : null,
+          available: this.indexAvailable && this.mcpRuntimeOk,
+          indexName: this.indexAvailable && this.mcpRuntimeOk ? this.d.mcp.indexName(this.scope as WorkspaceScope) : null,
         },
         task: {
           title: this.task.title,
@@ -854,7 +886,7 @@ class AttemptRun {
       model: this.task.model,
       effort: this.task.effort,
       tools,
-      mcp: this.cfg.mcpEnabled
+      mcp: this.cfg.mcpEnabled && this.mcpRuntimeOk
         ? { configPath: resolveWithin(metaDir, 'mcp.json'), cacheDir: this.d.mcp.cacheDir(this.scope as WorkspaceScope) }
         : null,
       appendSystemPrompt: prompt.appendSystemPrompt,
