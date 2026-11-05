@@ -1,4 +1,6 @@
-Döngü: 2 · KAPANDI (3 dalga, tüm kapılar YEŞİL) · Taban: index@2026-11-04 (döngü 2 sonu) · Sıradaki: B-015 (P2, opus) — `/takim-denetim devam`
+Döngü: 3 · Faz: 1 (B-017 CLI doğrulama deneyi) · Dalga: 0 · Taban: index@2026-11-05 (döngü 2 sonu, commit yok)
+
+Döngü 2: KAPANDI (3 dalga, tüm kapılar YEŞİL). Döngü 3 kapsamı: kullanıcı isteği B-017 (abonelikle çalışma, API anahtarı zorunlu olmasın), ardından B-015 ve B-016.
 
 Döngü 1: KAPANDI (P0/P1 yok). Döngü 2 kapsamı: kullanıcı isteğiyle P2–P3 (B-001…B-008).
 
@@ -27,8 +29,14 @@ Dalga 1 sonrası (D2): lint, typecheck, placeholders YEŞİL · unit 1579/0/2 ·
 
 | ID | P | Tür | Sahip | Kanıt | Durum | Model | Not |
 |---|---|---|---|---|---|---|---|
+| B-022 | P2 | EKSİK | Worker | Opus 8.5: kota bitmesi ve süresi dolmuş token için outcome eşlemesi | ERTELENDİ | — | Canlı D-8 gerekiyor |
+| B-021 | P3 | KALİTE | Platform/kullanıcı | `secrets/README.md` çalışma ağacında silinmiş (git status ` D`); generate-secrets.mjs README'ye değinmiyor | KAPANDI | — | Kullanıcı 'geri yükle' dedi → git checkout ile geri yüklendi. generate-secrets.mjs'te rm/unlink/readdir yok; silme script'ten kaynaklanmıyor |
+| B-018 | P1 | HATA (güvenlik) | Worker + Security | Deney (B-017-deney.md): mevcut üründe ANTHROPIC_API_KEY Claude'un Bash aracında ve cbm MCP env'inde görünüyor. OAuth token'ı CLI çocuk env'inden siliyor, ama Linux'ta aynı uid'li Bash /proc/<claude>/environ'dan okuyabiliyor | TASARIM | opus | B-017 tasarımına dahil. FD yolu (CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR) yalnız Linux'ta çalışıyor |
+| B-019 | P1 | HATA | Worker | Deney: --bare araçları Bash, Edit ve Read'e indiriyor (Glob, Grep, Write yok). validateInit eksik aracı, skills/agents/plugins/memory_paths'i ve bare dışındaki hook olaylarını kontrol etmiyor | TASARIM | opus | B-017 tasarımına dahil (non-bare'de tam araç seti ve sıkı init doğrulaması) |
+| B-020 | P2 | HATA | Security | packages/security WINDOWS_BASE_ENV, worker'ın gerçek APPDATA ve LOCALAPPDATA değerlerini Claude'a geçiriyor (Windows local mod) | AÇIK | — | B-017 tasarımında değerlendirilecek |
+| B-017 | P1 | EKSİK (kullanıcı gereksinimi) | Mimari + Worker + Security + Platform | Kullanıcı: "local claude ile kullanmak için geliştirdim, API anahtarı istememeli". ADR-0016 --bare kullanıyor; CLI 2.1.318 --help: bare'de auth yalnız ANTHROPIC_API_KEY/apiKeyHelper. config.ts:630-634 bare=false yalnız development'ta. compose-check ve docker-compose.yml:257,458 API anahtarını zorunlu tutuyor | ONAYLI (D0 + kullanıcı 3.0.0 onayı bekleniyor) | opus | Kullanıcı kararı (2026-11-05): `claude setup-token` ile CLAUDE_CODE_OAUTH_TOKEN varsayılan olacak, API anahtarı isteğe bağlı kalacak (ikisi de desteklenecek). Yeni ADR ve sözleşme değişikliği gerekiyor |
 | B-016 | P3 | KALİTE | Mimari | macOS os.tmpdir() ~49 B, local soket bütçesi ≤ 20 B (eski sorun) | ERTELENDİ | haiku | docs/known-issues.md'ye 'macOS local mod desteklenmiyor' notu; isteğe bağlı olarak B-015 ile anlaşılır erken hata |
-| B-015 | P2 | EKSİK (güvenlik) | Worker (orchestrator) | B-014 raporu: reused_workspace_index yolunda ve task_index başarısız olunca Claude mcp.json ile başlıyor; senkron claudeMcpConfig (manager.ts:629) dizin doğrulaması yapmıyor. Koruma önceki doğrulamaya ve CBM'in ata dizin kontrolüne (ADR-0034 m.2) dayanıyor | ERTELENDİ | opus | Opus K7: sonraki çağrının ilk kaydı. Tasarım `ensureClaudeMcpRuntime` + tmpdir sticky/sahip kontrolü + sözleşme metni |
+| B-015 | P2 | EKSİK (güvenlik) | Worker (orchestrator) | B-014 raporu: reused_workspace_index yolunda ve task_index başarısız olunca Claude mcp.json ile başlıyor; senkron claudeMcpConfig (manager.ts:629) dizin doğrulaması yapmıyor. Koruma önceki doğrulamaya ve CBM'in ata dizin kontrolüne (ADR-0034 m.2) dayanıyor | ONAYLI | opus | Opus K7: sonraki çağrının ilk kaydı. Tasarım `ensureClaudeMcpRuntime` + tmpdir sticky/sahip kontrolü + sözleşme metni |
 | B-012 | P1 | HATA | Worker | test:linux pipeline.test.ts:90 (task_index:failed) — dalga 2 regresyonu: mcp-real (root) `/tmp/orc-cbm-rt`'yi root 0700 bırakıyor, uid 1000 mkdir edemiyor | KAPANDI | opus | scripts/test-linux.mjs: uid 1000 koşusu ayrı TMPDIR=/tmp/w (0700, uid 1000) kullanıyor |
 | B-013 | P2 | HATA | Mimari | tests/unit/shared/config.test.ts:314 — prod ortamında CBM_CACHE_DIR=/tmp/... (33 B), config.ts:674 sınırı 26 B; win32'de kontrol atlandığı için yalnız Linux'ta kırmızı; 89a328e'den beri var | KAPANDI | sonnet | Test verisi compose değeri `/var/lib/orc/cbm-cache` olacak + 27 B ret assert'i; üretim formülü değişmez |
 | B-014 | P1 | HATA (güvenlik) | Code Intelligence | packages/mcp-manager/src/manager.ts:165,203 — local mod `<tmpdir>/orc-cbm-rt` ebeveyni uid'e özel değil, sahiplik ve symlink kontrolü yok (kullanıcılar arası /tmp riski, CWE-377) | KAPANDI | opus | Öneri: `orc-cbm-rt-<uid>`, mkdir sonrası lstat ile sahip=getuid ve symlink değil kontrolü; sözleşme §10.11 local metni güncellenecek |
@@ -53,6 +61,22 @@ Dalga 1 sonrası (D2): lint, typecheck, placeholders YEŞİL · unit 1579/0/2 ·
   - K3 B-005 DEĞİŞTİR(C+): yalnız bu koşunun diff'inde yeni çıkan öğeler silinir. Kök realpath(os.tmpdir()) olur ve resolveWithin ile sabitlenir; `orc-test-` prefiksi zorunlu; lstat kullanılır. Süreç seçimi: fake-claude.mjs mutlak yolu VE (PID zinciri vitest'e çıkar ya da ORC_TEST_RUN_ID işareti var); Windows'ta PID zinciri zorunlu. PowerShell spawn ile çağrılır (shell:false, -NoProfile -NonInteractive). Tarama başarısızsa `scanUnavailable` raporlanır, ORC_TEST_LEAK_STRICT=1 ise FAIL. DB yalnız raporlanır. leak-detection testi kendi sızıntısını temizler. Model opus. İlk koşu REAP kapalı.
   - K4 B-006 DEĞİŞTİR(A, mevcut katman): docker/Dockerfile:94-115 `cbm` aşaması yeniden kullanılır (--target cbm → COPY --from). TEST_IMAGE etiketine CBM sürümü eklenir (ensureTestImage:74 eski imajı sessizce kullanmasın). Script konteynere CODEBASE_MEMORY_MCP_BIN ve ORC_REQUIRE_CBM=1 geçirir. mcp-real.test.ts DEFAULT_TARGETS'a eklenir. İki testte ikili yoksa ve ORC_REQUIRE_CBM=1 ise FAIL. (c) test-setup.test.ts:74 skipIf ve dependency-rules.test.ts:133 stub koşulu silinir. arm64 kısıtı belgelenir.
   - Ek: validation.ts sameRoot değişikliği (B-003) ayrı DALGA-KABUL incelemesi ister.
+- D3 TASARIM-ONAYI (opus-danisman):
+  - K8 B-017 DEĞİŞTİR: ADR-0036 ve dalga planı doğru. Accepted için ek şartlar:
+    - D-7(a) (gerçek token regex'e uyuyor mu, çevrimdışı ve yalnız boolean) D0'a alınır.
+    - D-1(b)'ye /proc/<claude>/mem denemesi ve ptrace_scope kaydı eklenir.
+    - @orc/logger redaksiyonu (sk-ant-oat, CLAUDE_CODE_OAUTH_TOKEN*, credentialFd, b64) Platform kapsamına girer.
+  - 8.1 --restricted: D-4 geçerse alınır ve probe'un zorunlu bayraklarına girer.
+  - 8.2: oauth modunda ANTHROPIC_API_KEY varsa ConfigError; mesajda yalnız ad yazılır.
+  - 8.3: operatör düğmesi yok; sürüm başına sabit tablo; runbook'a CLI güncelleme notu.
+  - 8.4: security_violation, kural kodu tool_missing.
+  - 8.5: outcome eşlemesi ertelenir (ayrı B kaydı). 401/'Not logged in' durumunun retry fırtınası üretmediği testle kanıtlanır; runbook'a yenileme adımı yazılır.
+  - 8.6: B-020 izolasyonu yalnız claude ve probe için; known-issue olarak kaydedilir.
+  - 8.7: 3.0.0 MAJOR doğru (contract.md:8) → kullanıcı onayı gerekiyor.
+  - 8.8: api_key modundaki sızıntı kabul edilebilir kalıntı risk (bugün de var); threat-model'de 'önerilmez' diye işaretlenir, başlangıçta tek seferlik warn yazılır.
+  - D0 geç/kal ölçütleri: D-1 (a/b/c), D-2, D-4, D-6, D-7(a). Engelleyici: D-7(a) ve D-1 sonuçlanmadan Dalga 1 başlamaz.
+  - Modeller: D0, Worker A/B ve threat-model opus; shared, security env, platform, fake-claude, security testleri ve B-015 sonnet.
+  - K9 B-015 ONAY. 9.1: requireIndex de fail-closed'ı tetikler. 9.2: aynı 3.0.0'a girer (ADR-0037, ayrı changelog alt başlığı); B-015.md:13'teki ADR numarası 0037 olarak düzeltilecek; argv'deki mcp===null kuralı unit testle sabitlenecek.
 - D2 TASARIM-ONAYI-2 (opus-danisman):
   - K5 B-014 DEĞİŞTİR(B+): Linux'ta `orc-cbm-rt-<getuid>`, win32'de son ek yok. prepareDirs'te (manager.ts:203) mkdir sonrası ebeveyn ve <16hex> dizini lstat ile doğrulanır: dizin ve symlink değil, uid=getuid, (mode&0o077)===0; tutmazsa OrcError. chmod ile düzeltme yok, fallback yok. Doğrulama spawn öncesi yolda olmalı (:560, :303); claudeMcpConfig (:629) yeterli değil. ADR-0035 bütçe testi 11 B'lik uid ile yapılır. Sözleşme local metni 2.2.1 içinde güncellenir. Model opus.
   - DOĞRULAMA: test-linux.mjs'teki TMPDIR=/tmp/w ayrımı B-014'ten sonra KALDIRILACAK. 4 vakalık unit test şart (yabancı sahipli ebeveyn, symlink, 0o755, yabancı sahipli alt dizin), spawn çağrılmamalı.
@@ -125,3 +149,28 @@ Dalga 1 sonrası (D2): lint, typecheck, placeholders YEŞİL · unit 1579/0/2 ·
 - Platform: test-linux.mjs'ten /tmp/w ayrımı kaldırıldı. B-010 için flagEnv eklendi (ORC_TEST_REAP ve ORC_TEST_LEAK_STRICT yalnız 0/1, tanımsızsa geçirilmiyor). Paylaşılan /tmp hedefli koşusu: mcp-real 4 geçti/1 atlandı, pipeline 6/6, exit 0; STRICT=1 ile de exit 0. lint temiz.
 - Dalga 3 tamam. Faz 5 başladı: test-kosucu tam koşu (K1–K4 + test:linux) ve opus-danisman dalga 3 kabulü paralel.
 - Faz 5 son tam koşu (D2-F5-FULL2): 11 kapının 11'i YEŞİL, test:linux dahil. Dalga 2 ve dalga 3 kabulleri kesinleşti. B-001, B-002, B-005, B-006, B-008…B-014 KAPANDI. Taban `git add -A` ile ilerletildi. Açık kalanlar: B-015 (P2, ERTELENDİ, sonraki çağrının ilk kaydı) ve B-016 (P3). Döngü 2 KAPANDI.
+- Döngü 3 başladı (2026-11-05). Kullanıcı isteği: abonelikle çalışma. Kullanıcı kararları: setup-token, iki auth modu da desteklenecek. Faz 1: Worker (opus) kurulu CLI 2.1.318 üzerinde deney yapacak; OAuth token'ın non-bare modda okunması ve izolasyon kanıtlanacak. Ürün kodu değişmeyecek.
+- B-015 tasarımı hazır (.claude/state/tasarim/B-015.md). Çağrı noktası pipeline.ts:582 (claudeMcpConfig'in tek çağıranı); yeni mcpRuntimeStage indexStage'den sonra (:362-364) çalışacak. MCP_REQUIRED (shared/config.ts:410) görev başına genişliyor → ADR gerekiyor. Opus'a sorulacak açık nokta: requireIndex de fail-closed'ı tetiklesin mi? Çakışma riski B-017 ile (pipeline.ts buildRequest :789-866, apps/worker/src/config.ts:88-98) → sıra: önce B-017, sonra B-015. ADR numaraları: B-017 → ADR-0036, B-015 → ADR-0037.
+- B-017 deneyi tamam (.claude/state/tasarim/B-017-deney.md; Win 2.1.318 ve Linux 2.1.316 aynı sonucu verdi).
+  - (a) Non-bare + CLAUDE_CODE_OAUTH_TOKEN okunuyor (401 invalid; Bearer + oauth beta header). --bare ve SIMPLE=1 ile 'Not logged in'. Token ile birlikte verilen API anahtarı OAuth'u eziyor.
+  - (b) Mevcut bayraklarla (--setting-sources user + --strict-mcp-config) zararlı repo içeriğinin hiçbiri çalışmadı; kaynaklar açılınca hook'lar çalıştı (negatif kontrol). ADR-0016'nın user-scope MCP gerekçesi bu sürümlerde geçerli değil.
+  - (c) Kapatma anahtarları doğrulandı: disableAllHooks, autoMemoryEnabled:false / CLAUDE_CODE_DISABLE_AUTO_MEMORY, CLAUDE_CODE_DISABLE_CLAUDE_MDS, attribution boş, includeGitInstructions:false. LSP ve prefetch için anahtar yok.
+  - Yeni bulgular: B-018, B-019, B-020. Tasarım (ADR-0036) Mimari'ye opus modeliyle verildi.
+- B-017 tasarımı hazır (Mimari, opus): docs/adr/0036-claude-subscription-oauth-auth.md (Proposed; ADR-0016'yı supersede, ADR-0024'ü amend ediyor) ve .claude/state/tasarim/B-017.md.
+  - Auth: CLAUDE_AUTH_MODE=oauth|api_key (varsayılan oauth). İkisi birden verilirse 5 katmanda ret. CLAUDE_BARE kaldırılıyor.
+  - Argv: iki mod için tek non-bare hardened dizi (B-019'u kapatıyor). Token POSIX'te fd 3 ile, Windows'ta env ile.
+  - validateInit sıkılaşıyor. B-020: APPDATA ve LOCALAPPDATA izole ediliyor.
+  - Sözleşme 3.0.0 (MAJOR) → kullanıcı onayı gerekiyor.
+  - Dalga planı: D0 deney → D1 (shared, security, fake-claude) → D2 (runner+worker, sandbox+orchestrator, compose+scripts+docs, QA helpers) → D3 (security docs ve testleri). Ardından kullanıcı onayıyla claude-live.
+  - Açık deneyler: D-1, D-2, D-4, D-6 (Accepted için şart); B-018 API anahtarı modunda kalıntı risk olarak kalıyor (D-3).
+- B-015 ve B-017 tasarımları Opus'a sunuldu.
+- Opus K8/K9 kararları alındı. D0 deneyleri (D-1, D-2, D-4, D-6) deney ajanına SendMessage ile verildi. Kullanıcıya soruldu: sözleşme 3.0.0, D-7(a) için gerçek token, B-021.
+- Kullanıcı kararları (2026-11-05): sözleşme 3.0.0 ONAYLANDI; secrets/README.md geri yüklendi (B-021 KAPANDI).
+- D0 deneyleri (.claude/state/tasarim/B-017-D0.md):
+  - D-1a/b/c GEÇ: fd 3 yolunda 3 istek de Bearer + oauth beta taşıdı. Bash'te fd 3 yok, /proc/<claude>/mem EACCES, ptrace_scope=1, resume ve fork çalıştı.
+  - D-2 GEÇ: prlimit + setuid yolu çalıştı; log ölçütü Dalga 2'de doğrulanacak.
+  - D-4 GEÇ: --restricted alınacak.
+  - D-6 GEÇ ama rafine gerekiyor: oauth `schedule` skill'ini ekliyor, plugin kümesi platforma göre değişiyor → allowlist (sürüm, platform, mod) matrisine dönüşüyor.
+  - D-3: MCP için mcp.json env override'ı kanıtlı, Bash için yol yok.
+  - Mimari ADR-0036'yı revize ediyor. Dalga 1, D-7(a) (kullanıcının gerçek token biçim kontrolü) sonucunu bekliyor.
+- ADR-0036 Accepted (D-7(a) bekliyor). D5 CLAUDE_REVIEWED_EXTENSIONS tablosu (<cliVersion>/<platform>/<authMode>); D8 logger redaksiyonu, D9 ptrace_scope (prod'da <1 ise runner sağlıksız), D10 auth hataları eklendi. Dalga planı: D1 Mimari (contract 3.0.0, ADR-0037, shared) + Security (env.ts) + QA (fake-claude). D2 Worker A (claude-runner, apps/worker) + Worker B (sandbox, runner ptrace, orchestrator AppData, auth-failure testi) + Platform (compose, scripts, logger, docs/ops, README) + QA (helpers, claude-live). D3 Code Intelligence (B-015, claudeEnvScrub) + Worker (orchestrator types/pipeline, worker config, mcp===null testi) + Security (docs, known-issues B-016/B-020) + Security testleri.

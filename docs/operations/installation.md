@@ -176,6 +176,27 @@ isolation**. Use development mode only with repositories that you trust.
 Never use the test containers (`npm run infra:test:up`, database `orchestrator_test`) for development.
 The test global setup drops that database.
 
+### Quick path (Windows, macOS, Linux)
+
+```bash
+npm run dev:setup                                   # once; safe to repeat
+npm run dev:create-admin -- --username admin        # once; asks for the password interactively
+npm run dev:api                                     # :4000, each in its own terminal
+npm run dev:worker                                  # :4100
+npm run dev:web                                     # http://127.0.0.1:5173
+```
+
+`dev:setup` generates the development passwords once and keeps them in `~/.orc-dev/dev.env` (outside the
+repository; never printed). It starts or reuses `orc-dev-mssql` (127.0.0.1:14330) and `orc-dev-redis`
+(127.0.0.1:16379), runs `db:bootstrap`, `db:migrate` and `db:seed` as the migrator login, and creates
+`projects/`, `workspaces/` and `~/.orc-dev/{claude,cbm-cache,empty-hooks}`. `dev:api` and `dev:worker` merge
+`dev.env` with the application-specific values of steps 2 and 4 below and start `tsx watch`. A variable that
+is already set in your shell wins over `dev.env`; extra `KEY=VALUE` lines in `dev.env` (for example
+`ANTHROPIC_API_KEY`) are forwarded. If `dev.env` is missing, the commands tell you to run `dev:setup`.
+Ctrl+C stops the whole process tree. The manual steps below do the same by hand.
+
+### Manual path
+
 1. Start a development SQL Server and Redis, bound to loopback:
 
    ```bash
