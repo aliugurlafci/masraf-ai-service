@@ -29,7 +29,7 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:api": "vitest run --project api",
-    "test:security": "vitest run --project security && node scripts/check-placeholders.mjs && node scripts/dependency-audit.mjs",
+    "test:security": "node scripts/check-placeholders.mjs && node scripts/dependency-audit.mjs && vitest run --project security",
     "check:placeholders": "node scripts/check-placeholders.mjs",
     "test:e2e": "vitest run --project e2e",
     "test:web": "vitest run --project web",

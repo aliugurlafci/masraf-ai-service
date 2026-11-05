@@ -3,8 +3,9 @@
 // /proc marker sweep, Unix-socket runner protocol, root-only uid switching) inside the production base image
 // node:24.18.0-bookworm-slim, as root, against the SAME loopback test containers the host uses (mssql-test
 // 127.0.0.1:14331, redis-test 127.0.0.1:16380; start them with `npm run infra:test:up`). The container image is
-// the base image plus git (built once as orc-test-linux:24.18.0-git). tests/integration/worker/** run as uid 1000
-// (production worker uid; root bypasses the GIT_HOOKS_DIR read-only check); everything else runs as root.
+// the base image plus git (built once as orc-test-linux:24.18.0-git-cbm<CBM_VERSION>). tests/integration/worker/** run as uid 1000
+// (production worker uid; root bypasses the GIT_HOOKS_DIR read-only check); everything else
+// runs as root.
 //
 // - The repository is bind-mounted at /work; node_modules (and every nested node_modules the lockfile has) are
 //   NAMED Docker volumes, so the host's (Windows) node_modules are never seen or modified. `npm ci` runs in the
@@ -28,7 +29,16 @@ const CONTAINER_ROOT = '/work';
 const VOLUME_PREFIX = 'orc-test-linux';
 const RELAY_PORTS = [14331, 16380];
 const UPSTREAM_HOST = 'host.docker.internal';
-const TEST_IMAGE = 'orc-test-linux:24.18.0-git';
+const CBM_BIN = '/usr/local/bin/codebase-memory-mcp';
+/** Single source of truth: `ARG CBM_VERSION=` of the `cbm` stage in docker/Dockerfile. */
+export function readCbmVersion(dockerfileText) {
+  const m = /^ARG CBM_VERSION=(\S+)\s*$/m.exec(dockerfileText);
+  if (!m) throw new Error('ARG CBM_VERSION not found in docker/Dockerfile');
+  return m[1];
+}
+const CBM_VERSION = readCbmVersion(readFileSync(path.join(ROOT, 'docker', 'Dockerfile'), 'utf8'));
+const CBM_IMAGE = `orc-cbm:${CBM_VERSION}`;
+const TEST_IMAGE = `orc-test-linux:24.18.0-git-cbm${CBM_VERSION}`;
 const STAMP_FILE = 'node_modules/.orc-test-linux.stamp';
 
 /** Files whose POSIX/Linux branches are skipped on the Windows dev host. */
@@ -40,6 +50,7 @@ export const DEFAULT_TARGETS = [
   'tests/integration/sandbox/',
   'tests/integration/claude-runner/',
   'tests/integration/git-manager/foreign-owner.test.ts',
+  'tests/integration/mcp-manager/mcp-real.test.ts',
   'tests/unit/security/paths.test.ts',
   'tests/unit/sandbox/',
   'tests/unit/shared/',
@@ -72,8 +83,12 @@ function volumeName(dir) {
 /** The base image plus git (the worker/git-manager integration tests drive real git); built once, then cached. */
 function ensureTestImage() {
   if (docker(['image', 'inspect', TEST_IMAGE]).status === 0) return;
-  log(`building ${TEST_IMAGE} (${IMAGE} + git)`);
-  const dockerfile = `FROM ${IMAGE}\nRUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*\n`;
+  // The pinned, checksum-verified codebase-memory-mcp comes from the production Dockerfile's `cbm` stage (linux/amd64 only).
+  log(`building ${CBM_IMAGE} (docker/Dockerfile --target cbm)`);
+  const cbm = docker(['build', '-f', 'docker/Dockerfile', '--target', 'cbm', '-t', CBM_IMAGE, '.'], { cwd: ROOT, stdio: 'inherit' });
+  if (cbm.status !== 0) fail(`docker build ${CBM_IMAGE} failed (the CBM release asset exists for linux/amd64 only)`);
+  log(`building ${TEST_IMAGE} (${IMAGE} + git + codebase-memory-mcp ${CBM_VERSION})`);
+  const dockerfile = `FROM ${IMAGE}\nRUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*\nCOPY --from=${CBM_IMAGE} /out/codebase-memory-mcp ${CBM_BIN}\n`;
   const r = docker(['build', '-t', TEST_IMAGE, '-'], { input: dockerfile, stdio: ['pipe', 'inherit', 'inherit'] });
   if (r.status !== 0) fail(`docker build ${TEST_IMAGE} failed`);
 }
@@ -96,6 +111,12 @@ function runOnHost(vitestArgs) {
   const lockText = readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8');
   const volumes = [['node_modules', volumeName('node_modules')], ...nestedNodeModules(lockText).map((d) => [d, volumeName(d)])];
   const name = `${VOLUME_PREFIX}-${process.pid}`;
+  const flagEnv = ['ORC_TEST_REAP', 'ORC_TEST_LEAK_STRICT'].flatMap((k) => {
+    const v = process.env[k];
+    if (v === undefined) return [];
+    if (v !== '0' && v !== '1') fail(`${k} must be "0" or "1" (got ${JSON.stringify(v)})`);
+    return ['-e', `${k}=${v}`];
+  });
   const passEnv = ['ORC_TEST_SA_PASSWORD', 'ORC_TEST_REDIS_PASSWORD', 'NPM_CONFIG_REGISTRY'].filter(
     (k) => (process.env[k] ?? '').length > 0,
   );
@@ -118,7 +139,12 @@ function runOnHost(vitestArgs) {
     'CI=1',
     '-e',
     `ORC_TEST_LINUX_UPSTREAM=${UPSTREAM_HOST}`,
+    '-e',
+    `CODEBASE_MEMORY_MCP_BIN=${CBM_BIN}`,
+    '-e',
+    'ORC_REQUIRE_CBM=1',
     ...passEnv.flatMap((k) => ['-e', k]),
+    ...flagEnv,
     TEST_IMAGE,
     'node',
     'scripts/test-linux.mjs',

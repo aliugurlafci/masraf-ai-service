@@ -1,6 +1,8 @@
 // SANDBOX_MODE=local (development/test hosts incl. win32; contract §10.11): same interface as the
-// runner client, current user, no isolation. Requests are validated exactly like the runner does so
-// a caller that works locally also passes the runner's checks.
+// runner client, current user, no isolation. Requests get the runner's key, path, cwd, env-key and
+// argv checks, with one deliberate exception: the lease-containment check for path-valued env
+// (`validateSpawnEnvPaths`) is not applied. CBM_RUNTIME_DIR is only checked for kind (`mcp`) and for
+// being absolute, because local mode uses a per-cache temp dir outside the lease (ADR-0032).
 import { spawn as nodeSpawn } from 'node:child_process';
 import { realpath as fsRealpath } from 'node:fs/promises';
 import path from 'node:path';

@@ -1,11 +1,15 @@
-import { existsSync } from 'node:fs';
-import { mkdir, symlink, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { constants, existsSync } from 'node:fs';
+import type { BigIntStats, PathLike, StatOptions, Stats } from 'node:fs';
+import { lstat, mkdir, symlink, writeFile } from 'node:fs/promises';
+import type * as FsPromises from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMcpManager, McpError } from '@orc/mcp-manager';
 import { LEASE_KEY_REGEX, validateSpawnEnv } from '@orc/sandbox';
 import type { IndexScope, McpManager, McpManagerConfig } from '@orc/mcp-manager';
 import { isOrcError } from '@orc/shared';
+import { CBM_SOCKET_PATH_MAX_BYTES } from '@orc/shared/node';
 import type { LaunchLease } from '@orc/shared/node';
 import { createTestLauncher } from '../../helpers/mcp/local-launcher';
 import type { TestLauncher } from '../../helpers/mcp/local-launcher';
@@ -24,6 +28,40 @@ const TASK_ID = 'f00dbabe-2222-4333-8444-555566667777';
 const ATTEMPT_ID = 'abcdef01-3333-4444-8555-666677778888';
 const WORKSPACE_ID = '12345678-4444-4555-8666-777788889999';
 const SHA = '0123456789abcdef0123456789abcdef01234567';
+
+// B-014: the runtime dir checks read lstat; tests forge its result for chosen paths, every other path (and
+// every other module of this file's graph) reads the real file system.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  return { ...actual, lstat: vi.fn(actual.lstat) };
+});
+const realLstat = (await vi.importActual<typeof FsPromises>('node:fs/promises')).lstat;
+const lstatMock = vi.mocked(lstat);
+
+const ORIGINAL_GETUID = Object.getOwnPropertyDescriptor(process, 'getuid');
+
+/** Pins process.getuid (absent on win32, so the POSIX checks run on every host). */
+function stubUid(uid: number): void {
+  Object.defineProperty(process, 'getuid', { value: () => uid, configurable: true, writable: true });
+}
+
+function restoreUid(): void {
+  if (ORIGINAL_GETUID === undefined) Reflect.deleteProperty(process, 'getuid');
+  else Object.defineProperty(process, 'getuid', ORIGINAL_GETUID);
+}
+
+/** Points os.tmpdir() at `dir` (POSIX reads TMPDIR, win32 TEMP/TMP). */
+function stubTmpdir(dir: string): void {
+  vi.stubEnv('TMPDIR', dir);
+  vi.stubEnv('TEMP', dir);
+  vi.stubEnv('TMP', dir);
+}
+
+function runtimeDirOf(c: Ctx): string {
+  const dir = c.manager.claudeMcpConfig(c.workspace).mcpServers['codebase-memory-mcp'].env['CBM_RUNTIME_DIR'];
+  if (dir === undefined) throw new Error('CBM_RUNTIME_DIR missing');
+  return dir;
+}
 
 interface Ctx {
   tmp: TempRoot;
@@ -152,9 +190,157 @@ describe('naming and isolation (§12.3)', () => {
     const local = ctx.manager.claudeMcpConfig(ctx.workspace).mcpServers['codebase-memory-mcp'].env;
     expect(local['CBM_RUNTIME_DIR']).toBeTypeOf('string');
     expect(local['CBM_RUNTIME_DIR']).not.toBe(ctx.manager.cacheDir(ctx.workspace));
+    // Local layout (B-014): <os.tmpdir()>/orc-cbm-rt-<uid>/<16 hex of the cache> on POSIX, no uid suffix on
+    // win32; stable for one cache, distinct per cache.
+    const rt = runtimeDirOf(ctx);
+    const uid = process.getuid?.();
+    expect(dirname(dirname(rt))).toBe(tmpdir());
+    expect(basename(dirname(rt))).toBe(uid === undefined ? 'orc-cbm-rt' : `orc-cbm-rt-${uid}`);
+    expect(basename(rt)).toMatch(/^[0-9a-f]{16}$/);
+    expect(runtimeDirOf(ctx)).toBe(rt);
+    const other = { ...ctx, workspace: { ...ctx.workspace, workspaceId: '22345678-4444-4555-8666-777788889999' } };
+    expect(dirname(runtimeDirOf(other))).toBe(dirname(rt));
+    expect(runtimeDirOf(other)).not.toBe(rt);
     // The launcher accepts exactly these keys for kind `mcp` in both modes.
     expect(() => validateSpawnEnv('mcp', env)).not.toThrow();
     expect(() => validateSpawnEnv('mcp', local)).not.toThrow();
+  });
+});
+
+describe('local runtime dir ownership (B-014, CWE-377)', () => {
+  const UID = 4242;
+  const FOREIGN_UID = 4343;
+  const PRIVATE_DIR = constants.S_IFDIR | 0o700;
+  interface Forge {
+    uid: number;
+    mode: number;
+  }
+  interface Rules {
+    parent?: Forge;
+    runtime?: Forge;
+  }
+  const GOOD: Forge = { uid: UID, mode: PRIVATE_DIR };
+  let parent: string;
+
+  /** lstat answers `rules.parent` for the runtime parent and `rules.runtime` for every entry below it. */
+  function forgeLstat(rules: Rules): void {
+    const impl = async (p: PathLike, opts?: StatOptions): Promise<Stats | BigIntStats> => {
+      const st = await realLstat(p, opts);
+      const path = String(p);
+      const rule = path === parent ? rules.parent : dirname(path) === parent ? rules.runtime : undefined;
+      return rule === undefined ? st : Object.assign(st, rule);
+    };
+    lstatMock.mockImplementation(impl);
+  }
+
+  beforeEach(() => {
+    lstatMock.mockClear();
+    stubTmpdir(ctx.tmp.root);
+    stubUid(UID);
+    parent = dirname(runtimeDirOf(ctx));
+  });
+
+  afterEach(() => {
+    lstatMock.mockImplementation(realLstat);
+    restoreUid();
+    vi.unstubAllEnvs();
+  });
+
+  const cases: { name: string; rules: Rules; role: 'parent' | 'runtime'; reason: string }[] = [
+    {
+      name: 'a parent owned by another uid',
+      rules: { parent: { uid: FOREIGN_UID, mode: PRIVATE_DIR } },
+      role: 'parent',
+      reason: 'foreign_owner',
+    },
+    {
+      name: 'a symlinked parent',
+      rules: { parent: { uid: UID, mode: constants.S_IFLNK | 0o777 } },
+      role: 'parent',
+      reason: 'symlink',
+    },
+    {
+      name: 'a 0755 parent',
+      rules: { parent: { uid: UID, mode: constants.S_IFDIR | 0o755 } },
+      role: 'parent',
+      reason: 'group_or_other_access',
+    },
+    {
+      name: 'a runtime dir owned by another uid',
+      rules: { parent: GOOD, runtime: { uid: FOREIGN_UID, mode: PRIVATE_DIR } },
+      role: 'runtime',
+      reason: 'foreign_owner',
+    },
+  ];
+
+  it.each(cases)('fails closed on $name before any MCP server spawn', async ({ rules, role, reason }) => {
+    forgeLstat(rules);
+    const message = new RegExp(`runtime ${role} directory is not private to uid ${UID} \\(${reason}\\)`);
+    // task_index under the attempt lease: the operation that runs before Claude starts
+    const lease = await attemptLease(ctx);
+    const out = await ctx.manager.index(ctx.workspace, { mode: 'fast', kind: 'task_index', lease });
+    expect(out).toMatchObject({
+      status: 'failed',
+      errorCode: 'mcp_unavailable',
+      result: { error: { code: 'mcp_unavailable', reason: 'path_escape' } },
+    });
+    expect(out.errorMessage).toMatch(message);
+    // deleteIndex of an existing cache: the MCP part fails (warning), the cache is still removed
+    const cache = ctx.manager.cacheDir(ctx.project);
+    await mkdir(cache, { recursive: true });
+    await ctx.manager.deleteIndex(ctx.project);
+    expect(ctx.recorder.finished.at(-1)?.outcome).toMatchObject({
+      status: 'succeeded',
+      result: { warning: { code: 'mcp_unavailable', message: expect.stringMatching(message) as unknown } },
+    });
+    expect(existsSync(cache)).toBe(false);
+    expect((await ctx.manager.probe()).ok).toBe(false);
+    expect(ctx.factory.connects).toEqual([]);
+    expect(ctx.factory.calls).toEqual([]);
+    expect(ctx.launcher.spawns).toEqual([]);
+    expect(ctx.launcher.leases.map((l) => l.key)).toEqual([`attempt-${ATTEMPT_ID}`]);
+  });
+
+  it('checks the parent, then the runtime dir, and starts the server when both are private', async () => {
+    forgeLstat({ parent: GOOD, runtime: GOOD });
+    const lease = await attemptLease(ctx);
+    const out = await ctx.manager.index(ctx.workspace, { mode: 'fast', kind: 'task_index', lease });
+    expect(out).toMatchObject({ status: 'succeeded', errorCode: null });
+    const rt = runtimeDirOf(ctx);
+    expect(parent).toBe(join(ctx.tmp.root, `orc-cbm-rt-${UID}`));
+    expect(dirname(rt)).toBe(parent);
+    expect(existsSync(rt)).toBe(true);
+    const checked = lstatMock.mock.calls.map(([p]) => String(p)).filter((p) => p === parent || dirname(p) === parent);
+    expect(checked).toEqual([parent, rt]);
+    expect(ctx.factory.connects).toHaveLength(1);
+    expect(ctx.factory.connects[0]?.env['CBM_RUNTIME_DIR']).toBe(rt);
+  });
+
+  it('does not remove a runtime dir through a parent it does not own', async () => {
+    forgeLstat({ parent: GOOD, runtime: GOOD });
+    const lease = await attemptLease(ctx);
+    await ctx.manager.index(ctx.workspace, { mode: 'fast', kind: 'task_index', lease });
+    const rt = runtimeDirOf(ctx);
+    expect(existsSync(rt)).toBe(true);
+    forgeLstat({ parent: { uid: UID, mode: constants.S_IFLNK | 0o777 } });
+    await ctx.manager.deleteIndex(ctx.workspace, { lease });
+    expect(existsSync(ctx.manager.cacheDir(ctx.workspace))).toBe(false);
+    expect(existsSync(rt)).toBe(true);
+  });
+
+  it('fits the daemon socket below /tmp for the longest uid (ADR-0035, sun_path)', () => {
+    const MAX_UID = 4_294_967_295;
+    stubTmpdir('/tmp');
+    stubUid(MAX_UID);
+    const rt = runtimeDirOf(ctx);
+    expect(basename(dirname(rt))).toBe(`orc-cbm-rt-${MAX_UID}`);
+    // codebase-memory-mcp (Linux) binds <CBM_RUNTIME_DIR>/cbm-daemon-<uid>/cbm-<16 hex>.sock
+    const socketBytes =
+      Buffer.byteLength(rt, 'utf8') + `/cbm-daemon-${MAX_UID}`.length + '/cbm-'.length + 16 + '.sock'.length;
+    expect(socketBytes).toBe(91);
+    expect(socketBytes).toBeLessThanOrEqual(CBM_SOCKET_PATH_MAX_BYTES);
+    // headroom: os.tmpdir() may be at most 20 bytes long
+    expect(CBM_SOCKET_PATH_MAX_BYTES - (socketBytes - '/tmp'.length)).toBe(20);
   });
 });
 

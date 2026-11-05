@@ -311,7 +311,12 @@ describe('loadWorkerConfig', () => {
     expect(() =>
       loadWorkerConfig(workerEnv({ MCP_ENABLED: 'false', MCP_REQUIRED: 'true' })),
     ).toThrow(/MCP_REQUIRED/);
-    const prod = workerEnv({ NODE_ENV: 'production', REDIS_PASSWORD: 'r' });
+    // Compose value (22 B): runner mode bounds the CBM_CACHE_DIR root to 26 B on POSIX (ADR-0035).
+    const prod = workerEnv({
+      NODE_ENV: 'production',
+      REDIS_PASSWORD: 'r',
+      CBM_CACHE_DIR: '/var/lib/orc/cbm-cache',
+    });
     expect(() => loadWorkerConfig(prod)).toThrow(/HTTPS_PROXY/);
     expect(
       loadWorkerConfig({
@@ -321,6 +326,22 @@ describe('loadWorkerConfig', () => {
       }).httpsProxy,
     ).toBe('http://egress-proxy:3128');
   });
+
+  // The socket-path check is skipped on win32 (config.ts: process.platform !== 'win32').
+  it.skipIf(process.platform === 'win32')(
+    'rejects a 27 B CBM_CACHE_DIR root in runner mode (POSIX only; check skipped on win32)',
+    () => {
+      const env = workerEnv({
+        NODE_ENV: 'production',
+        REDIS_PASSWORD: 'r',
+        HTTPS_PROXY: 'http://egress-proxy:3128',
+        EGRESS_PROXY_TOKEN: 'A'.repeat(32),
+      });
+      expect(() =>
+        loadWorkerConfig({ ...env, CBM_CACHE_DIR: '/var/lib/orc/cbm-cache12345' }),
+      ).toThrow(/CBM_CACHE_DIR.*at most 26 bytes/);
+    },
+  );
 });
 
 describe('loadEgressProxyConfig and loadDbCliConfig', () => {

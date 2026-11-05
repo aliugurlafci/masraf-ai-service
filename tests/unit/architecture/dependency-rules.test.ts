@@ -112,8 +112,6 @@ describe('contract §1.2 table', () => {
 });
 
 describe.each(WORKSPACES)('$name ($dir)', (pkg) => {
-  const pending = isPackageNameStub(pkg);
-
   it('has sources under src/', () => {
     expect(pkg.sources.length).toBeGreaterThan(0);
   });
@@ -130,25 +128,13 @@ describe.each(WORKSPACES)('$name ($dir)', (pkg) => {
     expect(undeclaredImportViolations(pkg)).toEqual([]);
   });
 
-  it.skipIf(pending)(
-    pending
-      ? 'declares no unused @orc dependency (pending: sources are still the PACKAGE_NAME stub)'
-      : 'declares no unused @orc dependency',
-    () => {
-      expect(unusedDependencyViolations(pkg)).toEqual([]);
-    },
-  );
+  it('declares no unused @orc dependency', () => {
+    expect(unusedDependencyViolations(pkg)).toEqual([]);
+  });
 });
 
-it('reports the packages whose unused-dependency check is pending', () => {
-  const pendingSet = new Set(PENDING);
-  const active = WORKSPACES.filter((w) => !pendingSet.has(w.name)).map((w) => w.name);
-  process.stdout.write(
-    `[architecture] unused @orc dependency check pending (PACKAGE_NAME stub): ${
-      PENDING.length > 0 ? PENDING.join(', ') : 'none'
-    }\n[architecture] unused @orc dependency check active: ${active.join(', ')}\n`,
-  );
-  expect(PENDING.length + active.length).toBe(WORKSPACES.length);
+it('no workspace is a PACKAGE_NAME stub (the unused-dependency check runs for every package)', () => {
+  expect(PENDING).toEqual([]);
 });
 
 // ---- the analyzer itself, against synthetic sources -----------------------------------

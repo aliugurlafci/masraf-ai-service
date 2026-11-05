@@ -11,6 +11,12 @@ const claudeLiveEnabled = isClaudeLiveEnabled(process.env);
 // §18.2: guard + drop/recreate orchestrator_test via orc-db bootstrap, migrate and seed. Shared by every
 // infrastructure project of one run (prepared once, released after the last project).
 const GLOBAL_INFRA = 'tests/setup/global-infra.ts';
+// B-005 leak guard: snapshot after GLOBAL_INFRA, diff/report (ORC_TEST_REAP=1 reaps, ORC_TEST_LEAK_STRICT=1 fails)
+// before GLOBAL_INFRA releases (teardowns run in reverse order). Shared by the infrastructure projects of one run.
+const LEAK_GUARD = 'tests/setup/global-teardown.ts';
+const INFRA_GLOBAL_SETUP = [GLOBAL_INFRA, LEAK_GUARD];
+// Records each worker's PID and time window in the file task meta (Windows orphan attribution of the leak guard).
+const LEAK_WORKER = 'tests/setup/leak-worker.ts';
 
 const projects: TestProjectInlineConfiguration[] = [
   {
@@ -31,7 +37,8 @@ const projects: TestProjectInlineConfiguration[] = [
       name: 'integration',
       environment: 'node',
       include: ['tests/integration/**/*.test.ts'],
-      globalSetup: [GLOBAL_INFRA],
+      globalSetup: INFRA_GLOBAL_SETUP,
+      setupFiles: [LEAK_WORKER],
       fileParallelism: false,
       testTimeout: 120_000,
       hookTimeout: 120_000,
@@ -43,7 +50,8 @@ const projects: TestProjectInlineConfiguration[] = [
       name: 'api',
       environment: 'node',
       include: ['tests/api/**/*.test.ts'],
-      globalSetup: [GLOBAL_INFRA],
+      globalSetup: INFRA_GLOBAL_SETUP,
+      setupFiles: [LEAK_WORKER],
       fileParallelism: false,
       testTimeout: 60_000,
       hookTimeout: 120_000,
@@ -55,7 +63,8 @@ const projects: TestProjectInlineConfiguration[] = [
       name: 'security',
       environment: 'node',
       include: ['tests/security/**/*.test.ts'],
-      globalSetup: [GLOBAL_INFRA],
+      globalSetup: INFRA_GLOBAL_SETUP,
+      setupFiles: [LEAK_WORKER],
       fileParallelism: false,
       testTimeout: 60_000,
       hookTimeout: 120_000,
@@ -67,7 +76,8 @@ const projects: TestProjectInlineConfiguration[] = [
       name: 'e2e',
       environment: 'node',
       include: ['tests/e2e/**/*.test.ts'],
-      globalSetup: [GLOBAL_INFRA],
+      globalSetup: INFRA_GLOBAL_SETUP,
+      setupFiles: [LEAK_WORKER],
       fileParallelism: false,
       testTimeout: 300_000,
       hookTimeout: 300_000,
@@ -93,7 +103,8 @@ if (claudeLiveEnabled) {
       environment: 'node',
       include: ['tests/claude-live/**/*.test.ts'],
       // The opt-in guard runs first so a run without CLAUDE_LIVE=1 aborts before touching infrastructure.
-      globalSetup: ['tests/setup/claude-live-guard.ts', GLOBAL_INFRA],
+      globalSetup: ['tests/setup/claude-live-guard.ts', ...INFRA_GLOBAL_SETUP],
+      setupFiles: [LEAK_WORKER],
       fileParallelism: false,
       testTimeout: 900_000,
       hookTimeout: 300_000,

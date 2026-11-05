@@ -1,6 +1,6 @@
 // McpManager: per-operation codebase-memory-mcp sessions, deterministic index naming, typed outcomes
 // recorded through McpOperationRecorder (contract §2.7, §12).
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, rm, stat } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { GUID_REGEX, OrcError, isOrcError, shortKey, systemClock } from '@orc/shared';
@@ -91,6 +91,45 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+/** Local-mode runtime parent below the OS temp dir; POSIX appends `-<uid>` (B-014). */
+const LOCAL_RUNTIME_PARENT = 'orc-cbm-rt';
+/** A private directory grants nothing to group or other. */
+const GROUP_OTHER_BITS = 0o077;
+
+/**
+ * uid of this process on POSIX; null on win32 (Node has no process.getuid there). win32 therefore gets
+ * neither the uid suffix nor the owner/mode check of `assertPrivateDir`: NTFS ACLs, not POSIX mode bits,
+ * decide access, and %TEMP% is per user for an interactive account but may be shared under a service
+ * account (e.g. C:\Windows\Temp), so a win32 worker needs an account with a private %TEMP%.
+ */
+function processUid(): number | null {
+  return typeof process.getuid === 'function' ? process.getuid() : null;
+}
+
+function localRuntimeParent(uid: number | null): string {
+  return join(tmpdir(), uid === null ? LOCAL_RUNTIME_PARENT : `${LOCAL_RUNTIME_PARENT}-${uid}`);
+}
+
+/**
+ * B-014 (CWE-377): the local runtime dirs live in the shared OS temp dir, where another account can create
+ * the parent first or plant a symlink and so receive the daemon sockets. mkdir follows symlinks and leaves an
+ * existing directory's owner and mode alone, so every directory is checked after mkdir: a real directory
+ * (lstat, never a link), owned by this uid, without group/other bits. Fail-closed: no chmod repair and no
+ * fallback location; the operation fails before any codebase-memory-mcp process starts.
+ */
+async function assertPrivateDir(path: string, uid: number, role: 'parent' | 'runtime'): Promise<void> {
+  const st = await lstat(path);
+  let reason: string | null = null;
+  if (!(st.isDirectory() && !st.isSymbolicLink())) reason = st.isSymbolicLink() ? 'symlink' : 'not_directory';
+  else if (st.uid !== uid) reason = 'foreign_owner';
+  else if ((st.mode & GROUP_OTHER_BITS) !== 0) reason = 'group_or_other_access';
+  if (reason !== null) {
+    throw new PathEscapeError(`MCP runtime ${role} directory is not private to uid ${uid} (${reason}): ${path}`, {
+      details: { role, reason },
+    });
+  }
+}
+
 export function createMcpManager(cfg: McpManagerConfig, deps: McpManagerDeps): McpManager {
   const clock = deps.clock ?? systemClock;
   const logger = deps.logger;
@@ -153,21 +192,40 @@ export function createMcpManager(cfg: McpManagerConfig, deps: McpManagerDeps): M
    * codebase-memory-mcp v0.12.0 joins the daemon of its runtime dir (default: account-wide) and refuses
    * to start when that daemon serves another CBM_CACHE_DIR (a developer's own session or a concurrent
    * operation on another scope), so every cache gets its own runtime dir (CBM_RUNTIME_DIR, accepted by
-   * the launcher for kind `mcp` only). Local mode: a short per-cache dir below the OS temp dir (socket
-   * path length; removed with the cache). Runner mode: the leased cache dir itself — the only per-cache
-   * directory the sandbox uid can write (the runner rejects a runtime dir outside the lease).
+   * the launcher for kind `mcp` only). Local mode: a short per-cache dir
+   * `<os.tmpdir()>/orc-cbm-rt-<uid>/<16 hex>` (win32: `orc-cbm-rt`, no uid) below the OS temp dir (socket
+   * path length; removed with the cache; owner and mode verified by `prepareLocalRuntimeDir`). Runner mode:
+   * the leased cache dir itself — the only per-cache directory the sandbox uid can write (the runner rejects
+   * a runtime dir outside the lease).
    */
   function runtimeDir(cache: string): string {
-    return localMode ? localRuntimeDir(cache) : cache;
+    return localMode ? localRuntimeDir(cache, processUid()) : cache;
   }
 
-  function localRuntimeDir(cache: string): string {
-    return join(tmpdir(), 'orc-cbm-rt', sha256(cache).toString('hex').slice(0, 16));
+  function localRuntimeDir(cache: string, uid: number | null): string {
+    return join(localRuntimeParent(uid), sha256(cache).toString('hex').slice(0, 16));
+  }
+
+  /** Creates and verifies the parent before creating anything below it, then the per-cache dir (B-014). */
+  async function prepareLocalRuntimeDir(cache: string): Promise<void> {
+    const uid = processUid();
+    const parent = localRuntimeParent(uid);
+    await mkdir(parent, { recursive: true, mode: CACHE_DIR_MODE });
+    if (uid !== null) await assertPrivateDir(parent, uid, 'parent');
+    const dir = localRuntimeDir(cache, uid);
+    await mkdir(dir, { recursive: true, mode: CACHE_DIR_MODE });
+    if (uid !== null) await assertPrivateDir(dir, uid, 'runtime');
   }
 
   async function removeLocalRuntimeDir(cache: string): Promise<void> {
     try {
-      await rm(localRuntimeDir(cache), RM_OPTIONS);
+      const uid = processUid();
+      // rm resolves the parent: never remove through a parent this uid does not own (B-014)
+      if (uid !== null) {
+        if (!(await pathExists(localRuntimeParent(uid)))) return;
+        await assertPrivateDir(localRuntimeParent(uid), uid, 'parent');
+      }
+      await rm(localRuntimeDir(cache, uid), RM_OPTIONS);
     } catch (e) {
       logger.warn({ source: 'mcp', err: serializeError(e) }, 'MCP runtime dir removal failed');
     }
@@ -198,9 +256,14 @@ export function createMcpManager(cfg: McpManagerConfig, deps: McpManagerDeps): M
         };
   }
 
+  /**
+   * Runs before every codebase-memory-mcp spawn of this manager (operations, deleteIndex, probe), so the
+   * task_index of an attempt verifies the runtime dir Claude's own MCP server later uses (`claudeMcpConfig`
+   * is synchronous and checks nothing).
+   */
   async function prepareDirs(cache: string, mustCreateCache: boolean): Promise<void> {
     if (mustCreateCache || localMode) await mkdir(cache, { recursive: true, mode: CACHE_DIR_MODE });
-    if (localMode) await mkdir(localRuntimeDir(cache), { recursive: true, mode: CACHE_DIR_MODE });
+    if (localMode) await prepareLocalRuntimeDir(cache);
   }
 
   async function acquireOpLease(key: string, paths: string[]): Promise<LaunchLease> {

@@ -71,12 +71,10 @@ describe('test environment (tests/setup/test-env.ts)', () => {
     ).toEqual({ A: '1', B: 'two', C: 'q u', D: 's', E: '' });
   });
 
-  it.skipIf(!existsSync(ENV_EXAMPLE))(
-    'tests/.env.test.example documents exactly the test-only defaults',
-    () => {
-      expect(parseEnvFile(readFileSync(ENV_EXAMPLE, 'utf8'))).toEqual(testEnvDefaults({}));
-    },
-  );
+  it('tests/.env.test.example documents exactly the test-only defaults', () => {
+    expect(existsSync(ENV_EXAMPLE), `${ENV_EXAMPLE} must exist`).toBe(true);
+    expect(parseEnvFile(readFileSync(ENV_EXAMPLE, 'utf8'))).toEqual(testEnvDefaults({}));
+  });
 });
 
 describe('sharedRun (one global-infra preparation per vitest process)', () => {

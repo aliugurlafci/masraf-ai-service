@@ -87,3 +87,14 @@ Run it again with `--keep` to inspect: the containers, volumes and the temporary
 until you run `docker compose -p orc-smoke down -v`. The `orc-smoke` project uses ports 18443 and 18088
 and image tag `smoke`, so it does not touch a regular `orc` stack. If ports are taken, use `--https-port`
 and `--http-port`. If an earlier `--keep` run still exists, the script refuses to start.
+
+## `npm run test:linux` ve codebase-memory-mcp (CBM)
+
+`npm run test:linux` Linux test imajını (`orc-test-linux:24.18.0-git-cbm<CBM_VERSION>`) ilk kullanımda üretir:
+önce `docker build -f docker/Dockerfile --target cbm -t orc-cbm:<CBM_VERSION> .` (checksum doğrulamalı indirme),
+sonra ikili `/usr/local/bin/codebase-memory-mcp` olarak test imajına kopyalanır. `<CBM_VERSION>` tek kaynaktan,
+`docker/Dockerfile` içindeki `ARG CBM_VERSION` satırından okunur; sürüm değişince etiket değişir ve imaj yeniden üretilir.
+Konteynere `CODEBASE_MEMORY_MCP_BIN` ve `ORC_REQUIRE_CBM=1` geçirilir (ikili yoksa `cbm-anchor` ve `mcp-real` testleri FAIL verir).
+
+Kısıt: CBM release asset'i yalnızca linux/amd64 için vardır. arm64 Docker host'ta `--target cbm` build'i başarısız olur
+ve `test:linux` bu nedenle çalışmaz; amd64 host veya amd64 emülasyonu gerekir.

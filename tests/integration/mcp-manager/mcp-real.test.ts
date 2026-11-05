@@ -1,5 +1,5 @@
 // mcp-real: @orc/mcp-manager against the REAL codebase-memory-mcp binary (contract §12, §18.1, §18.5).
-// Binary: CODEBASE_MEMORY_MCP_BIN, else `codebase-memory-mcp` on PATH. Skipped only when it is absent.
+// Binary: CODEBASE_MEMORY_MCP_BIN, else `codebase-memory-mcp` on PATH. Skipped only when it is absent, unless ORC_REQUIRE_CBM=1 (then FAIL).
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -14,6 +14,8 @@ import {
   createMemoryRecorder,
   createTempRoot,
   createTestLogger,
+  isCbmRequired,
+  missingCbmError,
   resolveRealCbmBinary,
 } from '../../helpers/mcp/support';
 import type { MemoryRecorder, TempRoot } from '../../helpers/mcp/support';
@@ -91,6 +93,15 @@ function asRecord(v: unknown): Record<string, unknown> {
   expect(v).not.toBeNull();
   return v as Record<string, unknown>;
 }
+
+const REQUIRED = isCbmRequired();
+
+// ORC_REQUIRE_CBM=1: an absent binary fails loudly instead of skipping silently.
+describe.runIf(REQUIRED && BIN === null)('mcp-real (ORC_REQUIRE_CBM=1)', () => {
+  it('finds the codebase-memory-mcp binary', () => {
+    throw missingCbmError();
+  });
+});
 
 describe.skipIf(BIN === null)(`mcp-real (${SKIP_REASON})`, () => {
   let tmp: TempRoot;

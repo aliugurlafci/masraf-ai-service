@@ -23,6 +23,7 @@ import {
 } from '@orc/sandbox';
 import type { SupervisedProcess } from '@orc/shared/node';
 import { OP_ID, silentLogger } from '../../helpers/sandbox/fakes';
+import { isCbmRequired, missingCbmError } from '../../helpers/mcp/support';
 import { makeRoots, type SandboxRoots } from '../../helpers/sandbox/roots';
 
 const IS_LINUX_ROOT =
@@ -273,6 +274,11 @@ describe.skipIf(!IS_LINUX_ROOT)(
       // Release reclaimed the cache to the worker; the anchors are untouched by lease handoff/reclaim.
       expect(lstatSync(layout.cache).uid).toBe(WORKER_UID);
       expect(lstatSync(layout.structure).uid).toBe(0);
+    });
+
+    // ORC_REQUIRE_CBM=1 on Linux root: a missing binary fails loudly instead of skipping silently.
+    it.runIf(isCbmRequired() && CBM_BIN === null)('the real codebase-memory-mcp binary is present', () => {
+      throw missingCbmError();
     });
 
     it.skipIf(CBM_BIN === null)(

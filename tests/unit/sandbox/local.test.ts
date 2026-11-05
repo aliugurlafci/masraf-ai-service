@@ -1,7 +1,8 @@
 // SANDBOX_MODE=local launcher (all platforms): same validation as the runner, current user.
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createLocalLauncher } from '@orc/sandbox';
+import { createLocalLauncher, validateSpawnEnvPaths } from '@orc/sandbox';
 import { OrcError } from '@orc/shared';
 import { ATTEMPT_ID, ATTEMPT_ID_2, OP_ID, silentLogger } from '../../helpers/sandbox/fakes';
 import { makeRoots, type SandboxRoots } from '../../helpers/sandbox/roots';
@@ -153,5 +154,58 @@ describe('createLocalLauncher', () => {
     await launcher.close();
     expect(await reason(second.renew())).toEqual(['process_spawn_failed', 'lease_expired']);
     expect(await reason(launcher.acquire(req))).toEqual(['process_spawn_failed', 'closed']);
+  });
+
+  it('local mode by design: CBM_RUNTIME_DIR may lie outside the lease (mcp-manager per-cache temp dir), absolute and mcp-only', async () => {
+    const r = roots();
+    const a = r.attemptPaths('t4');
+    // Shape of the mcp-manager local runtime dir `<tmpdir>/orc-cbm-rt/<16 hex>`: outside every lease path.
+    const runtimeDir = join(r.base, 'orc-cbm-rt', '0123456789abcdef');
+    mkdirSync(runtimeDir, { recursive: true });
+    const paths = [a.worktree, a.cache];
+    // The runner-side check rejects exactly this value; the local launcher deliberately does not apply it.
+    expect((await reason(validateSpawnEnvPaths({ CBM_RUNTIME_DIR: runtimeDir }, paths)))[1]).toBe(
+      'env_rejected',
+    );
+    const launcher = createLocalLauncher({ logger: silentLogger(), killGraceMs: 200 });
+    const lease = await launcher.acquire({
+      key: `op-${OP_ID}`,
+      attemptId: null,
+      workerId: 'w',
+      paths,
+    });
+    const cbm = {
+      CBM_CACHE_DIR: a.cache,
+      CBM_ALLOWED_ROOT: a.worktree,
+      CBM_LOG_LEVEL: 'warn',
+      CBM_RUNTIME_DIR: runtimeDir,
+    };
+    const spec = {
+      kind: 'mcp' as const,
+      cmd: NODE,
+      args: ['-e', 'process.stdout.write(process.env.CBM_RUNTIME_DIR ?? "")'],
+      cwd: a.worktree,
+      env: { ...ENV, ...cbm },
+    };
+    const proc = await launcher.spawn(lease, spec);
+    const chunks: Buffer[] = [];
+    proc.stdout.on('data', (d: Buffer) => chunks.push(d));
+    expect((await proc.exited).exitCode).toBe(0);
+    expect(Buffer.concat(chunks).toString()).toBe(runtimeDir);
+
+    expect(
+      await reason(
+        launcher.spawn(lease, { ...spec, env: { ...ENV, ...cbm, CBM_RUNTIME_DIR: 'rel/rt' } }),
+      ),
+    ).toEqual(['unsafe_argument', 'env_rejected']);
+    for (const kind of ['claude', 'test'] as const) {
+      expect(
+        await reason(
+          launcher.spawn(lease, { ...spec, kind, env: { ...ENV, CBM_RUNTIME_DIR: runtimeDir } }),
+        ),
+        kind,
+      ).toEqual(['unsafe_argument', 'env_rejected']);
+    }
+    await launcher.close();
   });
 });

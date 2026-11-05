@@ -123,9 +123,21 @@ export function validateLeaseKey(key: string): void {
   }
 }
 
+/** Same filesystem root (`/`; win32: drive, UNC `\\server\share\`, `\\?\` or `\\.\` namespace; case-insensitive). */
+function sameRoot(a: string, b: string): boolean {
+  const ra = path.parse(a).root;
+  const rb = path.parse(b).root;
+  return path.sep === '\\' ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+}
+
 /** True when `child` equals `parent` or lies below it (separator boundary; case-insensitive on win32). */
 export function isPathInside(parent: string, child: string): boolean {
-  const rel = path.relative(parent, child);
+  const p = path.resolve(parent);
+  const c = path.resolve(child);
+  // win32 `path.relative` drops leading separators before comparing, so the UNC path `\\C:\x\y`
+  // (server `C:`) would count as inside `C:\x`. Paths on different roots never nest.
+  if (!sameRoot(p, c)) return false;
+  const rel = path.relative(p, c);
   if (rel === '') return true;
   if (path.isAbsolute(rel)) return false;
   return rel !== '..' && !rel.startsWith(`..${path.sep}`);

@@ -231,6 +231,105 @@ describe('path rules', () => {
       'path_rejected',
     );
   });
+
+  // Windows path forms built from backslashes so the same strings exist on every platform. The
+  // pass-through realpath models a resolver that returns the target unchanged (an existing share or
+  // device path): containment alone must then reject everything that is not below the lease.
+  const BS = '\\';
+  const asIs = (p: string): Promise<string> => Promise.resolve(p);
+  const winParts = (lease: string): { drive: string; other: string; tail: string } => {
+    const hasDrive = /^[A-Za-z]:/.test(lease);
+    const drive = hasDrive ? lease.slice(0, 2) : 'C:';
+    return {
+      drive,
+      other: drive.toUpperCase() === 'D:' ? 'E:' : 'D:',
+      tail: hasDrive ? lease.slice(2) : lease.replaceAll('/', BS),
+    };
+  };
+
+  it('rejects UNC, \\\\?\\ and \\\\.\\ prefixed and other-drive targets on every platform', async () => {
+    const { drive, other, tail } = winParts(a.worktree);
+    const targets = [
+      `${BS}${BS}server${BS}share${BS}x`,
+      `${BS}${BS}server${BS}share${tail}${BS}src`,
+      `${BS}${BS}?${BS}UNC${BS}server${BS}share${BS}x`,
+      `${BS}${BS}.${BS}UNC${BS}server${BS}share${BS}x`,
+      `${BS}${BS}?${BS}${other}${BS}x`,
+      `${BS}${BS}.${BS}${other}${BS}x`,
+      `${BS}${BS}.${BS}pipe${BS}x`,
+      `${BS}${BS}?${BS}GLOBALROOT${BS}Device${BS}x`,
+      // Not canonicalized by the resolver: a verbatim/device spelling of the lease itself fails closed.
+      `${BS}${BS}?${BS}${a.worktree}${BS}src`,
+      `${BS}${BS}.${BS}${a.worktree}${BS}src`,
+      `${other}${BS}x`,
+      `${other}${tail}${BS}src`,
+      // UNC share on a server named like the lease drive (`\\C:\...`): another root, never inside `C:\...`.
+      `${BS}${BS}${drive}${tail}${BS}src`,
+      `//${drive}${tail.replaceAll(BS, '/')}/src`,
+    ];
+    for (const t of targets) {
+      expect(await reasonOf(resolveInLease(t, [a.worktree], asIs)), t).toBe('cwd_rejected');
+      expect(await reasonOf(resolveInLease(t, [a.worktree], asIs, 'path_rejected')), t).toBe(
+        'path_rejected',
+      );
+    }
+    // Control: the pass-through resolver accepts a plain path below the lease.
+    expect(await resolveInLease(join(a.worktree, 'src'), [a.worktree], asIs)).toBe(
+      join(a.worktree, 'src'),
+    );
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'win32 only (drive and UNC roots exist only there): containment compares roots, case-insensitively',
+    async () => {
+      const { drive, other, tail } = winParts(a.worktree);
+      expect(isPathInside(a.worktree, `${BS}${BS}${drive}${tail}${BS}src`)).toBe(false);
+      expect(isPathInside(`${BS}${BS}${other}${BS}share`, `${other}${BS}share${BS}x`)).toBe(false);
+      expect(isPathInside(a.worktree, `${drive.toLowerCase()}${tail.toUpperCase()}${BS}src`)).toBe(
+        true,
+      );
+      expect(pathsOverlap(a.worktree, `${BS}${BS}${drive}${tail}`)).toBe(false);
+
+      const share = `${BS}${BS}server${BS}share${BS}lease`;
+      for (const inside of [
+        `${share}${BS}x`,
+        `${BS}${BS}SERVER${BS}Share${BS}lease${BS}x`,
+        '//server/share/lease/x',
+      ]) {
+        expect(await resolveInLease(inside, [share], asIs), inside).toBe(inside);
+      }
+      for (const t of [
+        `${BS}${BS}server${BS}share${BS}lease2${BS}x`,
+        `${BS}${BS}server${BS}other${BS}lease${BS}x`,
+        `${BS}${BS}other${BS}share${BS}lease${BS}x`,
+        `${BS}${BS}?${BS}UNC${BS}server${BS}share${BS}lease${BS}x`,
+        `${BS}${BS}.${BS}UNC${BS}server${BS}share${BS}lease${BS}x`,
+        `${drive}${BS}share${BS}lease${BS}x`,
+        `server:${BS}share${BS}lease${BS}x`,
+      ]) {
+        expect(await reasonOf(resolveInLease(t, [share], asIs)), t).toBe('cwd_rejected');
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'win32 only (\\\\?\\ and \\\\.\\ namespaces exist only there): the real realpath canonicalizes them, so only targets in the lease pass',
+    async () => {
+      const src = join(a.worktree, 'src');
+      expect(await resolveInLease(`${BS}${BS}?${BS}${src}`, [a.worktree])).toBe(src);
+      expect(await resolveInLease(`${BS}${BS}.${BS}${src}`, [a.worktree])).toBe(src);
+      const up = `${BS}..`.repeat(4);
+      for (const t of [
+        `${BS}${BS}?${BS}${outside}`,
+        `${BS}${BS}.${BS}${outside}`,
+        `${BS}${BS}?${BS}${a.worktree}${up}${BS}outside`,
+        `${BS}${BS}.${BS}${a.worktree}${up}${BS}outside`,
+        `${BS}${BS}?${BS}${a.meta}`,
+      ]) {
+        expect(await reasonOf(resolveInLease(t, [a.worktree])), t).toBe('cwd_rejected');
+      }
+    },
+  );
 });
 
 describe('process limits', () => {

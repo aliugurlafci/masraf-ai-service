@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Writable } from 'node:stream';
+import { z } from 'zod';
 import { cryptoIdGenerator } from '@orc/shared';
 import type { Uuid } from '@orc/shared';
 import { createLogger } from '@orc/logger';
@@ -119,6 +120,26 @@ export function resolveRealCbmBinary(): string | null {
     }
   }
   return null;
+}
+
+const CbmRequireEnvSchema = z.object({
+  ORC_REQUIRE_CBM: z.enum(['0', '1']).optional(),
+  CODEBASE_MEMORY_MCP_BIN: z.string().min(1).optional(),
+});
+
+/** True when ORC_REQUIRE_CBM=1: a missing real codebase-memory-mcp binary must FAIL instead of skipping. */
+export function isCbmRequired(env: NodeJS.ProcessEnv = process.env): boolean {
+  return CbmRequireEnvSchema.parse({
+    ORC_REQUIRE_CBM: env['ORC_REQUIRE_CBM'] === '' ? undefined : env['ORC_REQUIRE_CBM'],
+    CODEBASE_MEMORY_MCP_BIN: env['CODEBASE_MEMORY_MCP_BIN'] === '' ? undefined : env['CODEBASE_MEMORY_MCP_BIN'],
+  }).ORC_REQUIRE_CBM === '1';
+}
+
+/** Explicit failure for a required-but-absent binary (ORC_REQUIRE_CBM=1). */
+export function missingCbmError(): Error {
+  return new Error(
+    'codebase-memory-mcp binary not found but ORC_REQUIRE_CBM=1 (set CODEBASE_MEMORY_MCP_BIN to an executable file or put codebase-memory-mcp on PATH)',
+  );
 }
 
 export function readJsonFile(path: string): unknown {
