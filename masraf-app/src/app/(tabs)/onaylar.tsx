@@ -26,7 +26,7 @@ export default function ApprovalsScreen() {
 
   const renderItem = ({ item, index }: { item: MasrafOzet; index: number }) => (
     <Animated.View entering={index < 12 ? motion.enter(index) : undefined}>
-      <ExpenseRow item={item} onPress={openExpense} showOwner />
+      <ExpenseRow item={item} onPress={openExpense} showOwner showNext={durum !== 'bekleyen'} />
     </Animated.View>
   );
 

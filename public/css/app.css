@@ -152,6 +152,11 @@ html {
   scroll-padding-top: calc(var(--topbar-h) + 16px);
 }
 
+/* A page with a sticky save bar: keyboard focus and scrollIntoView stop above the bar, not under it. */
+html:has(.form-actions.sticky) {
+  scroll-padding-bottom: var(--sticky-bar-room, 104px);
+}
+
 body {
   margin: 0;
   min-height: 100dvh;
@@ -787,7 +792,7 @@ p.muted {
 }
 
 .user-name {
-  max-width: 180px;
+  max-width: 260px;
   overflow: hidden;
   font-size: 14px;
   font-weight: 700;
@@ -3357,7 +3362,10 @@ img.original {
   background: var(--surface);
 }
 
+/* Positioned so screen-reader-only text inside a cell stays inside the scroller
+   (otherwise it widens the page and adds a horizontal scroll bar). */
 .table-scroll {
+  position: relative;
   overflow-x: auto;
 }
 
@@ -3460,13 +3468,17 @@ img.original {
   position: relative;
 }
 
+/* A long title gets two lines before it is cut, so a phone still shows what the expense is. */
 .row-link {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--ink);
   font-weight: 650;
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .row-link::after {
@@ -3616,10 +3628,16 @@ img.original {
   gap: 24px;
 }
 
+/* Four tiles in a row when each gets 220px, otherwise two: never three and a lone fourth. */
 .kpis {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(clamp(calc(25% - 11px), (922px - 100%) * 999, calc(50% - 8px)), 1fr));
   gap: 14px;
+}
+
+/* Three tiles: one row of three, or one per row. */
+.kpis:has(> :nth-child(3):last-child) {
+  grid-template-columns: repeat(auto-fill, minmax(clamp(calc(33.333% - 10px), (688px - 100%) * 999, 100%), 1fr));
 }
 
 .kpi {
@@ -3775,7 +3793,8 @@ a.kpi:hover .kpi-go {
   background: var(--tone, var(--line-strong));
 }
 
-.dist-seg.empty {
+/* Not ".empty": that is the dashed empty-state box. */
+.dist-seg.is-empty {
   background: var(--surface-2);
 }
 
@@ -3863,10 +3882,13 @@ a.kpi:hover .kpi-go {
 }
 
 .mini-title {
+  display: -webkit-box;
   overflow: hidden;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .mini-sub {
@@ -4411,11 +4433,14 @@ a.kpi:hover .kpi-go {
 }
 
 .appr-title {
+  display: -webkit-box;
   overflow: hidden;
   font-size: 16px;
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .appr-sub {
@@ -4728,6 +4753,49 @@ body.dragging .welcome .sheet-glyph .scan {
   height: 16px;
   margin-top: 1px;
   color: var(--wait);
+}
+
+/* The base-currency equivalent of an invoice in a third currency (docs/onay-sistemi.md, rule 6). */
+.inv-card .field.inv-eq {
+  gap: 4px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.inv-eq.needs-value {
+  border-color: color-mix(in srgb, var(--wait) 45%, var(--line));
+  background: var(--wait-soft);
+}
+
+.inv-eq > label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.inv-eq .input {
+  max-width: 240px;
+}
+
+/* On the detail: the entered equivalent, or the warning that it is missing. */
+.inv-eq-line {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.inv-eq-line strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+  .inv-eq .input {
+    max-width: none;
+  }
 }
 
 .inv-preview > summary {
@@ -5065,6 +5133,11 @@ fieldset[aria-invalid='true'] .cat-option {
 .flow-table th,
 .flow-table td {
   padding: 10px;
+  vertical-align: top;
+}
+
+.flow-table thead th {
+  vertical-align: bottom;
 }
 
 .flow-table tbody tr:hover {
@@ -5074,6 +5147,10 @@ fieldset[aria-invalid='true'] .cat-option {
 .flow-table .t-order {
   width: 48px;
   text-align: center;
+}
+
+.flow-table td.t-order {
+  padding-top: 17px;
 }
 
 .order-n {
@@ -5089,210 +5166,293 @@ fieldset[aria-invalid='true'] .cat-option {
 }
 
 .flow-table .t-approver {
-  min-width: 160px;
+  min-width: 200px;
 }
 
-.flow-table .t-lo .input,
-.flow-table .t-hi .input {
-  min-width: 96px;
+.flow-table .t-limit {
+  width: 36%;
+  min-width: 210px;
 }
 
-/* The "Sınırsız" box moves under the field when the column is narrow. */
-.hi-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
-
-.hi-wrap .input {
-  flex: 1 1 96px;
+.flow-table td.t-actions {
+  padding-top: 14px;
+  white-space: nowrap;
 }
 
 .flow-table .t-actions .btn + .btn {
   margin-left: 2px;
 }
 
-/* Coverage strip: every approver's range on an ordinal 0–∞ axis; gaps are hatched red. */
-.cov-wrap {
-  margin: 14px 0;
+.flow-table .field-error {
+  margin-top: 6px;
 }
 
-.cov {
-  display: grid;
-  grid-template-columns: minmax(84px, 160px) minmax(0, 1fr);
-  gap: 0 12px;
-}
-
-.cov-names,
-.cov-plot {
-  display: grid;
-  align-content: start;
-  gap: 6px;
-  min-width: 0;
-}
-
-.cov-plot {
-  position: relative;
-  padding-right: 10px;
-}
-
-.cov-name {
-  height: 28px;
-  overflow: hidden;
-  color: var(--ink-2);
-  font-size: 13px;
-  line-height: 28px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cov-name.strong {
-  color: var(--ink);
-  font-weight: 700;
-}
-
-.cov-name.hit {
-  color: var(--ink);
-  font-weight: 700;
-}
-
-.cov-name.hit::before {
-  content: '';
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  vertical-align: 1px;
-}
-
-.cov-name.axis {
-  height: 34px;
-  color: var(--ink-3);
-  font-size: 12px;
-}
-
-.cov-track {
-  position: relative;
-  height: 28px;
-  overflow: hidden;
-  border-radius: 6px;
-  background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-
-.cov-track.hit {
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-
-.cov-bar {
-  position: absolute;
-  top: 6px;
-  bottom: 6px;
-  border-radius: 4px;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px var(--surface-2);
-}
-
-.cov-seg {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-}
-
-.cov-seg.ok {
-  background: color-mix(in srgb, var(--ok) 28%, var(--surface));
-}
-
-.cov-seg.gap {
-  background: repeating-linear-gradient(
-    135deg,
-    var(--err) 0 5px,
-    color-mix(in srgb, var(--err) 40%, var(--surface)) 5px 10px
-  );
-  box-shadow: 0 0 0 2px var(--surface);
-}
-
-.cov-invalid {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: var(--err);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.cov-axis {
-  position: relative;
-  height: 34px;
-  border-top: 1px solid var(--line-strong);
-}
-
-.cov-tick {
-  position: absolute;
-  top: 5px;
+.th-sub {
+  display: block;
   color: var(--ink-3);
   font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  transform: translateX(-50%);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
-/* Every other label one line lower, so neighbours do not collide. */
-.cov-tick:nth-child(even) {
-  top: 18px;
+/* Under the approver's name: department and e-mail, so the select only ever holds the name. */
+.approver-sub {
+  margin: 5px 2px 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
 }
 
-.cov-tick::before {
-  content: '';
+.approver-sub:empty {
+  display: none;
+}
+
+.limit-cell {
+  display: grid;
+  gap: 5px;
+}
+
+.limit-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.limit-input .input {
+  padding-right: 52px;
+  font-weight: 650;
+}
+
+.limit-cur {
   position: absolute;
-  top: -6px;
-  left: 50%;
-  width: 1px;
-  height: 5px;
-  background: var(--line-strong);
-}
-
-.cov-tick:first-child {
-  transform: none;
-}
-
-.cov-tick:first-child::before {
-  left: 0;
-}
-
-.cov-tick.end {
-  transform: translateX(-100%);
-}
-
-.cov-tick.end::before {
-  left: 100%;
-}
-
-.cov-probe {
-  position: absolute;
-  top: -4px;
-  bottom: 34px;
-  width: 2px;
-  margin-left: -1px;
-  border-radius: 2px;
-  background: var(--ink);
-  box-shadow: 0 0 0 2px var(--surface);
+  right: 12px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 700;
   pointer-events: none;
 }
 
-.cov-probe::before {
-  content: '';
-  position: absolute;
-  top: -2px;
-  left: -4px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--ink);
+.limit-cell .hint {
+  margin: 0 2px;
+  font-size: 12.5px;
+}
+
+/* The last approver: no limit to type. */
+.limit-free {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 44px;
+}
+
+.limit-free .tag {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.limit-free-note {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.card-sub {
+  margin: -8px 0 14px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+.card-head .card-sub {
+  margin: 3px 0 0;
+}
+
+.card-head-text {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+/* Strategy: two option cards with a live example each. */
+.strategy-field {
+  margin: 0;
+}
+
+.strategy-field > legend {
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  font-stretch: 87.5%;
+}
+
+.strategy-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 10px;
+}
+
+.strategy-option {
+  padding: 14px 16px;
+}
+
+.strategy-option .role-text {
+  gap: 4px;
+  min-width: 0;
+}
+
+.strategy-option .role-title {
+  font-size: 15px;
+}
+
+.strategy-example {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line-strong);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.ex-label {
+  color: var(--ink-3);
+}
+
+.ex-amount {
+  color: var(--ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ex-step {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ex-arrow {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.role-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* "Kim onaylar?": the amount tiers of the flow on screen. */
+.tier-body {
+  display: grid;
+  gap: 14px;
+}
+
+.tier-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.tier-table th,
+.tier-table td {
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.tier-table thead th {
+  padding-top: 0;
+  border-top: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tier-table tbody th {
+  width: 1%;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tier-table tbody tr {
+  transition: background-color 0.2s;
+}
+
+.tier-table tr.is-probe {
+  background: var(--accent-soft);
+}
+
+.tier-table tr.is-probe > th {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.probe-tag {
+  display: flex;
+  width: max-content;
+  margin-top: 4px;
+}
+
+.tier-table tr.is-probe .tag.accent {
+  background: var(--surface);
+}
+
+.tier-gap td {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.tier-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tier-chain li {
+  display: inline-flex;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+
+.tier-chain li + li::before {
+  content: '→';
+  content: '→' / '';
+  margin: 0 8px;
+  color: var(--ink-3);
+}
+
+.tier-chain li.is-decider {
+  font-weight: 700;
+}
+
+.tier-chain li.unset {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.tier-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.tier-note svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--ink-3);
 }
 
 .dirty-note {
@@ -5432,10 +5592,14 @@ fieldset[aria-invalid='true'] .cat-option {
   font-weight: 700;
 }
 
+/* Long flow names get two lines before they are cut (the full name is the link's title). */
 .flow-tab-text {
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 /* Unsaved changes on the flow on screen: the same amber dot as the save bar's note. */
@@ -5590,7 +5754,119 @@ fieldset[aria-invalid='true'] .cat-option {
 }
 
 .user-table td.t-main {
-  min-width: 180px;
+  min-width: 220px;
+}
+
+/* An e-mail address is never cut: it breaks instead. */
+.user-table .cell-sub {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Your own row has no "Pasif yap": the buttons keep the same place in every row. */
+.user-table td.t-actions {
+  text-align: left;
+}
+
+/* Users: when the seven columns do not fit (tablets, narrow windows), every user becomes a card
+   instead of scrolling sideways: name and buttons, then four facts in a row, then the flows.
+   Phones keep the two-per-row cards from the small-screen rules below. */
+.table-scroll:has(> .user-table) {
+  container-type: inline-size;
+}
+
+@container (min-width: 600px) and (max-width: 1060px) {
+  .user-table thead {
+    display: none;
+  }
+
+  .user-table,
+  .user-table tbody {
+    display: block;
+  }
+
+  .user-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px 18px;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .user-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .user-table td {
+    flex: 1 1 calc(25% - 18px);
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .user-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--ink-3);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .user-table td.t-main {
+    flex: 1 1 calc(100% - 200px);
+    order: -2;
+  }
+
+  .user-table td.t-actions {
+    display: flex;
+    flex: none;
+    gap: 6px;
+    order: -1;
+    width: auto;
+  }
+
+  .user-table td.t-actions .btn + .btn {
+    margin-left: 0;
+  }
+
+  .user-table td.t-flow {
+    flex-basis: 100%;
+    order: 1;
+  }
+}
+
+/* Room for a first and last name on one line (the width includes the cell padding). */
+.exp-table td.t-owner,
+.audit-table td.t-who {
+  min-width: 11em;
+}
+
+/* All expenses: when the table is too narrow for seven columns the owner moves under the title,
+   so the title column is never squeezed to a few letters. */
+.table-card:has(> .exp-table.with-owner) {
+  container-type: inline-size;
+}
+
+.cell-owner {
+  display: none;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 880px) {
+  .exp-table.with-owner .t-owner {
+    display: none;
+  }
+
+  .exp-table .cell-owner {
+    display: block;
+  }
 }
 
 .dlg-note {
@@ -6478,6 +6754,10 @@ fieldset[aria-invalid='true'] .cat-option {
     gap: 10px;
   }
 
+  .kpis:has(> :nth-child(3):last-child) {
+    grid-template-columns: repeat(auto-fill, minmax(clamp(calc(33.333% - 7px), (640px - 100%) * 999, 100%), 1fr));
+  }
+
   .kpi {
     min-height: 100px;
     padding: 14px 30px 14px 16px;
@@ -6622,6 +6902,11 @@ fieldset[aria-invalid='true'] .cat-option {
     display: none;
   }
 
+  /* No next approver: the card leaves the empty "—" line out. */
+  .exp-table td.t-next.is-empty {
+    display: none;
+  }
+
   .flow-switch {
     margin-right: calc(-1 * var(--gutter));
     margin-left: calc(-1 * var(--gutter));
@@ -6654,9 +6939,11 @@ fieldset[aria-invalid='true'] .cat-option {
     flex-basis: 100%;
   }
 
+  /* One approver per card: [n] name / limit and the row buttons. */
   .flow-table td.t-order {
     flex: none;
     width: auto;
+    padding-top: 7px;
   }
 
   .flow-table td.t-approver {
@@ -6665,6 +6952,18 @@ fieldset[aria-invalid='true'] .cat-option {
 
   .flow-table td.t-approver::before {
     display: none;
+  }
+
+  .flow-table td.t-limit {
+    flex: 1 1 180px;
+    width: auto;
+    min-width: 0;
+    margin-left: 42px;
+  }
+
+  .flow-table td.t-actions {
+    margin-top: -4px;
+    padding-top: 0;
   }
 
   .card > .table-scroll {
@@ -6701,13 +7000,14 @@ fieldset[aria-invalid='true'] .cat-option {
     margin-left: 0;
   }
 
-  .cov {
-    grid-template-columns: minmax(64px, 96px) minmax(0, 1fr);
-    gap: 0 8px;
+  .tier-table th,
+  .tier-table td {
+    padding: 9px 8px;
   }
 
-  .cov-name {
-    font-size: 12px;
+  .tier-table tbody th {
+    width: 42%;
+    white-space: normal;
   }
 
   .cat-row {
@@ -6973,7 +7273,8 @@ fieldset[aria-invalid='true'] .cat-option {
     display: none;
   }
 
-  .kpis {
+  .kpis,
+  .kpis:has(> :nth-child(3):last-child) {
     grid-template-columns: minmax(0, 1fr);
   }
 

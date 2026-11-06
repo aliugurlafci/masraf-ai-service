@@ -2,14 +2,18 @@
 // (#/masraflar/:id/duzenle). A form holds up to 20 invoices, each in its own card with its own
 // reading state. Every chosen, dropped or pasted file is read through the usual reading flow
 // (POST /api/invoices; X-Fatura-Id is the record id). The first invoice read fills the fields the
-// user has not typed, and until the user types an amount it is the total of the invoices in the
-// form's currency. While the amount or the invoices change, POST /api/onay-akisi/onizle shows who
-// the expense would go to.
+// user has not typed, and until the user types an amount it is the invoices' total in the form's
+// currency (equivalents.js). An invoice in a third currency (neither the form's nor the base one) asks
+// for its base-currency equivalent; without it the expense can be saved as a draft but not sent.
+// While the amount or the invoices change, POST /api/onay-akisi/onizle shows who the expense would
+// go to.
 
 import * as api from '../api.js';
 import { el, icon, ICONS, replay } from '../dom.js';
 import { fmtAmountInput, fmtCount, fmtCurrency, fmtDateLong, fmtRateInput, modelName, parseAmount, toCents, todayIso } from '../format.js';
 import { approverChain, chainLead, expenseHref, invoicePreview } from '../expense-ui.js';
+import { invoicesTotal, needsEquivalent } from '../equivalents.js';
+import { sniffType, typedObjectUrl } from '../files.js';
 import { totalChecks } from '../invoice.js';
 import { categoryIcon } from '../labels.js';
 import { navigate } from '../router.js';
@@ -19,6 +23,7 @@ import {
   applyFieldErrors,
   btn,
   clearFieldErrors,
+  confirmDialog,
   debounce,
   field,
   fieldset,
@@ -80,25 +85,19 @@ function activityText(a) {
 
 const readingText = (card) => (card.waiting ? 'Sırada; önceki faturalar gönderiliyor.' : activityText(card.activity));
 
-/** The invoice's currency as the server compares it: null when it was not read. */
-const invoiceCurrency = (f) => f?.paraBirimi ?? null;
-
-/**
- * Mirrors comparableInvoiceTotal in src/expenses/rules.ts: an invoice adds to the amount when its
- * grand total was read and its currency is the form's (or was not read).
- */
-function countsToward(f, cur) {
-  const t = f?.genelToplam;
-  if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0) return false;
-  const c = invoiceCurrency(f);
-  return c === null || c === cur;
-}
+const hasTotal = (f) => typeof f?.genelToplam === 'number' && Number.isFinite(f.genelToplam) && f.genelToplam > 0;
 
 const isReady = (card) => card.kind === 'done' || card.kind === 'linked';
 const isPending = (card) => card.kind === 'reading' || card.kind === 'loading';
 
 function sameList(a, b) {
   return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/** Same keys with the same amounts (to the cent). */
+function sameAmounts(a, b) {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => k in b && toCents(a[k]) === toCents(b[k]));
 }
 
 export const expenseFormView = {
@@ -120,7 +119,8 @@ export const expenseFormView = {
     // ---------- Invoice state ----------
     // cards: the form's invoices in list order, which is the order they are saved in (faturaIdler).
     // kind: 'loading' (a ?fatura= record being fetched) | 'reading' | 'error' | 'done' (read here) |
-    // 'linked' (already on the saved form). Each card keeps its own read token.
+    // 'linked' (already on the saved form). Each card keeps its own read token, an AbortController
+    // for its request (abort) and, while its file is being sent, one of the read slots (slot).
     const cards = [];
     let cardSeq = 0;
     let readSeq = 0;
@@ -168,7 +168,7 @@ export const expenseFormView = {
 
     const summary = el('div', { className: 'form-alert', tabindex: '-1' });
     const approversBody = el('div', { className: 'approvers-body', 'aria-live': 'polite' });
-    const readingHint = el('p', { className: 'form-hint', hidden: true });
+    const readingHint = el('p', { className: 'form-hint', id: 'save-hint', hidden: true });
     const saveBtn = btn(editing ? 'Kaydet' : 'Taslak kaydet', { icon: ICONS.check, type: 'submit' });
     let sendBtn = null;
 
@@ -235,7 +235,7 @@ export const expenseFormView = {
       controls.paraBirimi.value = base;
 
       if (!editing || detail?.izinler?.gonder) {
-        sendBtn = btn(editing ? 'Kaydet ve onaya gönder' : 'Onaya gönder', { icon: ICONS.send, kind: 'primary', onClick: () => submit(true) });
+        sendBtn = btn(editing ? 'Kaydet ve onaya gönder' : 'Onaya gönder', { icon: ICONS.send, kind: 'primary', onClick: () => submit(true), attrs: { 'aria-describedby': 'save-hint' } });
       }
 
       const form = el(
@@ -295,7 +295,8 @@ export const expenseFormView = {
             if (name === 'paraBirimi') {
               updateCurrencyUi();
               currencyChanged();
-            } else updateLocalHint();
+            } else if (name === 'kur') currencyChanged();
+            else updateLocalHint();
             schedulePreview();
           }
         });
@@ -363,7 +364,12 @@ export const expenseFormView = {
       }
       const o = payload;
       const local = localAmount();
-      const differs = o.onayTutari !== null && o.onayTutari !== undefined && local !== null && toCents(o.onayTutari) > toCents(local);
+      // When the amount equals the invoices' total in the form's currency, a larger approval amount
+      // is only the rate's rounding (689,23 $ × 32,5 against 22.400 ₺): nothing to explain.
+      const total = invoiceTotal();
+      const typed = parseAmount(controls.tutar.value);
+      const same = total !== null && !typed.error && typed.value !== null && toCents(total.value) === toCents(typed.value);
+      const differs = !same && o.onayTutari !== null && o.onayTutari !== undefined && local !== null && toCents(o.onayTutari) > toCents(local);
       const which = readyCards().length > 1 ? 'faturaların toplamı' : 'fatura toplamı';
       // Native replaceChildren would print "null": keep only real nodes.
       approversBody.replaceChildren(
@@ -398,6 +404,8 @@ export const expenseFormView = {
       if (foreign) body.kur = k.value;
       const ids = readyCards().map((c) => c.id);
       if (ids.length > 0) body.faturaIdler = ids;
+      const eq = equivalents().given;
+      if (Object.keys(eq).length > 0) body.yerelKarsiliklar = eq;
       const r = await api.previewFlow(body, { signal });
       if (!alive || my !== previewToken) return;
       if (!r.ok) {
@@ -443,10 +451,14 @@ export const expenseFormView = {
           : el('span', {}, el('span', { 'aria-hidden': 'true', text: `${fmtCount(n)} / ${MAX_INVOICES}` }), el('span', { className: 'visually-hidden', text: `${fmtCount(n)} fatura; en çok ${MAX_INVOICES}` })),
       );
       addBtn.disabled = full || busy;
+      // While the expense is being saved the invoice list is fixed: no adding, removing or retrying.
+      const pick = invDrop.querySelector('button');
+      if (pick) pick.disabled = busy;
+      for (const b of invList.querySelectorAll('.inv-actions button')) b.disabled = busy;
       if (full) addText.textContent = `Bir masrafa en çok ${MAX_INVOICES} fatura eklenebilir. Yenisini eklemek için birini kaldırın.`;
       else if (pending > 0) addText.textContent = 'Okuma bir dakika kadar sürebilir. Bu sırada kategori ve açıklamayı girebilirsiniz.';
       else addText.textContent = 'Birden çok dosya seçebilir ya da sürükleyip bırakabilirsiniz.';
-      setFileTarget({ label: full ? `En çok ${MAX_INVOICES} fatura eklenebilir` : 'Bırakın, faturalar okunsun', onFiles });
+      setFileTarget(busy ? null : { label: full ? `En çok ${MAX_INVOICES} fatura eklenebilir` : 'Bırakın, faturalar okunsun', onFiles });
       updateSaveState();
     }
 
@@ -457,20 +469,28 @@ export const expenseFormView = {
         : `Okunamayan ${fmtCount(failed)} faturayı tekrar deneyin ya da kaldırın; sonra kaydedebilirsiniz.`;
     }
 
-    /** Saving waits for every read: a card still reading or failed is never dropped silently. */
+    function missingText(n) {
+      const who = n === 1 ? 'Bir faturanın' : `${fmtCount(n)} faturanın`;
+      return `${who} ${base} karşılığı girilmedi; onaya göndermek için girin. Taslak olarak kaydedebilirsiniz.`;
+    }
+
+    /**
+     * Saving waits for every read: a card still reading or failed is never dropped silently. A missing
+     * equivalent blocks only sending (the server would answer 409 karsilik_eksik); a draft can be saved.
+     */
     function updateSaveState() {
       const pending = cards.filter(isPending).length;
       const failed = cards.filter((c) => c.kind === 'error').length;
       const blocked = pending > 0 || failed > 0;
-      readingHint.hidden = !blocked;
-      readingHint.classList.toggle('warn', !pending && failed > 0);
+      const missing = sendBtn ? equivalents().missing.length : 0;
+      readingHint.hidden = !blocked && missing === 0;
+      readingHint.classList.toggle('warn', !pending && (failed > 0 || missing > 0));
       if (blocked) readingHint.replaceChildren(icon(pending > 0 ? ICONS.clock : ICONS.warn), el('span', { text: blockText(pending, failed) }));
+      else if (missing > 0) readingHint.replaceChildren(icon(ICONS.warn), el('span', { text: missingText(missing) }));
       setBusy(saveBtn, busy);
       if (sendBtn) setBusy(sendBtn, busy);
-      if (blocked) {
-        saveBtn.disabled = true;
-        if (sendBtn) sendBtn.disabled = true;
-      }
+      if (blocked) saveBtn.disabled = true;
+      if (sendBtn && (blocked || missing > 0)) sendBtn.disabled = true;
     }
 
     // ---------- One invoice card ----------
@@ -483,6 +503,8 @@ export const expenseFormView = {
         name: 'Fatura',
         file: null,
         token: 0,
+        abort: null,
+        slot: null,
         since: new Date().toISOString(),
         waiting: false,
         activity: null,
@@ -494,6 +516,8 @@ export const expenseFormView = {
         preview: null,
         previewLoading: false,
         previewOpen: null,
+        eqText: '', // the base-currency equivalent as typed; kept while the form's currency makes it unneeded
+        eq: null, // { field, input, hint }: built once, so typing never loses the focus
         serverError: null,
         node: null,
         statusNode: null,
@@ -529,7 +553,9 @@ export const expenseFormView = {
         icon: danger ? ICONS.trash : null,
         size: 'sm',
         kind: danger ? 'danger-ghost' : 'ghost',
-        onClick: () => removeCard(card),
+        onClick: () => {
+          if (!busy) removeCard(card);
+        },
         attrs: { 'aria-label': `${label}: ${card.name}` },
       });
     }
@@ -610,6 +636,7 @@ export const expenseFormView = {
       }
       li.append(card.errSlot);
       showCardError(card, li);
+      if (busy) for (const b of li.querySelectorAll('.inv-actions button')) b.disabled = true;
       return li;
     }
 
@@ -649,17 +676,93 @@ export const expenseFormView = {
       }
     }
 
-    /** Says when an invoice does not add to the amount (another currency, or no total read). */
+    /** True when this invoice needs its base-currency equivalent on the form as it is now. */
+    const needsEq = (card) => isReady(card) && needsEquivalent(controls.paraBirimi.value, base, card.fatura);
+
+    /** The typed equivalent: { value } (a positive amount), { error }, or {} when empty. */
+    function readEquivalent(card) {
+      const p = parseAmount(card.eqText);
+      if (p.error) return { error: p.error };
+      if (p.value === null) return {};
+      if (p.value <= 0) return { error: "Karşılık 0'dan büyük olmalı." };
+      return { value: p.value };
+    }
+
+    /**
+     * The equivalents the form needs now: given (faturaId -> amount, for the API), missing (cards
+     * with nothing typed) and invalid (cards with something that is not an amount).
+     */
+    function equivalents() {
+      const given = {};
+      const missing = [];
+      const invalid = [];
+      for (const card of cards) {
+        if (!needsEq(card)) continue;
+        const r = readEquivalent(card);
+        if (r.value !== undefined) given[card.id] = r.value;
+        else if (r.error) invalid.push({ card, error: r.error });
+        else missing.push(card);
+      }
+      return { given, missing, invalid };
+    }
+
+    function equivalentHint(card) {
+      const cur = controls.paraBirimi.value;
+      const r = readEquivalent(card);
+      const parts = [`Kart ekstrenizdeki ya da bankanızın uyguladığı ${base} tutarı.`];
+      if (r.value === undefined && !r.error) parts.push('Girilmezse masraf onaya gönderilemez; taslak olarak kaydedebilirsiniz.');
+      else if (r.value !== undefined && cur !== base) {
+        const k = parseAmount(controls.kur.value, RATE);
+        parts.push(!k.error && k.value > 0 ? `Toplama ${fmtCurrency(Math.round((r.value / k.value) * 100) / 100, cur)} olarak katılır.` : 'Kur girilince toplama katılır.');
+      }
+      card.eq.hint.textContent = parts.join(' ');
+      card.eq.field.classList.toggle('needs-value', r.value === undefined && !r.error);
+    }
+
+    /** The equivalent input of a card, built once and moved with the card when it is drawn again. */
+    function equivalentField(card) {
+      if (card.eq) return card.eq.field;
+      const inputEl = input({ name: `yerelKarsilik-${card.key}`, inputmode: 'decimal', autocomplete: 'off', placeholder: '0,00', className: 'input num', value: card.eqText });
+      const hint = el('span');
+      const label = el('span', {}, el('span', { text: `${base} karşılığı` }), el('span', { className: 'visually-hidden', text: `: ${card.name}` }));
+      const box = field({ label, input: inputEl, hint, className: 'inv-eq' });
+      card.eq = { field: box, input: inputEl, hint };
+      inputEl.addEventListener('input', () => {
+        card.eqText = inputEl.value;
+        markDirty();
+        setFieldError(inputEl, null);
+        if (card.serverError) setCardError(card, null);
+        equivalentHint(card);
+        equivalentsChanged();
+      });
+      inputEl.addEventListener('blur', () => {
+        const r = readEquivalent(card);
+        if (r.error) setFieldError(inputEl, r.error);
+        else if (r.value !== undefined) inputEl.value = card.eqText = fmtAmountInput(r.value);
+      });
+      equivalentHint(card);
+      return box;
+    }
+
+    /**
+     * Under the invoice's facts: the equivalent input when the form needs one, otherwise a note when
+     * the invoice does not add to the amount (no total read) or adds to it converted.
+     */
     function updateCardNote(card) {
       if (!card.noteSlot) return;
       const f = card.fatura ?? {};
       const cur = controls.paraBirimi.value;
-      let text = null;
-      if (typeof f.genelToplam !== 'number' || !(f.genelToplam > 0)) {
-        text = 'Genel toplam okunamadı; bu fatura tutar toplamına ve onay tutarına katılmaz.';
-      } else if (!countsToward(f, cur)) {
-        text = `Fatura ${invoiceCurrency(f)} cinsinden. Masraf ${cur} olduğu için tutar toplamına ve onay tutarına katılmaz.`;
+      if (needsEq(card)) {
+        const box = equivalentField(card);
+        equivalentHint(card);
+        // Moving a focused input would blur it: leave it where it is.
+        if (card.noteSlot.firstChild !== box || card.noteSlot.childNodes.length !== 1) card.noteSlot.replaceChildren(box);
+        return;
       }
+      if (card.eq) setFieldError(card.eq.input, null);
+      let text = null;
+      if (!hasTotal(f)) text = 'Genel toplam okunamadı; bu fatura tutar toplamına ve onay tutarına katılmaz.';
+      else if (f.paraBirimi === base && cur !== base) text = `Fatura ${base} cinsinden; toplama kurla ${cur} karşılığı olarak katılır.`;
       card.noteSlot.replaceChildren(...(text ? [el('p', { className: 'inv-card-note' }, icon(ICONS.info), el('span', { text }))] : []));
     }
 
@@ -724,11 +827,32 @@ export const expenseFormView = {
         const card = readQueue.shift();
         if (card.kind !== 'reading' || !cards.includes(card)) continue;
         readsInFlight++;
-        readCard(card, card.token).finally(() => {
-          readsInFlight--;
-          pumpReads();
-        });
+        const slot = { held: true };
+        card.slot = slot;
+        readCard(card, card.token).finally(() => releaseSlot(card, slot));
       }
+    }
+
+    /** Gives a read slot back once (when the answer comes, or at once when the read is cancelled). */
+    function releaseSlot(card, slot) {
+      if (!slot?.held) return;
+      slot.held = false;
+      if (card.slot === slot) card.slot = null;
+      readsInFlight--;
+      pumpReads();
+    }
+
+    /**
+     * Forgets the card's request and aborts it, so its connection and its slot go to the next file
+     * at once. The server still finishes a read it has started and keeps the record; the reading
+     * screen shows it.
+     */
+    function cancelRead(card) {
+      card.token = -1;
+      const ctl = card.abort;
+      card.abort = null;
+      ctl?.abort();
+      releaseSlot(card, card.slot);
     }
 
     async function readCard(card, token) {
@@ -742,13 +866,17 @@ export const expenseFormView = {
         card.activity = a;
         updateReading(card);
       });
+      const ctl = new AbortController();
+      card.abort = ctl;
       let r;
       try {
-        r = await api.sendOne(file, { force: false, tag });
+        r = await api.sendOne(file, { force: false, tag, signal: ctl.signal });
       } finally {
         unwatch();
+        if (card.abort === ctl) card.abort = null;
       }
-      if (!alive || card.token !== token || !cards.includes(card)) return;
+      // Removed, retried or the view went away: an aborted request is not an error.
+      if (r.aborted || !alive || card.token !== token || !cards.includes(card)) return;
       if (!r.ok) {
         if (r.unauthorized) return;
         settle(card, { kind: 'error', error: r.error });
@@ -759,6 +887,9 @@ export const expenseFormView = {
         settle(card, { kind: 'error', error: { kod: 'kimlik_yok', mesaj: 'Fatura okundu ama kayıt kimliği alınamadı. Fatura okuma ekranından deneyin.' } });
         return;
       }
+      // The preview's type comes from the file's first bytes, never from its name (files.js).
+      const type = await sniffType(file);
+      if (!alive || card.token !== token || !cards.includes(card)) return;
       const twin = cards.find((c) => c !== card && c.id === r.id);
       if (twin) {
         const n = cards.indexOf(twin) + 1;
@@ -770,7 +901,7 @@ export const expenseFormView = {
         }
         return;
       }
-      const url = URL.createObjectURL(file);
+      const { url, mime } = typedObjectUrl(file, type);
       objectUrls.add(url);
       settle(card, {
         kind: 'done',
@@ -778,7 +909,7 @@ export const expenseFormView = {
         fatura: r.body.fatura,
         kalemler: r.body.kalemler,
         onbellek: r.body.olcum?.kaynak === 'kayit' || r.res?.headers.get('X-Fatura-Onbellek') === '1',
-        preview: { url, mime: file.type, name: card.name },
+        preview: { url, mime, name: card.name },
       });
       say(`${card.name} okundu.`);
     }
@@ -806,16 +937,17 @@ export const expenseFormView = {
       }
     }
 
-    function removeCard(card, { announce = true, focusTo = null } = {}) {
+    /** userChange: false when the panel takes back a card it added itself (a ?fatura= that failed). */
+    function removeCard(card, { announce = true, focusTo = null, userChange = true } = {}) {
       const i = cards.indexOf(card);
       if (i < 0) return;
       const hadFocus = card.node?.contains(document.activeElement);
       cards.splice(i, 1);
-      card.token = -1; // a read still running for it is forgotten
+      cancelRead(card);
       card.node?.remove();
       revokePreview(card);
       if (fillSource === card) fillSource = null;
-      markDirty();
+      if (userChange) markDirty();
       if (announce) say(`${card.name} kaldırıldı. ${cards.length === 0 ? 'Fatura kalmadı.' : `${fmtCount(cards.length)} fatura kaldı.`}`);
       afterInvoicesChanged();
       if (hadFocus) {
@@ -832,27 +964,34 @@ export const expenseFormView = {
         return;
       }
       const card = newCard({ kind: 'loading', id: fid, name: 'Okunan fatura' });
+      // "Vazgeç", "Kaldır" and leaving the view abort these requests (cancelRead).
+      const ctl = new AbortController();
+      card.abort = ctl;
       cards.push(card);
       renderCard(card);
       renderPanelState();
-      const r = await api.getRecord(fid, { signal });
-      if (!alive || !cards.includes(card)) return;
+      const r = await api.getRecord(fid, { signal: ctl.signal });
+      if (r.aborted || !alive || !cards.includes(card)) return;
       if (!r.ok) {
-        if (r.unauthorized || r.aborted) return;
-        removeCard(card, { announce: false });
+        if (r.unauthorized) return;
+        // Nothing the user did changed the form: leaving it afterwards does not ask.
+        removeCard(card, { announce: false, userChange: false });
         invAlert.replaceChildren(alertBox('err', 'Fatura açılamadı', [r.error.mesaj]));
         return;
       }
       const f = r.body.fatura ?? {};
       markDirty();
       settle(card, { kind: 'done', fromRecord: true, name: f.faturaNo ? `Fatura ${f.faturaNo}` : 'Okunan fatura', fatura: r.body.fatura, kalemler: r.body.kalemler, previewLoading: true });
-      const file = await api.getInvoiceFile(fid, { signal });
-      if (!alive || !cards.includes(card)) return;
+      const file = await api.getInvoiceFile(fid, { signal: ctl.signal });
+      const type = file.ok ? await sniffType(file.blob) : null;
+      if (file.aborted || !alive || !cards.includes(card)) return;
+      if (card.abort === ctl) card.abort = null;
       card.previewLoading = false;
       if (file.ok) {
-        const url = URL.createObjectURL(file.blob);
+        // Typed by its content like a local file; the server sends only these types anyway.
+        const { url, mime } = typedObjectUrl(file.blob, type);
         objectUrls.add(url);
-        card.preview = { url, mime: (file.type ?? '').split(';')[0].trim(), name: f.faturaNo ? `${f.faturaNo}` : `fatura-${fid}` };
+        card.preview = { url, mime, name: f.faturaNo ? `${f.faturaNo}` : `fatura-${fid}` };
       }
       // A closed preview fills itself when it is opened.
       if (card.previewSlot?.closest('details')?.open) fillPreview(card, true);
@@ -860,17 +999,26 @@ export const expenseFormView = {
 
     // ---------- Filling the form from the invoices ----------
 
-    /** The total of the invoices that add to the amount: { value, count } or null. */
+    /**
+     * The invoices' total in the form's currency, with base-currency invoices and entered equivalents
+     * converted by the rate: { value, count, unconverted } or null when no invoice adds to it.
+     */
     function invoiceTotal() {
       const cur = controls.paraBirimi.value;
-      let cents = 0;
-      let count = 0;
-      for (const c of readyCards()) {
-        if (!countsToward(c.fatura, cur)) continue;
-        cents += Math.round(c.fatura.genelToplam * 100);
-        count++;
-      }
-      return count > 0 ? { value: cents / 100, count } : null;
+      const k = cur === base ? null : parseAmount(controls.kur.value, RATE);
+      const rate = k && !k.error ? k.value : null;
+      const items = readyCards().map((c) => ({ fatura: c.fatura, equivalent: needsEq(c) ? (readEquivalent(c).value ?? null) : null }));
+      const t = invoicesTotal(items, cur, base, rate);
+      return t.count > 0 ? t : null;
+    }
+
+    /** Invoices that would count once the rate is entered (base-currency ones and equivalents). */
+    function waitingForRate() {
+      const cur = controls.paraBirimi.value;
+      if (cur === base) return 0;
+      const k = parseAmount(controls.kur.value, RATE);
+      if (!k.error && k.value > 0) return 0;
+      return invoicesTotal(readyCards().map((c) => ({ fatura: c.fatura, equivalent: needsEq(c) ? (readEquivalent(c).value ?? null) : null })), cur, base, null).unconverted;
     }
 
     /**
@@ -939,7 +1087,7 @@ export const expenseFormView = {
     /** Which fields hold values from the invoices; gone when the user types into them. */
     function fillNote() {
       const ready = readyCards().length;
-      if (amountCleared) return alertBox('info', null, [`${controls.paraBirimi.value} cinsinden tutara katılacak fatura kalmadı; tutarı girin.`]);
+      if (amountCleared) return alertBox('info', null, ['Tutara katılacak fatura kalmadı; tutarı girin.']);
       if (ready === 0 || autoFilled.size === 0) return null;
       const many = ready > 1;
       const labels = FILL_ORDER.filter((n) => autoFilled.has(n)).map((n) => (n === 'tutar' && many ? 'tutar (faturaların toplamı)' : autoFilled.get(n)));
@@ -950,7 +1098,7 @@ export const expenseFormView = {
       const total = invoiceTotal();
       const typed = parseAmount(controls.tutar.value);
       if (!total || typed.error || typed.value === null || toCents(typed.value) === toCents(total.value)) return null;
-      const what = total.count > 1 ? 'faturaların genel toplamından' : 'faturanın genel toplamından';
+      const what = total.count > 1 ? 'faturaların toplamından' : 'faturanın tutarından';
       return alertBox('warn', null, [
         `Formdaki tutar ${what} (${fmtCurrency(total.value, controls.paraBirimi.value)}) farklı. Onay, ikisinden büyük olan tutar üzerinden yapılır ve onaycılar farkı görür.`,
       ]);
@@ -966,15 +1114,17 @@ export const expenseFormView = {
       if (ready < 2) return;
       const cur = controls.paraBirimi.value;
       const total = invoiceTotal();
-      const left = ready - (total?.count ?? 0);
+      const waiting = waitingForRate();
+      const left = ready - (total?.count ?? 0) - waiting;
       invSum.replaceChildren(
         ...[
           el(
             'p',
             { className: 'inv-sum-line' },
-            el('span', { text: total ? `Faturaların toplamı · ${fmtCount(total.count)} fatura` : `${cur} cinsinden toplanacak fatura yok` }),
+            el('span', { text: total ? `Faturaların toplamı · ${fmtCount(total.count)} fatura` : 'Toplanacak fatura yok' }),
             el('strong', { text: total ? fmtCurrency(total.value, cur) : '—' }),
           ),
+          waiting > 0 ? el('p', { className: 'inv-sum-note', text: `${fmtCount(waiting)} fatura kur girilince toplama katılır.` }) : null,
           left > 0 ? el('p', { className: 'inv-sum-note', text: `${fmtCount(left)} fatura toplama katılmıyor; nedeni kartında yazıyor.` }) : null,
         ].filter(Boolean),
       );
@@ -993,12 +1143,25 @@ export const expenseFormView = {
       schedulePreview();
     }
 
+    /** The form's currency or rate changed: which invoices need an equivalent, and what they add. */
     function currencyChanged() {
       syncAmount();
       updateLocalHint();
       for (const c of cards) updateCardNote(c);
       renderNotes();
       renderSum();
+      updateSaveState();
+    }
+
+    /** An equivalent was typed: the amount, the total, the send button and the approvers follow. */
+    function equivalentsChanged() {
+      syncAmount();
+      updateLocalHint();
+      for (const c of cards) if (c.eq && needsEq(c) && c.eq.input !== document.activeElement) equivalentHint(c);
+      renderNotes();
+      renderSum();
+      updateSaveState();
+      schedulePreview();
     }
 
     function fillFromDetail(d) {
@@ -1021,6 +1184,7 @@ export const expenseFormView = {
             name: f.dosyaAdi || (f.faturaNo ? `Fatura ${f.faturaNo}` : 'Fatura'),
             fatura: f,
             preview: f.dosyaVar ? { url: api.invoiceFileUrl(f.id), mime: f.mime, name: f.dosyaAdi } : null,
+            eqText: f.yerelKarsilik !== null && f.yerelKarsilik !== undefined ? fmtAmountInput(f.yerelKarsilik) : '',
           }),
         );
       }
@@ -1077,7 +1241,19 @@ export const expenseFormView = {
         aciklama: controls.aciklama.value.trim() || null,
         faturaIdler: readyCards().map((c) => c.id),
       };
-      return { errors, data };
+      // Equivalents only for the invoices that need one on this form; a typed value that is not an
+      // amount stops saving, an empty one only sending.
+      const eq = equivalents();
+      for (const { card, error } of eq.invalid) errors[`yerelKarsiliklar.${card.id}`] = error;
+      data.yerelKarsiliklar = eq.given;
+      return { errors, data, missing: eq.missing };
+    }
+
+    /** Field names to controls, the equivalent inputs included (yerelKarsiliklar.<faturaId>). */
+    function errorTargets() {
+      const targets = { ...fieldTargets };
+      for (const c of cards) if (c.eq && needsEq(c)) targets[`yerelKarsiliklar.${c.id}`] = c.eq.input;
+      return targets;
     }
 
     function createBody(data) {
@@ -1086,7 +1262,15 @@ export const expenseFormView = {
       if (data.satici) b.satici = data.satici;
       if (data.aciklama) b.aciklama = data.aciklama;
       if (data.faturaIdler.length > 0) b.faturaIdler = data.faturaIdler;
+      if (Object.keys(data.yerelKarsiliklar).length > 0) b.yerelKarsiliklar = data.yerelKarsiliklar;
       return b;
+    }
+
+    /** The equivalents the saved form holds (the server keeps only those its invoices need). */
+    function savedEquivalents(d) {
+      const out = {};
+      for (const f of d.faturalar ?? []) if (f.yerelKarsilik !== null && f.yerelKarsilik !== undefined) out[f.id] = f.yerelKarsilik;
+      return out;
     }
 
     /** Only the fields that changed; a cleared optional field is sent as null, a changed invoice list in full. */
@@ -1102,14 +1286,17 @@ export const expenseFormView = {
       if ((data.aciklama ?? null) !== (d.aciklama ?? null)) p.aciklama = data.aciklama;
       const saved = d.faturaIdler ?? (d.faturalar ?? []).map((f) => f.id);
       if (!sameList(data.faturaIdler, saved)) p.faturaIdler = data.faturaIdler;
+      // Sent, the map replaces every equivalent; so it goes in full, with a changed list too.
+      if (p.faturaIdler || !sameAmounts(data.yerelKarsiliklar, savedEquivalents(d))) p.yerelKarsiliklar = data.yerelKarsiliklar;
       return p;
     }
 
     /**
      * alanlar["faturaIdler.<i>"] goes under the i-th invoice sent; alanlar.faturaIdler and a 409
-     * without alanlar (two saves racing) go over the list.
+     * without alanlar (two saves racing) go over the list. alanlar["yerelKarsiliklar.<faturaId>"]
+     * (400, or 409 karsilik_eksik when sending) goes under that invoice's equivalent input.
      */
-    function showServerError(e) {
+    function showServerError(e, { unsaved = false } = {}) {
       const alanlar = e.alanlar ? { ...e.alanlar } : null;
       const listMessages = [];
       let firstCard = null;
@@ -1133,9 +1320,13 @@ export const expenseFormView = {
       const invoiceProblem = firstCard !== null || listMessages.length > 0;
 
       const fieldCount = alanlar ? Object.keys(alanlar).length : 0;
-      const leftovers = alanlar ? applyFieldErrors(alanlar, fieldTargets) : [];
+      const leftovers = alanlar ? applyFieldErrors(alanlar, errorTargets()) : [];
       if (!alanlar) {
-        summary.replaceChildren(alertBox('err', null, [e.mesaj]));
+        // A refused send on a new form created nothing; it can still be kept as a draft.
+        summary.replaceChildren(alertBox('err', null, [e.mesaj, unsaved && e.durum === 409 ? 'Masraf kaydedilmedi; taslak olarak kaydedebilirsiniz.' : null].filter(Boolean)));
+      } else if (e.kod === 'karsilik_eksik') {
+        const items = [...new Set(Object.values(alanlar).map(String))];
+        summary.replaceChildren(alertBox('err', 'Onaya gönderilemedi', [...items, 'Karşılıkları girip yeniden gönderin ya da taslak olarak kaydedin.']));
       } else {
         const items = [...leftovers];
         if (items.length === 0) items.push(invoiceProblem && fieldCount === 0 ? 'Faturalar bölümünde işaretli faturaları düzeltin.' : 'İşaretli alanları düzeltin.');
@@ -1172,10 +1363,17 @@ export const expenseFormView = {
         failed[0].node?.focus({ preventScroll: true });
         return;
       }
-      const { errors, data } = collect();
+      const { errors, data, missing } = collect();
       if (Object.keys(errors).length > 0) {
-        applyFieldErrors(errors, fieldTargets);
+        applyFieldErrors(errors, errorTargets());
         summary.replaceChildren(alertBox('err', 'Formu kontrol edin', ['İşaretli alanları düzeltin.']));
+        return;
+      }
+      // The send button is off while an equivalent is missing; this covers Enter and other routes.
+      if (sendAfter && missing.length > 0) {
+        for (const c of missing) setFieldError(c.eq?.input, `${base} karşılığını girin.`);
+        summary.replaceChildren(alertBox('err', 'Onaya gönderilemez', [missingText(missing.length)]));
+        missing[0].eq?.input.focus();
         return;
       }
       sentCards = readyCards();
@@ -1185,26 +1383,42 @@ export const expenseFormView = {
         const patch = patchBody(data, detail);
         r = Object.keys(patch).length > 0 ? await api.updateExpense(id, patch) : { ok: true, body: detail };
       } else {
-        r = await api.createExpense(createBody(data));
+        // gonder: true creates and sends in one step; if sending is refused nothing is created and the
+        // form stays as it is (docs/onay-sistemi.md: POST /api/masraflar).
+        r = await api.createExpense({ ...createBody(data), ...(sendAfter ? { gonder: true } : {}) });
       }
       if (!alive) return;
       if (!r.ok) {
         setSaving(false);
-        if (!r.unauthorized) showServerError(r.error);
+        if (!r.unauthorized) showServerError(r.error, { unsaved: sendAfter && !editing });
         return;
       }
       const saved = r.body;
       dirty = false;
-      if (sendAfter) {
+      if (sendAfter && editing) {
         const s = await api.expenseAction(saved.id, 'gonder');
         if (!alive) return;
         if (!s.ok) {
           setSaving(false);
           if (s.unauthorized) return;
+          if (s.error.kod === 'karsilik_eksik') {
+            // The changes are saved; stay on the form so the missing equivalents can be entered. The
+            // saved form may differ from what this page loaded (another tab), so compare the next save
+            // with the server's copy; failing that, with the equivalents it reported missing removed.
+            const fresh = await api.getExpense(id, { signal });
+            if (!alive) return;
+            const gone = new Set(Object.keys(s.error.alanlar ?? {}).map((k) => k.replace(/^yerelKarsiliklar\./, '')));
+            detail = fresh.ok ? fresh.body : { ...saved, faturalar: (saved.faturalar ?? []).map((f) => (gone.has(f.id) ? { ...f, yerelKarsilik: null } : f)) };
+            toast('Değişiklikler kaydedildi ama masraf onaya gönderilemedi.', 'err');
+            showServerError(s.error);
+            return;
+          }
           toast(`Masraf kaydedildi ama onaya gönderilemedi: ${s.error.mesaj}`, 'err');
           navigate(`/masraflar/${saved.id}`);
           return;
         }
+        toast('Masraf onaya gönderildi.', 'ok');
+      } else if (sendAfter) {
         toast('Masraf onaya gönderildi.', 'ok');
       } else {
         toast(editing ? 'Değişiklikler kaydedildi.' : 'Masraf taslak olarak kaydedildi.', 'ok');
@@ -1268,14 +1482,34 @@ export const expenseFormView = {
     }
     init();
 
+    /** The confirmation for leaving with unsaved changes; says what happens to reads under way. */
+    function leaveMessage() {
+      const parts = [editing ? 'Masraftaki değişiklikler kaydedilmedi. Devam ederseniz kaybolur.' : 'Masraf henüz kaydedilmedi. Devam ederseniz girdikleriniz kaybolur.'];
+      const started = cards.filter((c) => c.kind === 'reading' && c.slot).length;
+      const queued = cards.filter((c) => c.kind === 'reading' && !c.slot).length;
+      if (started > 0) parts.push(started === 1 ? 'Okuması başlamış fatura, Fatura okuma ekranında tamamlanır.' : `Okuması başlamış ${fmtCount(started)} fatura, Fatura okuma ekranında tamamlanır.`);
+      if (queued > 0) parts.push(queued === 1 ? 'Sırada bekleyen fatura gönderilmez.' : `Sırada bekleyen ${fmtCount(queued)} fatura gönderilmez.`);
+      return parts.join(' ');
+    }
+
     return {
       update() {
         return false; // another expense or invoice: start over
       },
+      canLeave() {
+        // A save under way navigates by itself; after a save dirty is false.
+        if (!alive || !dirty || busy) return true;
+        return confirmDialog({
+          title: 'Kaydedilmemiş değişiklikler',
+          message: leaveMessage(),
+          confirmLabel: 'Değişiklikleri at',
+          kind: 'danger',
+        });
+      },
       unmount() {
         alive = false;
         readQueue.length = 0;
-        for (const c of cards) c.token = -1;
+        for (const c of cards) cancelRead(c); // frees the connections; the server keeps reading
         schedulePreview.cancel();
         setFileTarget(null);
         window.removeEventListener('beforeunload', onBeforeUnload);

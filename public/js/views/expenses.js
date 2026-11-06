@@ -4,6 +4,7 @@
 
 import * as api from '../api.js';
 import { el, icon, ICONS } from '../dom.js';
+import { downloadObjectUrl } from '../files.js';
 import { fmtCount, fmtCurrency, fmtDateShort, todayIso } from '../format.js';
 import { expenseHref } from '../expense-ui.js';
 import { amountTexts, categoryIcon, EXPENSE_STATUS, STATUS_ORDER, statusBadge } from '../labels.js';
@@ -37,7 +38,7 @@ function parseQuery(q) {
 }
 
 function downloadBlob(blob, name) {
-  const a = el('a', { href: URL.createObjectURL(blob), download: name });
+  const a = el('a', { href: downloadObjectUrl(blob), download: name });
   document.body.append(a);
   a.click();
   a.remove();
@@ -191,7 +192,7 @@ function createListView(kapsam) {
               ? el('th', { className: 'sel', scope: 'col' }, el('span', { className: 'visually-hidden', text: 'Seç' }))
               : null,
           el('th', { scope: 'col', text: 'Masraf' }),
-          all ? el('th', { scope: 'col', text: 'Oluşturan' }) : null,
+          all ? el('th', { scope: 'col', className: 't-owner', text: 'Oluşturan' }) : null,
           el('th', { scope: 'col', text: 'Tarih' }),
           el('th', { scope: 'col', className: 'num', text: 'Tutar' }),
           el('th', { scope: 'col', text: 'Durum' }),
@@ -222,7 +223,9 @@ function createListView(kapsam) {
                     'div',
                     { className: 'cell-text' },
                     el('a', { className: 'row-link', href: expenseHref(m.id), text: m.baslik }),
-                    el('span', { className: 'cell-sub', text: [m.kategori?.ad, m.satici].filter(Boolean).join(' · ') || '—' }),
+                    el('span', { className: 'cell-sub', title: m.satici || null, text: [m.kategori?.ad, m.satici].filter(Boolean).join(' · ') || '—' }),
+                    // Shown instead of the "Oluşturan" column when the table is narrow (CSS container query).
+                    all && m.olusturan ? el('span', { className: 'cell-owner' }, el('span', { className: 'visually-hidden', text: 'Oluşturan: ' }), el('span', { text: m.olusturan.adSoyad })) : null,
                   ),
                 ),
               ),
@@ -230,7 +233,7 @@ function createListView(kapsam) {
               el('td', { className: 't-date', 'data-label': 'Tarih', text: fmtDateShort(m.masrafTarihi) ?? '—' }),
               el('td', { className: 'num t-amount', 'data-label': 'Tutar' }, el('span', { className: 'amount', text: main ?? '—' }), local ? el('span', { className: 'cell-sub', text: `≈ ${local}` }) : null),
               el('td', { className: 't-status', 'data-label': 'Durum' }, statusBadge(m.durum)),
-              el('td', { className: 't-next', 'data-label': 'Sıradaki onaycı', text: m.siradakiOnayci?.adSoyad ?? '—' }),
+              el('td', { className: `t-next${m.siradakiOnayci ? '' : ' is-empty'}`, 'data-label': 'Sıradaki onaycı', text: m.siradakiOnayci?.adSoyad ?? '—' }),
             ),
           );
         }

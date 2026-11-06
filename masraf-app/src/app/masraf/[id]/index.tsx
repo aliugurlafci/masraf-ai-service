@@ -5,7 +5,7 @@ import { Alert, RefreshControl, ScrollView, StyleSheet, View } from 'react-nativ
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { errorMessage } from '@/api/client';
+import { ApiError, errorMessage } from '@/api/client';
 import { approveMasraf, rejectMasraf, runMasrafAction, type MasrafIslemi } from '@/api/endpoints';
 import { useMasraf, useMasrafChanged, useOzet } from '@/api/queries';
 import type { MasrafDetay, MasrafFatura } from '@/api/types';
@@ -25,9 +25,9 @@ import { useToast } from '@/components/ui/Toast';
 import { useMotion } from '@/hooks/useMotion';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
-import { invoiceTotal, isOtherCurrency } from '@/lib/invoices';
+import { invoiceTotalInForm } from '@/lib/invoices';
 import { isPdf } from '@/lib/pickers';
-import { radius, spacing, statusColors, useTheme } from '@/theme';
+import { amountLargeFor, radius, spacing, statusColors, useTheme } from '@/theme';
 
 type ActionKey = 'duzenle' | 'gonder' | 'geriCek' | 'iptal' | 'onayla' | 'reddet' | 'odendi';
 
@@ -62,11 +62,14 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
   const [note, setNote] = useState('');
   const [noteError, setNoteError] = useState<string | null>(null);
 
+  // The base currency (PARA_BIRIMI) comes from GET /api/ozet; TRY until it has loaded.
   const localCurrency = ozet.data?.paraBirimi ?? 'TRY';
+  const base = localCurrency.toUpperCase();
   const tone = statusColors(colors, detail.durum);
   const izin = detail.izinler;
 
-  const run = async (key: ActionKey, call: () => Promise<MasrafDetay>, success: string): Promise<boolean> => {
+  /** `explain` may show a failure its own way; it returns true when it did. */
+  const run = async (key: ActionKey, call: () => Promise<MasrafDetay>, success: string, explain?: (err: unknown) => boolean): Promise<boolean> => {
     setBusy(key);
     try {
       const next = await call();
@@ -76,7 +79,7 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
       return true;
     } catch (err) {
       haptics.error();
-      toast(errorMessage(err), 'danger');
+      if (explain?.(err) !== true) toast(errorMessage(err), 'danger');
       onRefresh();
       return false;
     } finally {
@@ -117,17 +120,33 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
   const actions: { key: ActionKey; title: string; icon: IconName; variant: ButtonVariant; onPress: () => void }[] = [];
   if (izin.reddet) actions.push({ key: 'reddet', title: 'Reddet', icon: 'close-circle-outline', variant: 'dangerSoft', onPress: () => openSheet('reddet') });
   if (izin.onayla) actions.push({ key: 'onayla', title: 'Onayla', icon: 'checkmark-circle-outline', variant: 'success', onPress: () => openSheet('onayla') });
+  const openEdit = (): void => router.push({ pathname: '/masraf/[id]/duzenle', params: { id: String(detail.id) } });
   if (izin.duzenle) {
-    actions.push({
-      key: 'duzenle',
-      title: 'Düzenle',
-      icon: 'create-outline',
-      variant: 'outline',
-      onPress: () => router.push({ pathname: '/masraf/[id]/duzenle', params: { id: String(detail.id) } }),
-    });
+    actions.push({ key: 'duzenle', title: 'Düzenle', icon: 'create-outline', variant: 'outline', onPress: openEdit });
   }
   if (izin.gonder) {
-    actions.push({ key: 'gonder', title: 'Onaya gönder', icon: 'paper-plane', variant: 'primary', onPress: () => simple('gonder', 'gonder', 'Masraf onaya gönderildi.') });
+    actions.push({
+      key: 'gonder',
+      title: 'Onaya gönder',
+      icon: 'paper-plane',
+      variant: 'primary',
+      onPress: () =>
+        void run('gonder', () => runMasrafAction(detail.id, 'gonder'), 'Masraf onaya gönderildi.', (err) => {
+          // A missing equivalent is fixed on the edit screen; offer to go there instead of a passing toast.
+          if (!(err instanceof ApiError) || err.kod !== 'karsilik_eksik') return false;
+          Alert.alert(
+            `${base} karşılığı eksik`,
+            err.message,
+            izin.duzenle
+              ? [
+                  { text: 'Vazgeç', style: 'cancel' },
+                  { text: 'Düzenle', onPress: openEdit },
+                ]
+              : [{ text: 'Tamam' }],
+          );
+          return true;
+        }),
+    });
   }
   if (izin.geriCek) {
     actions.push({
@@ -151,15 +170,21 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
     });
   }
 
-  const showLocal = detail.paraBirimi.toUpperCase() !== localCurrency.toUpperCase();
+  const showLocal = detail.paraBirimi.toUpperCase() !== base;
   const faturalar = detail.faturalar;
   const fatura = faturalar.length === 1 ? (faturalar[0] ?? null) : null;
   const canZoom = fatura !== null && canOpen(fatura);
-  const fatOther = fatura !== null && isOtherCurrency(fatura, detail.paraBirimi);
-  // Which invoices make up tutarFarki.fatura (contract rule 6); only used to word the notice.
-  const counted = invoiceTotal(faturalar, detail.paraBirimi);
-  const otherCount = faturalar.filter((f) => isOtherCurrency(f, detail.paraBirimi)).length;
+  // Which invoices make up tutarFarki.fatura (contract rule 6); only used to word the notices. The
+  // server's karsilikGerekli says which invoices need an equivalent.
+  const counted = invoiceTotalInForm(detail.paraBirimi, base, detail.kur, faturalar);
+  const missingCount = faturalar.filter((f) => f.karsilikGerekli && f.yerelKarsilik === null).length;
+  // On a foreign-currency form, base-currency invoices and equivalents count through the form rate.
+  const converted =
+    showLocal &&
+    faturalar.some((f) => (f.karsilikGerekli ? f.yerelKarsilik !== null : f.paraBirimi === base && f.genelToplam !== null && f.genelToplam > 0));
   const mismatch = detail.tutarFarki;
+  // Why a returned form came back: the rejecting step's note, shown on top so the sender sees what to fix.
+  const rejection = detail.durum === 'reddedildi' ? (detail.onaylar.find((o) => o.durum === 'reddedildi') ?? null) : null;
 
   return (
     <View style={[styles.flex, { backgroundColor: colors.bg }]}>
@@ -178,7 +203,11 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
           <Text variant="title" accessibilityRole="header">
             {detail.baslik}
           </Text>
-          <Text variant="amountLarge" accessibilityLabel={`Tutar ${formatMoney(detail.tutar, detail.paraBirimi)}`}>
+          <Text
+            variant="amountLarge"
+            style={amountLargeFor(formatMoney(detail.tutar, detail.paraBirimi))}
+            accessibilityLabel={`Tutar ${formatMoney(detail.tutar, detail.paraBirimi)}`}
+          >
             {formatMoney(detail.tutar, detail.paraBirimi)}
           </Text>
           {showLocal ? (
@@ -197,6 +226,32 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
           ) : null}
         </Animated.View>
 
+        {rejection !== null ? (
+          <Animated.View entering={motion.enter(1)}>
+            <Banner
+              tone="danger"
+              icon="close-circle-outline"
+              message={
+                rejection.aciklama !== null && rejection.aciklama !== ''
+                  ? `${rejection.onayci.adSoyad} reddetti: “${rejection.aciklama}”`
+                  : `${rejection.onayci.adSoyad} reddetti.`
+              }
+            />
+          </Animated.View>
+        ) : null}
+
+        {missingCount > 0 && izin.gonder ? (
+          <Animated.View entering={motion.enter(1)}>
+            <Banner
+              tone="warning"
+              icon="cash-outline"
+              message={`${missingCount === 1 ? 'Bir faturanın' : `${missingCount} faturanın`} ${base} karşılığı girilmedi. ${
+                izin.duzenle ? `Göndermeden önce düzenleyip ${base} karşılığını girin.` : `Onaya göndermek için ${base} karşılığı gerekir.`
+              }`}
+            />
+          </Animated.View>
+        ) : null}
+
         {mismatch !== null ? (
           <Animated.View entering={motion.enter(1)}>
             <Banner
@@ -205,10 +260,13 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
               message={[
                 // Both amounts are in the form's own currency; the approval amount is in the local one.
                 `Beyan edilen tutar (${formatMoney(mismatch.beyan, detail.paraBirimi)}) ${
-                  (counted?.count ?? 0) > 1 ? 'faturaların genel toplamından' : 'fatura toplamından'
+                  (counted?.count ?? 0) > 1 ? 'faturaların toplamından' : 'fatura toplamından'
                 } (${formatMoney(mismatch.fatura, detail.paraBirimi)}) farklı.`,
-                otherCount > 0 ? `Farklı para birimindeki ${otherCount} fatura bu toplama girmez.` : null,
-                `Onay tutarı: ${formatMoney(detail.onayTutari, localCurrency)}.`,
+                converted ? `${base} tutarlar formun kuruyla ${detail.paraBirimi} cinsine çevrildi.` : null,
+                missingCount > 0 ? `${base} karşılığı girilmeyen ${missingCount} fatura bu toplama girmez.` : null,
+                // Not detail.onayTutari: it is null before the first submission and stays at the last
+                // submission's value while a returned form is edited. The rule (contract rule 6) is the larger one.
+                `Onay tutarı ikisinden büyük olan ${formatMoney(Math.max(mismatch.fatura, mismatch.beyan), detail.paraBirimi)} üzerinden belirlenir.`,
               ]
                 .filter((part) => part !== null)
                 .join(' ')}
@@ -248,12 +306,12 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
                 accessibilityLabel="Faturalar"
               >
                 {faturalar.map((f, i) => (
-                  <InvoiceTile key={f.id} fatura={f} index={i} count={faturalar.length} currency={detail.paraBirimi} />
+                  <InvoiceTile key={f.id} fatura={f} index={i} count={faturalar.length} currency={detail.paraBirimi} base={base} />
                 ))}
               </ScrollView>
               {counted !== null ? (
                 <Text variant="small" tone="muted" style={styles.sectionTitle}>
-                  {counted.count === faturalar.length ? 'Genel toplam' : `${counted.count} faturanın genel toplamı`}:{' '}
+                  {counted.count === faturalar.length ? 'Faturaların toplamı' : `${counted.count} faturanın toplamı`}:{' '}
                   {formatMoney(counted.total, detail.paraBirimi)}
                 </Text>
               ) : null}
@@ -294,10 +352,16 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
                 {fatura.genelToplam !== null ? (
                   <Text variant="amount">{formatMoney(fatura.genelToplam, fatura.paraBirimi ?? detail.paraBirimi)}</Text>
                 ) : null}
-                {fatOther ? (
-                  <Text variant="caption" tone="warning">
-                    Para birimi formdan farklı; onay tutarı hesabına girmez.
-                  </Text>
+                {fatura.karsilikGerekli ? (
+                  fatura.yerelKarsilik !== null ? (
+                    <Text variant="small" tone="muted" style={styles.tabular}>
+                      {base} karşılığı: {formatMoney(fatura.yerelKarsilik, base)}
+                    </Text>
+                  ) : (
+                    <Text variant="caption" tone="warning">
+                      {base} karşılığı girilmedi; onay tutarına girmez.
+                    </Text>
+                  )
                 ) : null}
                 {!fatura.dosyaVar ? (
                   <Text variant="caption" tone="warning">
@@ -362,7 +426,9 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
                   title={a.title}
                   icon={a.icon}
                   variant={a.variant}
-                  flex
+                  // Beside a main action, an outline one (Düzenle) takes only its own width, so the main
+                  // label fits on one line on a 360 pt screen.
+                  flex={!(row.length > 1 && a.variant === 'outline')}
                   loading={busy === a.key}
                   disabled={busy !== null && busy !== a.key}
                   onPress={a.onPress}
@@ -418,27 +484,33 @@ function InvoiceTile({
   index,
   count,
   currency,
+  base,
 }: {
   readonly fatura: MasrafFatura;
   readonly index: number;
   readonly count: number;
-  /** The form's currency; an invoice in another one stays out of the total. */
+  /** The form's currency, for a total whose currency was not read. */
   readonly currency: string;
+  /** The base currency an equivalent is in. */
+  readonly base: string;
 }) {
   const { colors } = useTheme();
   const motion = useMotion();
   const zoom = canOpen(fatura);
-  const other = isOtherCurrency(fatura, currency);
   const heading = fatura.saticiUnvan ?? (isPdf(fatura.mime) ? 'PDF fatura' : (fatura.dosyaAdi ?? 'Fatura'));
   const total = fatura.genelToplam !== null ? formatMoney(fatura.genelToplam, fatura.paraBirimi ?? currency) : null;
   const date = fatura.faturaTarihi !== null ? formatDate(fatura.faturaTarihi) : null;
-  const note = !fatura.dosyaVar ? 'Dosya bulunamadı' : other ? 'Toplama girmez' : null;
+  const equivalent =
+    fatura.karsilikGerekli && fatura.yerelKarsilik !== null ? `${base} karşılığı: ${formatMoney(fatura.yerelKarsilik, base)}` : null;
+  const missing = fatura.karsilikGerekli && fatura.yerelKarsilik === null ? `${base} karşılığı girilmedi` : null;
+  const note = !fatura.dosyaVar ? 'Dosya bulunamadı' : null;
   const label = [
     `Fatura ${index + 1} / ${count}`,
     heading,
     total,
     date,
-    other ? 'para birimi formdan farklı, toplama girmez' : null,
+    equivalent,
+    missing !== null ? `${missing}, toplama girmez` : null,
     !fatura.dosyaVar ? 'orijinal dosya bulunamadı' : null,
   ]
     .filter((part) => part !== null)
@@ -477,6 +549,16 @@ function InvoiceTile({
         {date !== null ? (
           <Text variant="caption" tone="muted" numberOfLines={1}>
             {date}
+          </Text>
+        ) : null}
+        {equivalent !== null ? (
+          <Text variant="caption" tone="muted" numberOfLines={2} style={styles.tabular}>
+            {equivalent}
+          </Text>
+        ) : null}
+        {missing !== null ? (
+          <Text variant="caption" tone="warning" numberOfLines={2}>
+            {missing}
           </Text>
         ) : null}
         {note !== null ? (
@@ -554,7 +636,8 @@ const styles = StyleSheet.create({
   // The strip runs to the screen edges while its first and last tiles line up with the content.
   stripBleed: { marginHorizontal: -spacing.xl },
   strip: { paddingHorizontal: spacing.xl, gap: spacing.md },
-  tile: { width: TILE_W, padding: spacing.sm, gap: 2, borderRadius: radius.xl, borderWidth: StyleSheet.hairlineWidth },
+  // flexGrow: tiles in the strip share the tallest one's height (an equivalent line makes a tile taller).
+  tile: { width: TILE_W, flexGrow: 1, padding: spacing.sm, gap: 2, borderRadius: radius.xl, borderWidth: StyleSheet.hairlineWidth },
   tileText: { marginTop: spacing.xs },
   tileZoom: {
     position: 'absolute',

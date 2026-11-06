@@ -4,7 +4,7 @@
 import * as api from '../api.js';
 import { el, icon, ICONS } from '../dom.js';
 import { fmtCount, fmtDateTime, fmtRelative } from '../format.js';
-import { humanize } from '../labels.js';
+import { auditLabel, humanize } from '../labels.js';
 import { btn, debounce, emptyState, input, loadFailed, pageHead, setBusy, skeletonList } from '../ui.js';
 
 const STEPS = [50, 100, 200, 500];
@@ -72,7 +72,7 @@ export const auditView = {
 
     function render() {
       const rows = q
-        ? entries.filter((e) => [humanize(e.islem), e.islem, e.kullanici?.adSoyad, textOf(e.ayrinti)].some((s) => (s ?? '').toLocaleLowerCase('tr-TR').includes(q)))
+        ? entries.filter((e) => [auditLabel(e.islem), e.islem, e.kullanici?.adSoyad, textOf(e.ayrinti)].some((s) => (s ?? '').toLocaleLowerCase('tr-TR').includes(q)))
         : entries;
       announcer.textContent = `${fmtCount(rows.length)} kayıt`;
       const canMore = entries.length >= STEPS[step] && step < STEPS.length - 1;
@@ -98,8 +98,8 @@ export const auditView = {
                   'tr',
                   {},
                   el('td', { className: 't-date', 'data-label': 'Zaman' }, el('time', { datetime: e.tarih, title: fmtDateTime(e.tarih) ?? '', text: fmtDateTime(e.tarih) ?? '' }), el('span', { className: 'cell-sub', text: fmtRelative(e.tarih) ?? '' })),
-                  el('td', { 'data-label': 'Kişi', text: e.kullanici?.adSoyad ?? 'Sistem' }),
-                  el('td', { 'data-label': 'İşlem' }, el('span', { className: 'audit-op', title: e.islem, text: humanize(e.islem) })),
+                  el('td', { className: 't-who', 'data-label': 'Kişi', text: e.kullanici?.adSoyad ?? 'Sistem' }),
+                  el('td', { 'data-label': 'İşlem' }, el('span', { className: 'audit-op', title: e.islem, text: auditLabel(e.islem) })),
                   el('td', { className: 't-detail', 'data-label': 'Ayrıntı' }, detailNode(e.ayrinti)),
                 ),
               ),

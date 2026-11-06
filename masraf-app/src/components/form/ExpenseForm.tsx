@@ -29,9 +29,16 @@ import {
 } from '@/hooks/useInvoiceAttachments';
 import { useMotion } from '@/hooks/useMotion';
 import { categoryIcon } from '@/lib/categories';
-import { amountToInput, formatDate, formatDateFriendly, formatMoney, parseAmount, todayIso, toIsoDate } from '@/lib/format';
+import { amountToInput, formatDate, formatDateFriendly, formatMoney, formatWeekday, parseAmount, todayIso, toIsoDate } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
-import { invoiceTotal, isOtherCurrency, MAX_INVOICES, sameIds, type InvoiceSummary } from '@/lib/invoices';
+import {
+  invoiceTotalInForm,
+  MAX_INVOICES,
+  needsEquivalent,
+  sameAmounts,
+  sameIds,
+  type InvoiceMoney,
+} from '@/lib/invoices';
 import { pickInvoices, type InvoiceSource } from '@/lib/pickers';
 import { minTouch, radius, spacing, useTheme } from '@/theme';
 
@@ -56,6 +63,11 @@ type FieldKey = keyof Values | 'faturaIdler';
 const FIELD_KEYS: readonly FieldKey[] = ['baslik', 'kategoriId', 'masrafTarihi', 'tutar', 'paraBirimi', 'kur', 'satici', 'aciklama', 'faturaIdler'];
 /** Server errors for one invoice of the list: `faturaIdler.<index in the sent list>`. */
 const INVOICE_FIELD = /^faturaIdler\.(\d+)$/;
+/** Server errors for one invoice's base-currency equivalent: `yerelKarsiliklar.<invoice id>`. */
+const EQUIVALENT_FIELD = /^yerelKarsiliklar\.(.+)$/;
+
+/** An equivalent the server accepts: positive, at most 2 decimals. */
+const validEquivalent = (value: number | null): value is number => value !== null && value > 0 && /^\d+(\.\d{1,2})?$/.test(String(value));
 
 const BASE_CURRENCIES = ['TRY', 'USD', 'EUR', 'GBP'] as const;
 
@@ -91,18 +103,164 @@ function initialValues(initial: MasrafDetay | undefined): Values {
   };
 }
 
-/**
- * A saved amount that differs from its invoices' total was set by hand, so it counts as typed and is not
- * replaced when invoices are added or removed. An amount equal to the total keeps following the invoices.
- */
-function initialTouched(initial: MasrafDetay | undefined): Partial<Record<keyof Values, boolean>> {
-  if (initial === undefined) return {};
-  const sum = invoiceTotal(initial.faturalar, initial.paraBirimi);
-  return sum !== null && Math.round(sum.total * 100) !== Math.round(initial.tutar * 100) ? { tutar: true } : {};
+type TextKey = Exclude<keyof Values, 'kategoriId'>;
+
+interface FormState {
+  readonly values: Values;
+  /** Fields the user typed into; in edit mode also every field the saved form had filled. */
+  readonly touched: Partial<Record<keyof Values, boolean>>;
+  /** The amount was last set from the invoices, so it keeps following them as they change. */
+  readonly amountAuto: boolean;
+  /** The amount followed the invoices and none adds to it any more, so it was emptied. */
+  readonly amountCleared: boolean;
+  /**
+   * Base-currency equivalents typed for invoices in a third currency, by invoice id. Kept while the form's
+   * currency changes, but only those the invoices need are counted and sent.
+   */
+  readonly equivalents: Readonly<Record<string, string>>;
 }
 
-function summariesOf(list: readonly InvoiceAttachment[]): InvoiceSummary[] {
-  return list.map(attachmentSummary).filter((s): s is InvoiceSummary => s !== null);
+const cents = (value: number): number => Math.round(value * 100);
+const ISO_CURRENCY = /^[A-Z]{3}$/;
+
+function initialState(initial: MasrafDetay | undefined, localCurrency: string): FormState {
+  const values = initialValues(initial);
+  if (initial === undefined) return { values, touched: {}, amountAuto: false, amountCleared: false, equivalents: {} };
+  // The saved form was filled on purpose: an invoice added now only fills fields that are still empty.
+  const touched: Partial<Record<keyof Values, boolean>> = {};
+  for (const key of Object.keys(values) as (keyof Values)[]) {
+    const value = values[key];
+    if (value !== null && value !== '') touched[key] = true;
+  }
+  // A saved amount equal to its invoices' total keeps following them as invoices change (as on the panel).
+  const sum = invoiceTotalInForm(initial.paraBirimi, localCurrency.toUpperCase(), initial.kur, initial.faturalar);
+  const follows = sum !== null && cents(sum.total) === cents(initial.tutar);
+  if (follows) delete touched.tutar;
+  const equivalents: Record<string, string> = {};
+  for (const f of initial.faturalar) if (f.yerelKarsilik !== null) equivalents[f.id] = amountToInput(f.yerelKarsilik);
+  return { values, touched, amountAuto: follows, amountCleared: false, equivalents };
+}
+
+/** What each invoice adds to the total, with the equivalent typed for it. */
+function moneyOf(list: readonly InvoiceAttachment[], equivalents: Readonly<Record<string, string>>): InvoiceMoney[] {
+  return list.flatMap((item) => {
+    const summary = attachmentSummary(item);
+    if (summary === null) return [];
+    const id = attachmentId(item);
+    const value = id === null ? null : parseAmount(equivalents[id] ?? '');
+    return [{ genelToplam: summary.genelToplam, paraBirimi: summary.paraBirimi, yerelKarsilik: validEquivalent(value) ? value : null }];
+  });
+}
+
+/**
+ * Fills the form from its invoices. The first invoice with read data fills the currency, date, seller and
+ * title once it is read (`readKey`), but only fields the user has not typed into or that are empty. Until
+ * the user types an amount, it is the invoices' total in the form's currency: invoices in that currency
+ * plus base-currency invoices and entered equivalents divided by the rate (without a rate only the
+ * former). When no invoice adds to it any more, an amount that came from the invoices is emptied rather
+ * than left in the wrong currency or for invoices that are gone.
+ */
+function fillState(state: FormState, list: readonly InvoiceAttachment[], readKey: string | null, localCurrency: string): FormState {
+  const before = state.values;
+  const fillable = (key: TextKey): boolean => state.touched[key] !== true || before[key].trim() === '';
+  let values = before;
+  if (readKey !== null) {
+    const first = list.find((item) => attachmentSummary(item) !== null);
+    const f = first !== undefined && first.key === readKey ? attachmentSummary(first) : null;
+    if (f !== null) {
+      const next = { ...values };
+      if (f.paraBirimi !== null && ISO_CURRENCY.test(f.paraBirimi) && fillable('paraBirimi')) next.paraBirimi = f.paraBirimi;
+      if (f.faturaTarihi !== null && f.faturaTarihi <= todayIso() && fillable('masrafTarihi')) next.masrafTarihi = f.faturaTarihi;
+      if (f.saticiUnvan !== null && f.saticiUnvan.trim() !== '') {
+        if (fillable('satici')) next.satici = f.saticiUnvan;
+        if (fillable('baslik')) next.baslik = f.saticiUnvan.slice(0, 120);
+      }
+      values = next;
+    }
+  }
+  let { amountAuto, amountCleared } = state;
+  const typed = state.touched.tutar === true && !amountAuto && values.tutar.trim() !== '';
+  if (!typed) {
+    const baseCurrency = localCurrency.toUpperCase();
+    const currency = (values.paraBirimi === '' ? baseCurrency : values.paraBirimi).toUpperCase();
+    const rate = currency === baseCurrency ? null : parseAmount(values.kur);
+    const sum = invoiceTotalInForm(currency, baseCurrency, rate, moneyOf(list, state.equivalents));
+    if (sum !== null) {
+      const tutar = amountToInput(sum.total);
+      if (values.tutar !== tutar) values = { ...values, tutar };
+      amountAuto = true;
+      amountCleared = false;
+    } else if (amountAuto && values.tutar !== '') {
+      values = { ...values, tutar: '' };
+      amountAuto = false;
+      amountCleared = true;
+    } else {
+      amountAuto = false;
+    }
+  }
+  return { ...state, values, amountAuto, amountCleared };
+}
+
+/** The saved form's fields as a PATCH would carry them; the base edits are measured against. */
+interface SavedFields {
+  readonly baslik: string;
+  readonly kategoriId: number;
+  readonly masrafTarihi: string;
+  readonly tutar: number;
+  readonly paraBirimi: string;
+  readonly kur: number | null;
+  readonly satici: string | null;
+  readonly aciklama: string | null;
+  readonly faturaIdler: readonly string[];
+  readonly yerelKarsiliklar: Readonly<Record<string, number>>;
+}
+
+const emptyToNull = (text: string | null): string | null => (text === null || text.trim() === '' ? null : text);
+
+function savedFields(d: MasrafDetay): SavedFields {
+  return {
+    baslik: d.baslik,
+    kategoriId: d.kategori.id,
+    masrafTarihi: d.masrafTarihi,
+    tutar: d.tutar,
+    paraBirimi: d.paraBirimi,
+    kur: d.kur,
+    satici: emptyToNull(d.satici),
+    aciklama: emptyToNull(d.aciklama),
+    faturaIdler: d.faturalar.map((f) => f.id),
+    yerelKarsiliklar: Object.fromEntries(d.faturalar.flatMap((f) => (f.yerelKarsilik === null ? [] : [[f.id, f.yerelKarsilik] as const]))),
+  };
+}
+
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+/**
+ * Only what the user changed since the screen opened. PATCH leaves fields it does not get as they are, so
+ * a change made elsewhere meanwhile (e.g. an invoice added on the web panel) is not overwritten by stale
+ * values. A rate belongs to its currency, so the two always go together.
+ */
+function editPatch(
+  next: Omit<SavedFields, 'faturaIdler' | 'yerelKarsiliklar'>,
+  faturaIdler: readonly string[],
+  yerelKarsiliklar: Readonly<Record<string, number>>,
+  base: SavedFields,
+): MasrafGuncelleIstegi {
+  const patch: Mutable<MasrafGuncelleIstegi> = {};
+  if (next.baslik !== base.baslik) patch.baslik = next.baslik;
+  if (next.kategoriId !== base.kategoriId) patch.kategoriId = next.kategoriId;
+  if (next.masrafTarihi !== base.masrafTarihi) patch.masrafTarihi = next.masrafTarihi;
+  if (cents(next.tutar) !== cents(base.tutar)) patch.tutar = next.tutar;
+  if (next.paraBirimi !== base.paraBirimi || next.kur !== base.kur) {
+    patch.paraBirimi = next.paraBirimi;
+    patch.kur = next.kur;
+  }
+  if (next.satici !== base.satici) patch.satici = next.satici;
+  if (next.aciklama !== base.aciklama) patch.aciklama = next.aciklama;
+  // The list replaces the form's invoices entirely, so it goes only when it changed.
+  if (!sameIds(faturaIdler, base.faturaIdler)) patch.faturaIdler = faturaIdler;
+  // The equivalents replace the stored ones as a whole: sent when they changed, and with a new list.
+  if (patch.faturaIdler !== undefined || !sameAmounts(yerelKarsiliklar, base.yerelKarsiliklar)) patch.yerelKarsiliklar = yerelKarsiliklar;
+  return patch;
 }
 
 function without(record: Readonly<Record<string, string>>, key: string): Readonly<Record<string, string>> {
@@ -126,51 +284,36 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
   const sentKeys = useRef<readonly string[]>([]);
   const picking = useRef(false);
   const autoStarted = useRef(false);
+  // Set synchronously when a save starts, so a tap in the same frame cannot add or remove invoices.
+  const saving = useRef(false);
+  const mounted = useRef(false);
 
-  const [values, setValues] = useState<Values>(() => initialValues(initial));
-  const [touched, setTouched] = useState<Partial<Record<keyof Values, boolean>>>(() => initialTouched(initial));
+  // The base currency (PARA_BIRIMI) comes from GET /api/ozet; TRY until it has loaded.
+  const localCurrency = ozet.data?.paraBirimi ?? 'TRY';
+  const [form, setForm] = useState<FormState>(() => initialState(initial, localCurrency));
+  // The saved form as it was when this screen opened. `initial` is refetched in the background (focus,
+  // staleness); the form must neither reset what the user entered nor measure changes against a newer
+  // copy, which would drop invoices or fields changed elsewhere meanwhile.
+  const [base, setBase] = useState<SavedFields | null>(() => (initial === undefined ? null : savedFields(initial)));
+  const values = form.values;
   const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [invoiceErrors, setInvoiceErrors] = useState<Readonly<Record<string, string>>>({});
+  // Errors for equivalents, by invoice id.
+  const [equivalentErrors, setEquivalentErrors] = useState<Readonly<Record<string, string>>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [manual, setManual] = useState(mode === 'edit');
   const [busy, setBusy] = useState<'draft' | 'send' | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
 
-  const localCurrency = ozet.data?.paraBirimi ?? 'TRY';
+  const baseCurrency = localCurrency.toUpperCase();
   const currencyOf = (paraBirimi: string): string => (paraBirimi === '' ? localCurrency : paraBirimi).toUpperCase();
   const currency = currencyOf(values.paraBirimi);
   const needsKur = currency !== localCurrency.toUpperCase();
   const amount = parseAmount(values.tutar);
   const kur = parseAmount(values.kur);
 
-  /**
-   * Fills what the user has not typed into from the invoices. The first invoice with read data fills the
-   * date, seller, title and currency once it is read (`readKey`); the amount follows the sum of the
-   * invoices in the form's currency until the user types an amount.
-   */
   const fillFromInvoices = (list: readonly InvoiceAttachment[], readKey: string | null): void => {
-    setValues((v) => {
-      let next = v;
-      if (readKey !== null) {
-        const first = list.find((item) => attachmentSummary(item) !== null);
-        const f = first !== undefined && first.key === readKey ? attachmentSummary(first) : null;
-        if (f !== null) {
-          next = {
-            ...next,
-            paraBirimi: !touched.paraBirimi && f.paraBirimi !== null ? f.paraBirimi : next.paraBirimi,
-            masrafTarihi:
-              !touched.masrafTarihi && f.faturaTarihi !== null && f.faturaTarihi <= todayIso() ? f.faturaTarihi : next.masrafTarihi,
-            satici: !touched.satici && f.saticiUnvan !== null ? f.saticiUnvan : next.satici,
-            baslik: !touched.baslik && f.saticiUnvan !== null ? f.saticiUnvan.slice(0, 120) : next.baslik,
-          };
-        }
-      }
-      if (!touched.tutar) {
-        const sum = invoiceTotal(summariesOf(list), currencyOf(next.paraBirimi));
-        if (sum !== null) next = { ...next, tutar: amountToInput(sum.total) };
-      }
-      return next;
-    });
+    setForm((f) => fillState(f, list, readKey, localCurrency));
   };
 
   const attachments = useInvoiceAttachments(initial?.faturalar ?? [], {
@@ -188,16 +331,34 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
   const items = attachments.items;
   const attached = items.flatMap((item) => {
     const id = attachmentId(item);
-    return id === null ? [] : [{ key: item.key, id }];
+    return id === null ? [] : [{ key: item.key, id, summary: attachmentSummary(item) }];
   });
   const faturaIdler = attached.map((a) => a.id);
-  const initialIds = initial?.faturalar.map((f) => f.id) ?? [];
   const readingCount = items.filter(isReading).length;
-  const invoiceSum = invoiceTotal(summariesOf(items), currency);
+  const kurValid = kur !== null && kur > 0;
+  const money = moneyOf(items, form.equivalents);
+  const invoiceSum = invoiceTotalInForm(currency, baseCurrency, needsKur ? kur : null, money);
+  // Base-currency amounts that would count once a rate is typed.
+  const waitingForRate = needsKur && !kurValid && (invoiceTotalInForm(currency, baseCurrency, 1, money)?.count ?? 0) > (invoiceSum?.count ?? 0);
+  // Invoices in a third currency need their base-currency equivalent; only theirs are counted and sent.
+  const equivalentOf = (id: string): number | null => parseAmount(form.equivalents[id] ?? '');
+  const needingEquivalent = attached.filter((a) => a.summary !== null && needsEquivalent(currency, baseCurrency, a.summary));
+  const yerelKarsiliklar: Record<string, number> = {};
+  for (const a of needingEquivalent) {
+    const value = equivalentOf(a.id);
+    if (validEquivalent(value)) yerelKarsiliklar[a.id] = value;
+  }
+  const missingEquivalents = needingEquivalent.filter((a) => yerelKarsiliklar[a.id] === undefined).length;
+  const hasEquivalents = Object.keys(yerelKarsiliklar).length > 0;
 
   const set = <K extends keyof Values>(key: K, value: Values[K]): void => {
-    setValues((v) => ({ ...v, [key]: value }));
-    setTouched((t) => ({ ...t, [key]: true }));
+    setForm((f) => ({
+      ...f,
+      values: { ...f.values, [key]: value },
+      touched: { ...f.touched, [key]: true },
+      // A typed amount stops following the invoices.
+      ...(key === 'tutar' ? { amountAuto: false, amountCleared: false } : {}),
+    }));
     if (errors[key] !== undefined) setErrors((e) => ({ ...e, [key]: undefined }));
   };
 
@@ -206,6 +367,7 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
       setManual(true);
       return;
     }
+    if (saving.current) return;
     const room = MAX_INVOICES - items.length;
     if (room <= 0) {
       haptics.warning();
@@ -216,7 +378,12 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
     picking.current = true;
     try {
       const files = await pickInvoices(choice, room);
-      if (files.length === 0) return;
+      // The screen may have closed while the system picker was open; nothing can be attached any more.
+      if (!mounted.current || files.length === 0) return;
+      if (saving.current) {
+        toast('Kaydedilirken fatura eklenemez; kayıt bitince tekrar ekleyin.', 'info');
+        return;
+      }
       setFormError(null);
       setErrors((e) => ({ ...e, faturaIdler: undefined }));
       const accepted = files.slice(0, room);
@@ -232,6 +399,13 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
     }
   };
 
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   // "Fiş tara" opens the camera as soon as the screen is up.
   useEffect(() => {
     if (autoSource === undefined || autoStarted.current) return;
@@ -241,6 +415,11 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
   }, [autoSource]);
 
   const removeInvoice = (key: string): void => {
+    if (saving.current) return;
+    const removed = items.find((item) => item.key === key);
+    const removedId = removed === undefined ? null : attachmentId(removed);
+    // A typed equivalent stays in memory, so re-adding the invoice brings it back.
+    if (removedId !== null) setEquivalentErrors((e) => without(e, removedId));
     const list = attachments.remove(key);
     setInvoiceErrors((e) => without(e, key));
     setErrors((e) => ({ ...e, faturaIdler: undefined }));
@@ -248,7 +427,15 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
     fillFromInvoices(list, null);
   };
 
+  const setEquivalent = (id: string, text: string): void => {
+    const clean = text.replace(/[^0-9.,]/g, '');
+    setForm((f) => ({ ...f, equivalents: { ...f.equivalents, [id]: clean } }));
+    setEquivalentErrors((e) => without(e, id));
+    fillFromInvoices(items, null);
+  };
+
   const retryInvoice = (key: string): void => {
+    if (saving.current) return;
     setInvoiceErrors((e) => without(e, key));
     attachments.retry(key);
   };
@@ -260,18 +447,39 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
           paraBirimi: currency,
           ...(needsKur && kur !== null ? { kur } : {}),
           ...(faturaIdler.length > 0 ? { faturaIdler } : {}),
+          ...(hasEquivalents ? { yerelKarsiliklar } : {}),
         }
       : null;
 
-  /** Quick checks for instant feedback; the server's answer is what counts. */
-  const validate = (): boolean => {
+  /**
+   * Quick checks for instant feedback; the server's answer is what counts. Sending also needs every
+   * equivalent (contract rule 6); a draft can be saved without them.
+   */
+  const validate = (send: boolean): boolean => {
     const local: Partial<Record<FieldKey, string>> = {};
     if (values.baslik.trim() === '') local.baslik = 'Başlık girin.';
     if (values.kategoriId === null) local.kategoriId = 'Bir kategori seçin.';
     if (amount === null || amount <= 0) local.tutar = 'Geçerli bir tutar girin.';
     if (needsKur && (kur === null || kur <= 0)) local.kur = `${currency} için kur girin.`;
+    const equivalents: Record<string, string> = {};
+    for (const a of needingEquivalent) {
+      const typed = (form.equivalents[a.id] ?? '').trim() !== '';
+      const value = equivalentOf(a.id);
+      if (typed && (value === null || value <= 0)) equivalents[a.id] = 'Geçerli bir tutar girin.';
+      else if (typed && !validEquivalent(value)) equivalents[a.id] = 'Tutar en fazla 2 ondalık basamak olabilir.';
+      else if (send && !typed) equivalents[a.id] = `Onaya göndermek için ${baseCurrency} karşılığını girin.`;
+    }
     setErrors(local);
-    return Object.keys(local).length === 0;
+    setEquivalentErrors(equivalents);
+    if (Object.keys(equivalents).length > 0) {
+      setFormError(
+        send && missingEquivalents > 0
+          ? `Onaya göndermek için ${baseCurrency} karşılığı eksik faturalar var. Taslak olarak kaydedebilirsiniz.`
+          : 'Bazı alanları düzeltin.',
+      );
+      scrollRef.current?.scrollTo({ y: 0, animated: !motion.reduced });
+    }
+    return Object.keys(local).length === 0 && Object.keys(equivalents).length === 0;
   };
 
   const applyServerError = (err: unknown): void => {
@@ -279,11 +487,14 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
     if (err instanceof ApiError) {
       const fieldErrors: Partial<Record<FieldKey, string>> = {};
       const itemErrors: Record<string, string> = {};
+      const equivalentErrorsNext: Record<string, string> = {};
       const other: string[] = [];
       for (const [key, message] of Object.entries(err.alanlar)) {
         const match = INVOICE_FIELD.exec(key);
         const itemKey = match !== null ? sentKeys.current[Number(match[1])] : undefined;
-        if (itemKey !== undefined) itemErrors[itemKey] = message;
+        const equivalentId = EQUIVALENT_FIELD.exec(key)?.[1];
+        if (equivalentId !== undefined && faturaIdler.includes(equivalentId)) equivalentErrorsNext[equivalentId] = message;
+        else if (itemKey !== undefined) itemErrors[itemKey] = message;
         else if (match !== null) fieldErrors.faturaIdler = message;
         else if ((FIELD_KEYS as readonly string[]).includes(key)) fieldErrors[key as FieldKey] = message;
         else other.push(message);
@@ -294,8 +505,18 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
       }
       setErrors(fieldErrors);
       setInvoiceErrors(itemErrors);
-      const hasFieldErrors = Object.keys(fieldErrors).length > 0 || Object.keys(itemErrors).length > 0;
-      setFormError(hasFieldErrors ? (other.length > 0 ? other.join('\n') : 'Bazı alanları düzeltin.') : [err.message, ...err.sorunlar].join('\n'));
+      setEquivalentErrors(equivalentErrorsNext);
+      const hasFieldErrors =
+        Object.keys(fieldErrors).length > 0 || Object.keys(itemErrors).length > 0 || Object.keys(equivalentErrorsNext).length > 0;
+      setFormError(
+        err.kod === 'karsilik_eksik'
+          ? `Onaya göndermek için ${baseCurrency} karşılığı eksik faturalar var. Taslak olarak kaydedebilirsiniz.`
+          : hasFieldErrors
+            ? other.length > 0
+              ? other.join('\n')
+              : 'Bazı alanları düzeltin.'
+            : [err.message, ...err.sorunlar].join('\n'),
+      );
     } else {
       setFormError(errorMessage(err));
     }
@@ -303,6 +524,8 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
   };
 
   const save = async (send: boolean): Promise<void> => {
+    if (saving.current) return;
+    saving.current = true;
     setBusy(send ? 'send' : 'draft');
     setInvoiceErrors({});
     const fields = {
@@ -321,6 +544,7 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
           ...(values.satici.trim() !== '' ? { satici: values.satici.trim() } : {}),
           ...(values.aciklama.trim() !== '' ? { aciklama: values.aciklama.trim() } : {}),
           ...(faturaIdler.length > 0 ? { faturaIdler } : {}),
+          ...(hasEquivalents ? { yerelKarsiliklar } : {}),
           gonder: send,
         });
         await changed(detail);
@@ -329,26 +553,45 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
         onDone(detail, send);
         return;
       }
-      if (initial === undefined) return;
-      // Edit: PATCH every field (empty optional text clears it), then send when asked. The invoice list
-      // replaces the form's invoices entirely, so it goes only when it changed; otherwise the invoices
-      // stay exactly as they are (including any added on the web panel).
-      const invoicesChanged = !sameIds(faturaIdler, initialIds);
-      sentKeys.current = invoicesChanged ? attached.map((a) => a.key) : [];
-      const patch: MasrafGuncelleIstegi = {
-        ...fields,
-        kur: needsKur ? kur : null,
-        satici: values.satici.trim() === '' ? null : values.satici.trim(),
-        aciklama: values.aciklama.trim() === '' ? null : values.aciklama.trim(),
-        ...(invoicesChanged ? { faturaIdler } : {}),
-      };
-      let detail = await updateMasraf(initial.id, patch);
-      await changed(detail);
+      if (initial === undefined || base === null) return;
+      // Edit: PATCH what changed since the screen opened (empty optional text clears it), then send when asked.
+      const patch = editPatch(
+        {
+          ...fields,
+          kur: needsKur ? kur : null,
+          satici: values.satici.trim() === '' ? null : values.satici.trim(),
+          aciklama: values.aciklama.trim() === '' ? null : values.aciklama.trim(),
+        },
+        faturaIdler,
+        yerelKarsiliklar,
+        base,
+      );
+      sentKeys.current = patch.faturaIdler !== undefined ? attached.map((a) => a.key) : [];
+      if (Object.keys(patch).length === 0 && !send) {
+        toast('Değişiklik yok.', 'info');
+        onDone(initial, false);
+        return;
+      }
+      const patched = Object.keys(patch).length > 0;
+      let detail = initial;
+      if (patched) {
+        detail = await updateMasraf(initial.id, patch);
+        await changed(detail);
+      }
       if (send) {
         try {
           detail = await runMasrafAction(initial.id, 'gonder');
           await changed(detail);
         } catch (err) {
+          // Nothing was saved: show it like any failed save, on this screen.
+          if (!patched) throw err;
+          if (err instanceof ApiError && err.kod === 'karsilik_eksik') {
+            // Saved, but an equivalent is missing: stay so the user can enter it. What was saved is the new base.
+            setBase(savedFields(detail));
+            applyServerError(err);
+            setFormError(`Değişiklikler kaydedildi ancak gönderilemedi. Onaya göndermek için ${baseCurrency} karşılığı eksik faturalar var.`);
+            return;
+          }
           // Saved but not sent (e.g. 409 onaylayan_yok): keep the changes, show why it did not go out.
           haptics.error();
           toast(`Değişiklikler kaydedildi ancak gönderilemedi: ${errorMessage(err)}`, 'danger');
@@ -362,6 +605,7 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
     } catch (err) {
       applyServerError(err);
     } finally {
+      saving.current = false;
       setBusy(null);
     }
   };
@@ -369,7 +613,7 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
   const submit = (send: boolean): void => {
     if (busy !== null || attachments.busy) return;
     setFormError(null);
-    if (!validate()) {
+    if (!validate(send)) {
       haptics.error();
       return;
     }
@@ -395,6 +639,27 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
   const currencies = Array.from(new Set<string>([localCurrency.toUpperCase(), ...BASE_CURRENCIES, currency]));
   const showPicker = items.length === 0 && !manual;
   const several = items.length > 1;
+  // While saving, the invoice list is fixed: what is being saved is what the user sees.
+  const locked = busy !== null;
+  const canSend = mode === 'create' || initial?.izinler.gonder === true;
+
+  /** The equivalent field of an invoice in a third currency; null for any other invoice. */
+  const equivalentInput = (item: InvoiceAttachment): EquivalentInput | null => {
+    const id = attachmentId(item);
+    const summary = attachmentSummary(item);
+    if (id === null || summary === null || !needsEquivalent(currency, baseCurrency, summary)) return null;
+    return { value: form.equivalents[id] ?? '', error: equivalentErrors[id], onChange: (text) => setEquivalent(id, text) };
+  };
+
+  /** Base-currency amounts on a foreign-currency form count through the rate; say so while it is missing. */
+  const rateNote = (item: InvoiceAttachment): string | null => {
+    const summary = attachmentSummary(item);
+    const id = attachmentId(item);
+    if (summary === null || id === null || !needsKur || kurValid) return null;
+    const inBase = summary.paraBirimi === baseCurrency && summary.genelToplam !== null && summary.genelToplam > 0;
+    const withEquivalent = needsEquivalent(currency, baseCurrency, summary) && yerelKarsiliklar[id] !== undefined;
+    return inBase || withEquivalent ? 'Kur girilince tutar toplamına katılır.' : null;
+  };
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior="padding" keyboardVerticalOffset={headerHeight}>
@@ -439,7 +704,11 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
                       item={item}
                       compact={several}
                       currency={currency}
+                      baseCurrency={baseCurrency}
+                      equivalent={equivalentInput(item)}
+                      note={rateNote(item)}
                       error={invoiceErrors[item.key]}
+                      disabled={locked}
                       onRemove={() => removeInvoice(item.key)}
                       onRetry={() => retryInvoice(item.key)}
                     />
@@ -448,7 +717,7 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
               ))}
               {invoiceSum !== null && invoiceSum.count > 1 ? (
                 <Text variant="small" tone="muted" style={styles.groupLabel}>
-                  {invoiceSum.count} faturanın genel toplamı: {formatMoney(invoiceSum.total, currency)}
+                  {invoiceSum.count} faturanın toplamı: {formatMoney(invoiceSum.total, currency)}
                 </Text>
               ) : null}
               {items.length < MAX_INVOICES ? (
@@ -467,6 +736,7 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
                         flex
                         accessibilityLabel={source.label}
                         accessibilityHint={source.hint}
+                        disabled={locked}
                         onPress={() => void choose(source.value)}
                       />
                     ))}
@@ -553,11 +823,14 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
                 style={[styles.dateField, { backgroundColor: colors.surface, borderColor: errors.masrafTarihi !== undefined ? colors.danger : colors.border }]}
               >
                 <Ionicons name="calendar-outline" size={20} color={colors.primary} />
-                <Text variant="bodyStrong" style={styles.flex}>
+                <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
                   {formatDateFriendly(values.masrafTarihi)}
                 </Text>
-                <Text variant="small" tone="muted">
-                  {formatDate(values.masrafTarihi)}
+                {/* "Bugün" and "Dün" are followed by the date; a date is followed by its weekday, not by itself again. */}
+                <Text variant="small" tone="muted" numberOfLines={1}>
+                  {formatDateFriendly(values.masrafTarihi) === formatDate(values.masrafTarihi)
+                    ? formatWeekday(values.masrafTarihi)
+                    : formatDate(values.masrafTarihi)}
                 </Text>
               </PressableScale>
             </View>
@@ -579,7 +852,15 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
             placeholder="0,00"
             keyboardType="decimal-pad"
             error={errors.tutar}
-            hint={amount !== null && amount > 0 ? formatMoney(amount, currency) : undefined}
+            hint={
+              form.amountCleared
+                ? waitingForRate
+                  ? `Kur girilince faturaların ${baseCurrency} tutarı ${currency} cinsine çevrilip buraya yazılır.`
+                  : `${currency} cinsinden tutara katılacak fatura kalmadı; tutarı girin.`
+                : amount !== null && amount > 0
+                  ? formatMoney(amount, currency)
+                  : undefined
+            }
             inputStyle={styles.amountInput}
           />
 
@@ -595,6 +876,8 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
                   selected={currency === code}
                   onPress={() => {
                     set('paraBirimi', code);
+                    // Which invoices need an equivalent depends on the currency; old errors no longer apply.
+                    setEquivalentErrors({});
                     // An amount that follows the invoices switches to the invoices in the new currency.
                     fillFromInvoices(items, null);
                   }}
@@ -609,12 +892,20 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
               <TextField
                 label={`Kur (1 ${currency} = ? ${localCurrency})`}
                 value={values.kur}
-                onChangeText={(t) => set('kur', t.replace(/[^0-9.,]/g, ''))}
+                onChangeText={(t) => {
+                  set('kur', t.replace(/[^0-9.,]/g, ''));
+                  // Base-currency invoices and equivalents count through the rate.
+                  fillFromInvoices(items, null);
+                }}
                 placeholder="Örn. 34,25"
                 keyboardType="decimal-pad"
                 error={errors.kur}
                 hint={
-                  amount !== null && kur !== null ? `Yerel tutar: ${formatMoney(Math.round(amount * kur * 100) / 100, localCurrency)}` : 'Para birimi yerel para biriminden farklı; kur zorunludur.'
+                  amount !== null && kur !== null
+                    ? `Yerel tutar: ${formatMoney(Math.round(amount * kur * 100) / 100, localCurrency)}`
+                    : waitingForRate
+                      ? `Kur zorunludur; girilince ${baseCurrency} tutarları da fatura toplamına katılır.`
+                      : 'Para birimi yerel para biriminden farklı; kur zorunludur.'
                 }
               />
             </Animated.View>
@@ -648,18 +939,23 @@ export function ExpenseForm({ mode, initial, autoSource, onDone }: ExpenseFormPr
               ? 'Faturalar okunurken kaydedilemez; okumalar bitince düğmeler açılır.'
               : 'Fatura okunurken kaydedilemez; okuma bitince düğmeler açılır.'}
           </Text>
+        ) : canSend && missingEquivalents > 0 ? (
+          <Text variant="caption" tone="warning" align="center">
+            {missingEquivalents === 1 ? 'Bir faturanın' : `${missingEquivalents} faturanın`} {baseCurrency} karşılığı eksik; onaya göndermeden
+            önce girin. Taslak olarak kaydedilebilir.
+          </Text>
         ) : null}
         <View style={styles.row}>
+          {/* Content-wide and without an icon, so "Onaya gönder" / "Kaydet ve gönder" keeps one line at 360 pt. */}
           <Button
             title={mode === 'create' ? 'Taslak kaydet' : 'Kaydet'}
-            icon="save-outline"
             variant="outline"
-            flex
+            flex={!canSend}
             loading={busy === 'draft'}
             disabled={attachments.busy || busy === 'send'}
             onPress={() => submit(false)}
           />
-          {mode === 'create' || initial?.izinler.gonder === true ? (
+          {canSend ? (
             <Button
               title={mode === 'create' ? 'Onaya gönder' : 'Kaydet ve gönder'}
               icon="paper-plane"
@@ -689,21 +985,39 @@ function yesterdayIso(): string {
   return toIsoDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1));
 }
 
+interface EquivalentInput {
+  readonly value: string;
+  readonly error: string | undefined;
+  readonly onChange: (text: string) => void;
+}
+
 /** One invoice of the list: reading, failed, read on this device or already on the form. */
 function InvoiceItem({
   item,
   compact,
   currency,
+  baseCurrency,
+  equivalent,
+  note,
   error,
+  disabled,
   onRemove,
   onRetry,
 }: {
   readonly item: InvoiceAttachment;
   /** Several invoices on the form: smaller cards. */
   readonly compact: boolean;
-  /** The form's currency; invoices in another one stay out of the total. */
+  /** The form's currency. */
   readonly currency: string;
+  /** PARA_BIRIMI; an invoice in a third currency asks for its value in this one. */
+  readonly baseCurrency: string;
+  /** Set for an invoice in a third currency: its base-currency equivalent. */
+  readonly equivalent: EquivalentInput | null;
+  /** Why the invoice does not count toward the amount yet, if it does not. */
+  readonly note: string | null;
   readonly error: string | undefined;
+  /** No removing or retrying while the form is being saved. */
+  readonly disabled: boolean;
   readonly onRemove: () => void;
   readonly onRetry: () => void;
 }) {
@@ -711,13 +1025,13 @@ function InvoiceItem({
   const thumbW = compact ? 44 : 56;
   const thumbH = compact ? 56 : 70;
 
-  if (item.kind === 'local' && (item.reading.phase === 'uploading' || item.reading.phase === 'waiting')) {
+  if (item.kind === 'local' && (item.reading.phase === 'pending' || item.reading.phase === 'uploading' || item.reading.phase === 'waiting')) {
     const reading = item.reading;
     return (
       <ReadingCard
         file={item.file}
         startedAt={reading.startedAt}
-        phase={reading.phase === 'uploading' ? 'uploading' : reading.itemState}
+        phase={reading.phase === 'waiting' ? reading.itemState : reading.phase}
         onCancel={onRemove}
         compact={compact}
       />
@@ -728,7 +1042,8 @@ function InvoiceItem({
     const message = item.reading.message;
     return (
       <View style={[styles.attached, compact && styles.attachedCompact, { backgroundColor: colors.surface, borderColor: colors.warning }]}>
-        <View style={styles.attachedRow}>
+        {/* Top-aligned: a long server message must not push the thumbnail down. */}
+        <View style={[styles.attachedRow, styles.attachedRowTop]}>
           <InvoiceThumb source={{ kind: 'local', uri: item.file.uri, mime: item.file.mimeType }} width={thumbW} height={thumbH} />
           <View style={styles.flex} accessible accessibilityLabel={`Okunamadı: ${item.file.name}. ${message}`}>
             <View style={styles.attachedTitle}>
@@ -740,7 +1055,8 @@ function InvoiceItem({
             <Text variant="caption" tone="faint" numberOfLines={1}>
               {item.file.name}
             </Text>
-            <Text variant="small" tone="muted">
+            {/* The full message is in the label above; a long technical one would make the card very tall. */}
+            <Text variant="small" tone="muted" numberOfLines={compact ? 3 : 4}>
               {compact ? message : `${message} Bilgileri elle girebilirsiniz.`}
             </Text>
           </View>
@@ -753,6 +1069,7 @@ function InvoiceItem({
             variant="secondary"
             flex
             accessibilityLabel={`Tekrar dene: ${item.file.name}`}
+            disabled={disabled}
             onPress={onRetry}
           />
           <Button
@@ -762,6 +1079,7 @@ function InvoiceItem({
             variant="dangerSoft"
             flex
             accessibilityLabel={`Kaldır: ${item.file.name}`}
+            disabled={disabled}
             onPress={onRemove}
           />
         </View>
@@ -774,7 +1092,8 @@ function InvoiceItem({
     item.kind === 'server'
       ? 'Bağlı fatura'
       : item.reading.phase === 'done' && item.reading.onbellek
-        ? 'Fatura daha önce okunmuş'
+        ? // Short enough for one line beside the thumbnail and delete button on a 360 pt screen.
+          'Daha önce okunmuş'
         : 'Fatura okundu';
   const name = item.kind === 'server' ? (item.fatura.dosyaAdi ?? item.fatura.faturaNo ?? 'Fatura') : item.file.name;
   const facts = [
@@ -782,16 +1101,15 @@ function InvoiceItem({
     summary?.faturaTarihi !== null && summary?.faturaTarihi !== undefined ? formatDate(summary.faturaTarihi) : null,
     summary?.saticiUnvan ?? null,
   ].filter((f): f is string => f !== null);
-  const otherCurrency = summary !== null && isOtherCurrency(summary, currency) ? summary.paraBirimi : null;
-  const otherNote = otherCurrency !== null ? `${otherCurrency} faturası; ${currency} tutar toplamına girmez.` : null;
   const emptyNote = facts.length === 0 && item.kind === 'local' ? 'Faturadan alan okunamadı; bilgileri elle girin.' : null;
+  const invalid = error !== undefined || equivalent?.error !== undefined;
 
   return (
     <View
       style={[
         styles.attached,
         compact && styles.attachedCompact,
-        { backgroundColor: colors.surface, borderColor: error !== undefined ? colors.danger : colors.success },
+        { backgroundColor: colors.surface, borderColor: invalid ? colors.danger : colors.success },
       ]}
     >
       <View style={styles.attachedRow}>
@@ -804,7 +1122,7 @@ function InvoiceItem({
           width={thumbW}
           height={thumbH}
         />
-        <View style={styles.flex} accessible accessibilityLabel={[title, name, ...facts, otherNote, emptyNote].filter((p) => p !== null).join('. ')}>
+        <View style={styles.flex} accessible accessibilityLabel={[title, name, ...facts, note, emptyNote].filter((p) => p !== null).join('. ')}>
           <View style={styles.attachedTitle}>
             <Ionicons name="checkmark-circle" size={18} color={colors.success} />
             <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
@@ -823,14 +1141,34 @@ function InvoiceItem({
               {emptyNote}
             </Text>
           ) : null}
-          {otherNote !== null ? (
+          {note !== null ? (
             <Text variant="caption" tone="warning">
-              {otherNote}
+              {note}
             </Text>
           ) : null}
         </View>
-        <IconButton icon="trash-outline" tone="soft" color={colors.danger} accessibilityLabel={`Faturayı kaldır: ${name}`} onPress={onRemove} />
+        <IconButton
+          icon="trash-outline"
+          tone="soft"
+          color={colors.danger}
+          accessibilityLabel={`Faturayı kaldır: ${name}`}
+          disabled={disabled}
+          onPress={onRemove}
+        />
       </View>
+      {equivalent !== null ? (
+        <TextField
+          label={`${baseCurrency} karşılığı`}
+          value={equivalent.value}
+          onChangeText={equivalent.onChange}
+          placeholder="0,00"
+          keyboardType="decimal-pad"
+          editable={!disabled}
+          error={equivalent.error}
+          hint={`${summary?.paraBirimi ?? ''} fatura. Kart ekstrenizdeki ya da bankanızın uyguladığı ${baseCurrency} tutarı.`}
+          accessibilityLabel={`${name} için ${baseCurrency} karşılığı`}
+        />
+      ) : null}
       {error !== undefined ? <FieldError message={error} /> : null}
     </View>
   );
@@ -870,6 +1208,7 @@ const styles = StyleSheet.create({
   attached: { borderRadius: radius.xl, borderWidth: 1.5, padding: spacing.lg, gap: spacing.md },
   attachedCompact: { padding: spacing.md, gap: spacing.sm },
   attachedRow: { flexDirection: 'row', gap: spacing.md, alignItems: 'center' },
+  attachedRowTop: { alignItems: 'flex-start' },
   attachedTitle: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   footer: { paddingHorizontal: spacing.xl, paddingTop: spacing.md, gap: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth },
 });

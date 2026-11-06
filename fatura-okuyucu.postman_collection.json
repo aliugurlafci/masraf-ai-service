@@ -357,7 +357,7 @@
                 "masraflar"
               ]
             },
-            "description": "`faturaIdler` sizin yüklediğiniz faturaların kimlikleridir (en çok 20, eklenme sırasıyla), örneğin `[\"{{faturaId}}\"]`. Bir fatura iptal edilmemiş yalnızca bir formda kullanılabilir (`409 fatura_kullaniliyor`). Düzenlemede (`PATCH`) gönderilen liste, formun faturalarının tamamı yerine geçer. `gonder: true` formu kaydedip hemen onaya gönderir."
+            "description": "`faturaIdler` sizin yüklediğiniz faturaların kimlikleridir (en çok 20, eklenme sırasıyla), örneğin `[\"{{faturaId}}\"]`. Bir fatura iptal edilmemiş yalnızca bir formda kullanılabilir (`409 fatura_kullaniliyor`). Düzenlemede (`PATCH`) gönderilen liste, formun faturalarının tamamı yerine geçer. Formun ve yerel para biriminin dışındaki bir faturanın yerel karşılığı `yerelKarsiliklar` ile verilir, örneğin `{\"{{faturaId}}\": 6500}`; karşılığı eksik form onaya gönderilemez (`409 karsilik_eksik`). `gonder: true` formu kaydedip hemen onaya gönderir."
           },
           "response": []
         },
@@ -443,7 +443,7 @@
                 "onizle"
               ]
             },
-            "description": "Bu tutarla form gönderseydim kendi onay akışımda hangi onaycılara giderdi. Yönetici gövdeye `akisId` ekleyerek kayıtlı başka bir akışı deneyebilir."
+            "description": "Bu tutarla form gönderseydim kendi onay akışımda, akışın stratejisine göre hangi onaycılara giderdi. Kendi adımım `atlandi` görünür; karar veren onaycı bensem son onay bir üst onaycıya, en üstteysem bir yöneticiye (`yedek: true`) geçer. Yönetici gövdeye `akisId` ekleyerek kayıtlı başka bir akışı kendi stratejisiyle deneyebilir."
           },
           "response": []
         },
@@ -855,7 +855,7 @@
                 "onay-akislari"
               ]
             },
-            "description": "Bütün akışlar; varsayılan önce, sonra ada göre. `kullaniciSayisi` masrafları şu an o akışa giden aktif kullanıcılardır."
+            "description": "Bütün akışlar; varsayılan önce, sonra ada göre. Her akışta `strateji` ve adımların `limit` değeri (son adımda `null`) döner. `kullaniciSayisi` masrafları şu an o akışa giden aktif kullanıcılardır."
           },
           "response": []
         },
@@ -871,7 +871,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"ad\": \"Satış\",\n  \"adimlar\": [\n    {\n      \"onayciId\": 1,\n      \"altLimit\": 0,\n      \"ustLimit\": null\n    },\n    {\n      \"onayciId\": 2,\n      \"altLimit\": 5000.01,\n      \"ustLimit\": null\n    }\n  ]\n}",
+              "raw": "{\n  \"ad\": \"Satış\",\n  \"strateji\": \"zincir\",\n  \"adimlar\": [\n    {\n      \"onayciId\": 1,\n      \"limit\": 5000\n    },\n    {\n      \"onayciId\": 2,\n      \"limit\": null\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -888,7 +888,7 @@
                 "onay-akislari"
               ]
             },
-            "description": "Dizi sırası onay sırasıdır. En az bir onaycı ve 0'dan sınırsıza kadar boşluksuz aralık gerekir; aksi halde 400 `gecersiz_akis` ve `sorunlar`. Ad benzersizdir (409 `akis_adi_kullaniliyor`)."
+            "description": "Dizi sırası onay sırasıdır. `strateji` zorunludur: `zincir` (masraf ilk onaycıdan başlar, karar veren onaycıya kadar sıradaki herkes sırayla onaylar) ya da `tek` (yalnızca karar veren onaycı onaylar).\n\nHer adımın `limit` değeri, onaycının son onayını verebileceği en yüksek tutardır (dahil, kuruş hassasiyetinde, `PARA_BIRIMI` cinsinden). Limitler sırayla büyür; son adımın `limit` değeri `null` (sınırsız) olmalıdır, diğerleri 0'dan büyüktür. Karar veren onaycı, limiti tutara yeten ilk onaycıdır. Örnekte zincirleme onayda 3.000 yalnızca 1. onaycıya, 20.000 önce 1. sonra 2. onaycıya gider.\n\nKurala uymayan akış 400 `gecersiz_akis` ve `sorunlar` listesiyle döner; eksik ya da hatalı alanlar 400 `gecersiz_istek` ve `alanlar` ile (ör. `strateji`, `adimlar.0.limit`). Ad benzersizdir (409 `akis_adi_kullaniliyor`)."
           },
           "response": []
         },
@@ -923,7 +923,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"ad\": \"Satış\",\n  \"adimlar\": [\n    {\n      \"onayciId\": 1,\n      \"altLimit\": 0,\n      \"ustLimit\": null\n    },\n    {\n      \"onayciId\": 2,\n      \"altLimit\": 5000.01,\n      \"ustLimit\": null\n    }\n  ]\n}",
+              "raw": "{\n  \"ad\": \"Satış\",\n  \"strateji\": \"tek\",\n  \"adimlar\": [\n    {\n      \"onayciId\": 1,\n      \"limit\": 5000\n    },\n    {\n      \"onayciId\": 2,\n      \"limit\": null\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -941,7 +941,7 @@
                 "{{akisId}}"
               ]
             },
-            "description": "Akışın adı ve bütün adımları yenisiyle değişir. Süren formlar etkilenmez."
+            "description": "Akışın adı, stratejisi ve bütün adımları yenisiyle değişir; gövde oluşturmadakiyle aynıdır. Örnekteki `tek` akışta 5.000'e kadar olan masrafları yalnızca 1. onaycı, üstündekileri yalnızca 2. onaycı onaylar. Süren formlar etkilenmez."
           },
           "response": []
         },

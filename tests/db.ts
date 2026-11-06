@@ -2,6 +2,7 @@
 // Vitest worker in its own database "<MSSQL_DATABASE>_test_<n>", so files can run in parallel.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Strateji } from '../src/approval/flow.ts';
 import { hashPassword } from '../src/auth/password.ts';
 import { openSession } from '../src/auth/sessions.ts';
 import { ConfigError, loadDbConfig, ROOT_DIR } from '../src/config.ts';
@@ -62,7 +63,7 @@ const SEED_CATEGORIES: ReadonlyArray<[number, string, string]> = [
 
 /**
  * Empties every table and puts back the seeded categories (ids 1–9). Only the default approval flow
- * stays, empty and named "Genel" as the migration leaves it. A read still finishing from the
+ * stays, empty, named "Genel" and a chain ('zincir') as the migrations leave it. A read still finishing from the
  * previous test may insert a row mid-reset (foreign key error) or deadlock with it; then it tries again.
  */
 export async function resetDb(db: Db): Promise<void> {
@@ -76,7 +77,7 @@ export async function resetDb(db: Db): Promise<void> {
            DELETE FROM dbo.onay_adimlari; UPDATE dbo.onay_akislari SET guncelleyen_id = NULL;
            DELETE FROM dbo.oturumlar; DELETE FROM dbo.denetim_kayitlari;
            DELETE FROM dbo.masraf_kategorileri; DELETE FROM dbo.kullanicilar;
-           DELETE FROM dbo.onay_akislari WHERE varsayilan = 0; UPDATE dbo.onay_akislari SET ad = N'Genel';`,
+           DELETE FROM dbo.onay_akislari WHERE varsayilan = 0; UPDATE dbo.onay_akislari SET ad = N'Genel', strateji = 'zincir';`,
         ),
       );
       break;
@@ -151,7 +152,14 @@ export async function makeInvoice(
   return record.id;
 }
 
-type Steps = ReadonlyArray<{ onayciId: number; altLimit: number; ustLimit: number | null }>;
+export type Steps = ReadonlyArray<{ onayciId: number; limit: number | null }>;
+
+/**
+ * Steps every amount above a few cents passes, approver by approver, in a 'zincir' flow: limits 0,01,
+ * 0,02, … and none for the last one. One id gives a single approver without a limit. This is what a
+ * flow whose approvers all started at 0 became (see 002_onay_stratejisi.sql).
+ */
+export const chainOf = (...ids: readonly number[]): Steps => ids.map((onayciId, i) => ({ onayciId, limit: i === ids.length - 1 ? null : (i + 1) / 100 }));
 
 /** The id of the default approval flow. */
 export async function defaultFlowId(db: Db): Promise<number> {
@@ -161,28 +169,28 @@ export async function defaultFlowId(db: Db): Promise<number> {
 }
 
 /**
- * Replaces the steps of an approval flow directly (the service's checks are tested elsewhere).
- * Without `flowId` it is the default flow.
+ * Replaces the strategy and the steps of an approval flow directly (the service's checks are tested
+ * elsewhere). Without `flowId` it is the default flow.
  */
-export async function setFlow(db: Db, steps: Steps, flowId?: number): Promise<void> {
+export async function setFlow(db: Db, steps: Steps, strateji: Strateji = 'zincir', flowId?: number): Promise<void> {
   const id = flowId ?? (await defaultFlowId(db));
+  await execute(db, 'UPDATE dbo.onay_akislari SET strateji = @st WHERE id = @f', { f: p.int(id), st: p.ascii(strateji, 8) });
   await execute(db, 'DELETE FROM dbo.onay_adimlari WHERE akis_id = @f', { f: p.int(id) });
   for (const [i, s] of steps.entries()) {
-    await execute(db, 'INSERT INTO dbo.onay_adimlari (akis_id, sira, onayci_id, alt_limit, ust_limit) VALUES (@f, @s, @o, @a, @u)', {
+    await execute(db, 'INSERT INTO dbo.onay_adimlari (akis_id, sira, onayci_id, onay_limiti) VALUES (@f, @s, @o, @l)', {
       f: p.int(id),
       s: p.int(i + 1),
       o: p.int(s.onayciId),
-      a: p.money(s.altLimit),
-      u: p.money(s.ustLimit),
+      l: p.money(s.limit),
     });
   }
 }
 
-/** Adds a (non-default) approval flow with the given steps and returns its id. */
-export async function makeFlow(db: Db, ad: string, steps: Steps): Promise<number> {
+/** Adds a (non-default) approval flow with the given strategy and steps and returns its id. */
+export async function makeFlow(db: Db, ad: string, steps: Steps, strateji: Strateji = 'zincir'): Promise<number> {
   const row = await queryOne<{ id: number }>(db, 'INSERT INTO dbo.onay_akislari (ad) OUTPUT inserted.id VALUES (@ad)', { ad: p.str(ad, 80) });
   if (row === null) throw new Error('test onay akışı eklenemedi');
-  await setFlow(db, steps, row.id);
+  await setFlow(db, steps, strateji, row.id);
   return row.id;
 }
 

@@ -15,6 +15,11 @@ const invoiceIds = z
     if (twice >= 0) ctx.addIssue({ code: 'custom', message: 'Aynı fatura bir forma iki kez eklenemez.', path: [twice] });
   });
 
+/** Base-currency equivalents by invoice id, for invoices in a third currency. */
+const equivalents = z
+  .record(recordId, amount('Karşılık'), { error: 'Karşılıklar fatura kimliğinden tutara bir eşleme olmalıdır.' })
+  .refine((m) => Object.keys(m).length <= MAX_INVOICES, `En fazla ${MAX_INVOICES} karşılık girilebilir.`);
+
 const formFields = {
   baslik: text('Başlık', 120),
   kategoriId: id('Kategori'),
@@ -25,6 +30,7 @@ const formFields = {
   satici: optionalText('Satıcı', 200),
   aciklama: optionalText('Açıklama', 1000),
   faturaIdler: invoiceIds.optional(),
+  yerelKarsiliklar: equivalents.optional(),
 };
 
 const NewFormBody = z.object({ ...formFields, gonder: z.boolean().optional() }).strict();
@@ -39,6 +45,7 @@ const FormPatchBody = z
     satici: formFields.satici,
     aciklama: formFields.aciklama,
     faturaIdler: formFields.faturaIdler,
+    yerelKarsiliklar: formFields.yerelKarsiliklar,
   })
   .strict();
 
@@ -72,6 +79,7 @@ const PreviewBody = z.object({
   paraBirimi: currency.optional(),
   kur: rate.nullable().optional(),
   faturaIdler: invoiceIds.optional(),
+  yerelKarsiliklar: equivalents.optional(),
   akisId: id('Onay akışı').optional(),
 });
 const InboxQuery = z.object({ durum: z.enum(['bekleyen', 'karar'], { error: 'Durum bekleyen ya da karar olmalıdır.' }).default('bekleyen') });

@@ -27,7 +27,8 @@ const COMPACT_H = 66;
 
 export interface ReadingCardProps {
   readonly file: PickedFile;
-  readonly phase: 'uploading' | 'sirada' | 'okunuyor';
+  /** pending: waiting on the device for an upload slot; sirada: queued on the server; okunuyor: being read. */
+  readonly phase: 'pending' | 'uploading' | 'sirada' | 'okunuyor';
   readonly startedAt: number;
   readonly onCancel: () => void;
   /** Smaller card for a list of several invoices: no long explanation, no "fill the form meanwhile" note. */
@@ -67,13 +68,16 @@ export function ReadingCard({ file, phase, startedAt, onCancel, compact = false 
   const scanStyle = useAnimatedStyle(() => ({ transform: [{ translateY: scan.get() * (docH - 14) }] }));
   const barStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -120 + bar.get() * 360 }] }));
 
-  const title = phase === 'uploading' ? 'Dosya gönderiliyor' : phase === 'sirada' ? 'Sırada bekliyor' : 'Fatura okunuyor';
+  const title =
+    phase === 'pending' ? 'Gönderilmeyi bekliyor' : phase === 'uploading' ? 'Dosya gönderiliyor' : phase === 'sirada' ? 'Sırada bekliyor' : 'Fatura okunuyor';
   const detail =
     phase === 'okunuyor'
       ? 'Tutar, tarih ve satıcı birazdan forma gelecek. Bu bir dakika kadar sürebilir.'
       : phase === 'sirada'
         ? 'Okuyucular dolu; sıra gelince okumaya başlanacak.'
-        : 'Dosya sunucuya yükleniyor.';
+        : phase === 'pending'
+          ? 'Önceki dosyalar gönderilince yüklenecek.'
+          : 'Dosya sunucuya yükleniyor.';
   const minutes = Math.floor(elapsed / 60);
   const seconds = elapsed % 60;
   const elapsedText = minutes > 0 ? `${minutes} dk ${seconds} sn` : `${seconds} sn`;

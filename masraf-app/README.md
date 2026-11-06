@@ -66,7 +66,9 @@ Emülatör veya USB ile bağlı cihaz, sunucuyu ağa açmadan kendi `127.0.0.1:4
 adb reverse tcp:4000 tcp:4000
 ```
 
-Komutu her cihaz bağlantısında (emülatör yeniden başlayınca da) tekrarlayın. Sunucu başka bir portta çalışıyorsa iki port numarasını ve `EXPO_PUBLIC_API_URL` değerini birlikte değiştirin.
+Komutu her cihaz bağlantısında (emülatör yeniden başlayınca da) tekrarlayın. Sunucu başka bir portta çalışıyorsa iki port numarasını ve `EXPO_PUBLIC_API_URL` değerini birlikte değiştirin. `adb` PATH'te değilse Android SDK'daki tam yolu kullanın (Windows: `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`).
+
+Ardından uygulamayı `npm run android` ile açın. Bu komut Metro'yu `--localhost` ile başlatır: uygulama Metro'ya da `127.0.0.1` üzerinden bağlanır, Expo Metro portu için `adb reverse` kuralını kendisi ekler, bilgisayarın Wi-Fi'sine gerek kalmaz. Metro'nun portu (8081) başka bir programda açıksa Expo başka bir port önerir; kabul edin ya da portu kendiniz verin: `npx expo start --android --localhost --port 8082`.
 
 ### iOS simülatörü
 

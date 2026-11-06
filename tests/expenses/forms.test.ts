@@ -5,7 +5,7 @@ import { execute, p, query, type Db } from '../../src/db/sql.ts';
 import { createExpenseService, type ExpenseService, type FormInput, type MasrafDetay } from '../../src/expenses/forms.ts';
 import type { Izinler } from '../../src/expenses/rules.ts';
 import type { Kullanici } from '../../src/users/users.ts';
-import { assignFlow, closeTestDb, defaultFlowId, makeFlow, makeInvoice, makeUser, resetDb, setFlow, testDb } from '../db.ts';
+import { assignFlow, chainOf, closeTestDb, defaultFlowId, makeFlow, makeInvoice, makeUser, resetDb, setFlow, testDb } from '../db.ts';
 
 const PAST = '2025-06-15';
 const form = (over: Partial<FormInput> = {}): FormInput => ({ baslik: 'Müşteri yemeği', kategoriId: 1, masrafTarihi: PAST, tutar: 100, ...over });
@@ -16,8 +16,6 @@ const events = (d: MasrafDetay): string[] => d.gecmis.map((g) => g.islem);
 
 const NONE: Izinler = { duzenle: false, gonder: false, geriCek: false, iptal: false, onayla: false, reddet: false, odendi: false, devret: false };
 const allow = (...keys: Array<keyof Izinler>): Izinler => ({ ...NONE, ...Object.fromEntries(keys.map((k) => [k, true])) });
-
-const unlimited = (onayciId: number, altLimit = 0) => ({ onayciId, altLimit, ustLimit: null });
 
 describe('expense service', () => {
   let db: Db;
@@ -44,12 +42,16 @@ describe('expense service', () => {
     );
 
   describe('routing', () => {
-    it('sends a form to every approver whose range holds the approval amount, in flow order', async () => {
+    it('chain: sends a form to every approver up to the one whose limit covers the approval amount, in flow order', async () => {
       const ayse = await makeUser(db, { adSoyad: 'Ayşe' });
       const mehmet = await makeUser(db, { adSoyad: 'Mehmet' });
       const zeynep = await makeUser(db, { adSoyad: 'Zeynep' });
       const sender = await makeUser(db);
-      await setFlow(db, [unlimited(ayse.id), unlimited(mehmet.id, 5000.01), unlimited(zeynep.id, 50000.01)]);
+      await setFlow(db, [
+        { onayciId: ayse.id, limit: 5000 },
+        { onayciId: mehmet.id, limit: 50000 },
+        { onayciId: zeynep.id, limit: null },
+      ]);
 
       const small = await svc.create(sender, form({ tutar: 3000 }), true);
       expect(small).toMatchObject({ durum: 'onayda', tur: 1, onayTutari: 3000, siradakiOnayci: { id: ayse.id, adSoyad: 'Ayşe' } });
@@ -73,11 +75,14 @@ describe('expense service', () => {
       expect(big.gecmis[1]?.aciklama).toContain('Ayşe → Mehmet → Zeynep');
     });
 
-    it('walks overlapping ranges one approver at a time', async () => {
+    it('walks a chain one approver at a time', async () => {
       const ayse = await makeUser(db);
       const mehmet = await makeUser(db);
       const sender = await makeUser(db);
-      await setFlow(db, [unlimited(ayse.id), unlimited(mehmet.id, 5000.01)]);
+      await setFlow(db, [
+        { onayciId: ayse.id, limit: 5000 },
+        { onayciId: mehmet.id, limit: null },
+      ]);
       const f = await svc.create(sender, form({ tutar: 20000 }), true);
 
       await fails(svc.approve(f.id, mehmet, null), 409, 'onay_beklemiyor');
@@ -101,16 +106,20 @@ describe('expense service', () => {
       expect(events(done)).toEqual(['olusturuldu', 'gonderildi', 'onaylandi', 'onaylandi', 'tamamlandi']);
     });
 
-    it('sends to a single approver when ranges only touch, down to the cent', async () => {
+    it("single approver ('tek'): sends to the approver whose limit covers the amount, down to the cent", async () => {
       const low = await makeUser(db);
       const mid = await makeUser(db);
       const high = await makeUser(db);
       const sender = await makeUser(db);
-      await setFlow(db, [
-        { onayciId: low.id, altLimit: 0, ustLimit: 5000 },
-        { onayciId: mid.id, altLimit: 5000.01, ustLimit: 50000 },
-        { onayciId: high.id, altLimit: 50000.01, ustLimit: null },
-      ]);
+      await setFlow(
+        db,
+        [
+          { onayciId: low.id, limit: 5000 },
+          { onayciId: mid.id, limit: 50000 },
+          { onayciId: high.id, limit: null },
+        ],
+        'tek',
+      );
       const cases: Array<[number, number]> = [
         [0.01, low.id],
         [5000, low.id],
@@ -133,10 +142,45 @@ describe('expense service', () => {
       expect(chain(over)).toEqual([{ id: mid.id, durum: 'bekliyor' }]);
     });
 
+    it('routes the same approvers and limits by the strategy of the flow, copying the band of each step', async () => {
+      const low = await makeUser(db, { adSoyad: 'Alt' });
+      const mid = await makeUser(db, { adSoyad: 'Orta' });
+      const high = await makeUser(db, { adSoyad: 'Üst' });
+      const sender = await makeUser(db);
+      const steps = [
+        { onayciId: low.id, limit: 5000 },
+        { onayciId: mid.id, limit: 50000 },
+        { onayciId: high.id, limit: null },
+      ];
+      const band = (d: MasrafDetay) => d.onaylar.map((o) => [o.onayci.id, o.altLimit, o.ustLimit]);
+
+      await setFlow(db, steps, 'zincir');
+      const chained = await svc.create(sender, form({ tutar: 20000 }), true);
+      expect(chain(chained)).toEqual([
+        { id: low.id, durum: 'bekliyor' },
+        { id: mid.id, durum: 'sirada' },
+      ]);
+      expect(band(chained)).toEqual([
+        [low.id, 0, null],
+        [mid.id, 5000.01, null],
+      ]);
+      expect(chained.gecmis[1]?.aciklama).toBe('Onay tutarı 20.000,00 TRY. Onay akışı: Genel. Onaycılar: Alt → Orta.');
+
+      await setFlow(db, steps, 'tek');
+      const single = await svc.create(sender, form({ tutar: 20000 }), true);
+      expect(chain(single)).toEqual([{ id: mid.id, durum: 'bekliyor' }]);
+      expect(band(single)).toEqual([[mid.id, 5000.01, 50000]]);
+      expect(single.gecmis[1]?.aciklama).toBe('Onay tutarı 20.000,00 TRY. Onay akışı: Genel. Onaycılar: Orta.');
+      expect((await svc.approve(single.id, mid, null)).durum).toBe('onaylandi');
+
+      // The form sent as a chain keeps its steps.
+      expect(chain(await svc.detail(chained.id, sender))).toEqual(chain(chained));
+    });
+
     it("skips the sender's own step", async () => {
       const ayse = await makeUser(db);
       const mehmet = await makeUser(db);
-      await setFlow(db, [unlimited(ayse.id), unlimited(mehmet.id)]);
+      await setFlow(db, chainOf(ayse.id, mehmet.id));
       const d = await svc.create(ayse, form(), true);
       expect(chain(d)).toEqual([
         { id: ayse.id, durum: 'atlandi' },
@@ -151,7 +195,7 @@ describe('expense service', () => {
       const first = await makeUser(db);
       const sender = await makeUser(db);
       const last = await makeUser(db);
-      await setFlow(db, [unlimited(first.id), unlimited(sender.id), unlimited(last.id)]);
+      await setFlow(db, chainOf(first.id, sender.id, last.id));
       const d = await svc.create(sender, form(), true);
       expect(chain(d)).toEqual([
         { id: first.id, durum: 'bekliyor' },
@@ -167,11 +211,81 @@ describe('expense service', () => {
       expect((await svc.approve(d.id, last, null)).durum).toBe('onaylandi');
     });
 
-    it('falls back to an active administrator outside the flow when the sender is the only matching approver', async () => {
+    it('sends the last approval of the deciding approver\'s own expense one approver up', async () => {
+      const ayse = await makeUser(db, { adSoyad: 'Ayşe' });
+      const mehmet = await makeUser(db, { adSoyad: 'Mehmet' });
+      const zeynep = await makeUser(db, { adSoyad: 'Zeynep' });
+      const steps = [
+        { onayciId: ayse.id, limit: 5000 },
+        { onayciId: mehmet.id, limit: 50000 },
+        { onayciId: zeynep.id, limit: null },
+      ];
+      // The contract's example: Mehmet's 20.000 goes to Ayşe, then to Zeynep.
+      await setFlow(db, steps, 'zincir');
+      const chained = await svc.create(mehmet, form({ tutar: 20000 }), true);
+      expect(chain(chained)).toEqual([
+        { id: ayse.id, durum: 'bekliyor' },
+        { id: mehmet.id, durum: 'atlandi' },
+        { id: zeynep.id, durum: 'sirada' },
+      ]);
+      expect(chained.onaylar.map((o) => [o.sira, o.yedek])).toEqual([
+        [1, false],
+        [2, false],
+        [3, false],
+      ]);
+      expect(chained.gecmis[1]?.aciklama).toContain('Onaycılar: Ayşe → Zeynep.');
+      expect(chain(await svc.approve(chained.id, ayse, null))[2]).toEqual({ id: zeynep.id, durum: 'bekliyor' });
+      expect((await svc.approve(chained.id, zeynep, null)).durum).toBe('onaylandi');
+
+      // With a single approver the one above decides alone; the step keeps its own band.
+      await setFlow(db, steps, 'tek');
+      const single = await svc.create(ayse, form({ tutar: 3000 }), true);
+      expect(single.onaylar.map((o) => [o.onayci.id, o.durum, o.altLimit, o.ustLimit, o.yedek])).toEqual([
+        [ayse.id, 'atlandi', 0, 5000, false],
+        [mehmet.id, 'bekliyor', 5000.01, 50000, false],
+      ]);
+    });
+
+    it('sends the top approver\'s own expense to an administrator; without one a chain keeps the approvers below', async () => {
+      const ayse = await makeUser(db, { adSoyad: 'Ayşe' });
+      const zeynep = await makeUser(db, { adSoyad: 'Zeynep' });
+      const steps = [
+        { onayciId: ayse.id, limit: 5000 },
+        { onayciId: zeynep.id, limit: null },
+      ];
+      // No administrator: the chain goes on with Ayşe alone, a single approver has nobody left.
+      await setFlow(db, steps, 'zincir');
+      const chained = await svc.create(zeynep, form({ tutar: 8000 }), true);
+      expect(chained.onaylar.map((o) => [o.onayci.id, o.durum, o.yedek])).toEqual([
+        [ayse.id, 'bekliyor', false],
+        [zeynep.id, 'atlandi', false],
+      ]);
+      expect((await svc.approve(chained.id, ayse, null)).durum).toBe('onaylandi');
+      await setFlow(db, steps, 'tek');
+      await fails(svc.create(zeynep, form({ tutar: 8000 }), true), 409, 'onaylayan_yok');
+
+      // With an active administrator outside the flow, they give the last approval in both strategies.
+      const admin = await makeUser(db, { rol: 'yonetici', adSoyad: 'Yedek Yönetici' });
+      const single = await svc.create(zeynep, form({ tutar: 8000 }), true);
+      expect(single.onaylar.map((o) => [o.onayci.id, o.durum, o.yedek, o.altLimit, o.ustLimit])).toEqual([
+        [zeynep.id, 'atlandi', false, 5000.01, null],
+        [admin.id, 'bekliyor', true, 0, null],
+      ]);
+      await setFlow(db, steps, 'zincir');
+      const withAdmin = await svc.create(zeynep, form({ tutar: 8000 }), true);
+      expect(withAdmin.onaylar.map((o) => [o.onayci.id, o.durum, o.yedek])).toEqual([
+        [ayse.id, 'bekliyor', false],
+        [zeynep.id, 'atlandi', false],
+        [admin.id, 'sirada', true],
+      ]);
+      expect(withAdmin.gecmis[1]?.aciklama).toContain('Onaycılar: Ayşe → Yedek Yönetici (yedek).');
+    });
+
+    it('falls back to an active administrator outside the flow when the sender is the only approver', async () => {
       await makeUser(db, { rol: 'yonetici', aktif: false }); // lower id, but inactive
       const sender = await makeUser(db);
       const admin = await makeUser(db, { rol: 'yonetici', adSoyad: 'Yedek Yönetici' });
-      await setFlow(db, [unlimited(sender.id)]);
+      await setFlow(db, chainOf(sender.id));
 
       const d = await svc.create(sender, form(), true);
       expect(d.onaylar).toEqual([
@@ -185,7 +299,7 @@ describe('expense service', () => {
     it('falls back to another administrator when an administrator sends their own expense', async () => {
       const boss = await makeUser(db, { rol: 'yonetici' });
       const other = await makeUser(db, { rol: 'yonetici' });
-      await setFlow(db, [unlimited(boss.id)]);
+      await setFlow(db, chainOf(boss.id));
       const d = await svc.create(boss, form(), true);
       expect(d.onaylar.map((o) => [o.onayci.id, o.durum, o.yedek])).toEqual([
         [boss.id, 'atlandi', false],
@@ -196,7 +310,7 @@ describe('expense service', () => {
     it('refuses to send with 409 onaylayan_yok when nobody else can approve', async () => {
       const admin = await makeUser(db, { rol: 'yonetici' });
       await makeUser(db, { rol: 'yonetici', aktif: false });
-      await setFlow(db, [unlimited(admin.id)]);
+      await setFlow(db, chainOf(admin.id));
 
       const draft = await svc.create(admin, form(), false);
       await fails(svc.submit(draft.id, admin), 409, 'onaylayan_yok');
@@ -209,10 +323,10 @@ describe('expense service', () => {
       const ayse = await makeUser(db);
       const mehmet = await makeUser(db);
       const sender = await makeUser(db);
-      await setFlow(db, [unlimited(ayse.id)]);
+      await setFlow(db, chainOf(ayse.id));
       const d = await svc.create(sender, form(), true);
 
-      await setFlow(db, [unlimited(mehmet.id)]);
+      await setFlow(db, chainOf(mehmet.id));
       expect(chain(await svc.detail(d.id, sender))).toEqual([{ id: ayse.id, durum: 'bekliyor' }]);
       await fails(svc.approve(d.id, mehmet, null), 404, 'bulunamadi');
       expect((await svc.approve(d.id, ayse, null)).durum).toBe('onaylandi');
@@ -224,8 +338,16 @@ describe('expense service', () => {
       const zeynep = await makeUser(db, { adSoyad: 'Zeynep' });
       const plain = await makeUser(db);
       const sales = await makeUser(db);
-      await setFlow(db, [unlimited(ayse.id)]);
-      const satis = await makeFlow(db, 'Satış', [{ onayciId: mehmet.id, altLimit: 0, ustLimit: 5000 }, unlimited(zeynep.id, 5000.01)]);
+      await setFlow(db, chainOf(ayse.id));
+      const satis = await makeFlow(
+        db,
+        'Satış',
+        [
+          { onayciId: mehmet.id, limit: 5000 },
+          { onayciId: zeynep.id, limit: null },
+        ],
+        'tek',
+      );
       await assignFlow(db, sales.id, satis);
 
       expect(chain(await svc.create(plain, form({ tutar: 3000 }), true))).toEqual([{ id: ayse.id, durum: 'bekliyor' }]);
@@ -239,9 +361,9 @@ describe('expense service', () => {
       const ayse = await makeUser(db);
       const mehmet = await makeUser(db);
       const sender = await makeUser(db);
-      await setFlow(db, [unlimited(ayse.id)]);
+      await setFlow(db, chainOf(ayse.id));
       const d = await svc.create(sender, form(), true);
-      await assignFlow(db, sender.id, await makeFlow(db, 'Satış', [unlimited(mehmet.id)]));
+      await assignFlow(db, sender.id, await makeFlow(db, 'Satış', chainOf(mehmet.id)));
       expect(chain(await svc.detail(d.id, sender))).toEqual([{ id: ayse.id, durum: 'bekliyor' }]);
       // The next round (after a withdrawal) uses the new flow.
       await svc.withdraw(d.id, sender);
@@ -251,8 +373,8 @@ describe('expense service', () => {
     it("skips the sender's own step in their flow and falls back to an administrator", async () => {
       const admin = await makeUser(db, { rol: 'yonetici' });
       const lead = await makeUser(db);
-      await setFlow(db, [unlimited(admin.id)]);
-      await assignFlow(db, lead.id, await makeFlow(db, 'Ekip', [unlimited(lead.id)]));
+      await setFlow(db, chainOf(admin.id));
+      await assignFlow(db, lead.id, await makeFlow(db, 'Ekip', chainOf(lead.id)));
       const d = await svc.create(lead, form(), true);
       expect(d.onaylar.map((o) => [o.onayci.id, o.durum, o.yedek])).toEqual([
         [lead.id, 'atlandi', false],
@@ -270,10 +392,14 @@ describe('expense service', () => {
       low = await makeUser(db);
       high = await makeUser(db);
       sender = await makeUser(db);
-      await setFlow(db, [
-        { onayciId: low.id, altLimit: 0, ustLimit: 5000 },
-        { onayciId: high.id, altLimit: 5000.01, ustLimit: null },
-      ]);
+      await setFlow(
+        db,
+        [
+          { onayciId: low.id, limit: 5000 },
+          { onayciId: high.id, limit: null },
+        ],
+        'tek',
+      );
     });
 
     it('routes by the invoice total when it is larger than the declared amount', async () => {
@@ -306,11 +432,38 @@ describe('expense service', () => {
       expect(chain(d)).toEqual([{ id: high.id, durum: 'bekliyor' }]);
     });
 
-    it('ignores an invoice total in another currency', async () => {
-      const faturaId = await makeInvoice(db, sender.id, { genelToplam: 9999, paraBirimi: 'EUR' });
-      const d = await svc.create(sender, form({ tutar: 100, faturaIdler: [faturaId] }), true);
-      expect(d).toMatchObject({ onayTutari: 100, tutarFarki: null });
-      expect(chain(d)).toEqual([{ id: low.id, durum: 'bekliyor' }]);
+    it('asks for the base-currency equivalent of an invoice in another currency before sending', async () => {
+      const faturaId = await makeInvoice(db, sender.id, { genelToplam: 150, paraBirimi: 'EUR' });
+      // Sending without it is refused, and the form is not created either.
+      const err = await svc.create(sender, form({ tutar: 100, faturaIdler: [faturaId] }), true).catch((e: unknown) => e);
+      expect(err).toMatchObject({
+        status: 409,
+        code: 'karsilik_eksik',
+        message: 'Fatura EUR cinsinden; onaya göndermek için TRY karşılığını girin.',
+        details: { alanlar: { [`yerelKarsiliklar.${faturaId}`]: expect.any(String) } },
+      });
+      expect((await svc.list(sender, { kapsam: 'benim', sayfa: 1, adet: 20 })).toplam).toBe(0);
+
+      // A draft may wait for it; the invoice does not count until then.
+      const draft = await svc.create(sender, form({ tutar: 100, faturaIdler: [faturaId] }), false);
+      expect(draft.faturalar[0]).toMatchObject({ paraBirimi: 'EUR', karsilikGerekli: true, yerelKarsilik: null });
+      expect(draft.tutarFarki).toBeNull();
+      await fails(svc.submit(draft.id, sender), 409, 'karsilik_eksik');
+
+      const filled = await svc.update(draft.id, sender, { yerelKarsiliklar: { [faturaId]: 6000 } });
+      expect(filled.faturalar[0]).toMatchObject({ karsilikGerekli: true, yerelKarsilik: 6000 });
+      expect(filled.tutarFarki).toEqual({ fatura: 6000, beyan: 100 });
+      const sent = await svc.submit(draft.id, sender);
+      expect(sent.onayTutari).toBe(6000);
+      expect(chain(sent)).toEqual([{ id: high.id, durum: 'bekliyor' }]);
+    });
+
+    it('counts a base-currency invoice on a foreign-currency form as it is', async () => {
+      const lira = await makeInvoice(db, sender.id, { genelToplam: 6000, paraBirimi: 'TRY' });
+      const d = await svc.create(sender, form({ tutar: 100, paraBirimi: 'USD', kur: 40, faturaIdler: [lira] }), true);
+      expect(d.faturalar[0]).toMatchObject({ karsilikGerekli: false, yerelKarsilik: null });
+      expect(d).toMatchObject({ yerelTutar: 4000, onayTutari: 6000, tutarFarki: { fatura: 150, beyan: 100 } });
+      expect(chain(d)).toEqual([{ id: high.id, durum: 'bekliyor' }]);
     });
 
     it('routes by the invoice of an edited, resent form', async () => {
@@ -340,13 +493,15 @@ describe('expense service', () => {
       const hotel = await makeInvoice(db, sender.id, { genelToplam: 3000, faturaNo: 'OTEL-1' });
       const taxi = await makeInvoice(db, sender.id, { genelToplam: 2500, faturaNo: 'TAKSI-1' });
       const dinner = await makeInvoice(db, sender.id, { genelToplam: 999, paraBirimi: 'EUR' });
-      const d = await svc.create(sender, form({ tutar: 4000, faturaIdler: [taxi, hotel, dinner] }), true);
-      // 2500 + 3000 = 5500 > 5000: the higher tier; the EUR invoice is left out of the sum.
-      expect(d).toMatchObject({ onayTutari: 5500, tutarFarki: { fatura: 5500, beyan: 4000 }, faturaIdler: [taxi, hotel, dinner] });
+      const d = await svc.create(sender, form({ tutar: 4000, faturaIdler: [taxi, hotel, dinner], yerelKarsiliklar: { [dinner]: 40 } }), true);
+      // 2500 + 3000 + 40 (the EUR invoice's entered equivalent) = 5540 > 5000: the higher tier.
+      expect(d).toMatchObject({ onayTutari: 5540, tutarFarki: { fatura: 5540, beyan: 4000 }, faturaIdler: [taxi, hotel, dinner] });
       expect(d.faturalar.map((x) => x.faturaNo)).toEqual(['TAKSI-1', 'OTEL-1', 'ABC2026000000123']);
       expect(chain(d)).toEqual([{ id: high.id, durum: 'bekliyor' }]);
-      const preview = await svc.preview(sender, { tutar: 4000, faturaIdler: [taxi, hotel, dinner] });
-      expect(preview.onayTutari).toBe(5500);
+      const preview = await svc.preview(sender, { tutar: 4000, faturaIdler: [taxi, hotel, dinner], yerelKarsiliklar: { [dinner]: 40 } });
+      expect(preview.onayTutari).toBe(5540);
+      // Without the equivalent the preview leaves the EUR invoice out.
+      expect((await svc.preview(sender, { tutar: 4000, faturaIdler: [taxi, hotel, dinner] })).onayTutari).toBe(5500);
       // In the list too, in order.
       expect((await svc.list(sender, { kapsam: 'benim', sayfa: 1, adet: 20 })).kayitlar[0]?.faturaIdler).toEqual([taxi, hotel, dinner]);
     });
@@ -373,7 +528,7 @@ describe('expense service', () => {
       sender = await makeUser(db, { adSoyad: 'Gönderen' });
       admin = await makeUser(db, { rol: 'yonetici' });
       accounting = await makeUser(db, { rol: 'muhasebe' });
-      await setFlow(db, [unlimited(a.id), unlimited(b.id), unlimited(c.id)]);
+      await setFlow(db, chainOf(a.id, b.id, c.id));
     });
 
     it('rejects: the form is reddedildi and the remaining steps are cancelled', async () => {
@@ -393,10 +548,10 @@ describe('expense service', () => {
     });
 
     it('resubmits an edited, rejected form as a new round copied from the flow as it is now', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       const f = await svc.create(sender, form(), true);
       await svc.reject(f.id, a, 'Eksik');
-      await setFlow(db, [unlimited(c.id)]);
+      await setFlow(db, chainOf(c.id));
 
       const edited = await svc.update(f.id, sender, { tutar: 250, baslik: 'Düzeltildi' });
       expect(edited).toMatchObject({ durum: 'reddedildi', tur: 1, tutar: 250, yerelTutar: 250, baslik: 'Düzeltildi' });
@@ -473,7 +628,7 @@ describe('expense service', () => {
     });
 
     it('lets accounting and administrators mark only approved forms paid', async () => {
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       const f = await svc.create(sender, form(), true);
       await fails(svc.markPaid(f.id, accounting), 409, 'gecersiz_durum');
       await svc.approve(f.id, a, null);
@@ -563,7 +718,7 @@ describe('expense service', () => {
       outsider = await makeUser(db);
       admin = await makeUser(db, { rol: 'yonetici' });
       accounting = await makeUser(db, { rol: 'muhasebe' });
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
     });
 
     it('hides a form from employees who neither own nor approve it', async () => {
@@ -630,7 +785,7 @@ describe('expense service', () => {
       expect((await svc.detail(f.id, b)).izinler).toEqual(NONE);
 
       // An administrator approving their own step sees both sets of actions.
-      await setFlow(db, [unlimited(admin.id)]);
+      await setFlow(db, chainOf(admin.id));
       const mine = await svc.create(owner, form(), true);
       expect((await svc.detail(mine.id, admin)).izinler).toEqual(allow('onayla', 'reddet', 'devret'));
     });
@@ -683,7 +838,7 @@ describe('expense service', () => {
     });
 
     it('accepts only one of two simultaneous approvals of the same step', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       const f = await svc.create(sender, form(), true);
       const results = await Promise.allSettled([svc.approve(f.id, a, null), svc.approve(f.id, a, null)]);
       expect(outcome(results)).toEqual({ ok: 1, codes: ['onay_beklemiyor'] });
@@ -697,7 +852,7 @@ describe('expense service', () => {
     });
 
     it('completes a single-step form only once', async () => {
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       const f = await svc.create(sender, form(), true);
       const results = await Promise.allSettled([svc.approve(f.id, a, null), svc.approve(f.id, a, null), svc.approve(f.id, a, null)]);
       expect(outcome(results)).toEqual({ ok: 1, codes: ['onay_beklemiyor', 'onay_beklemiyor'] });
@@ -707,7 +862,7 @@ describe('expense service', () => {
     });
 
     it('lets one of a simultaneous approval and rejection win, leaving the steps consistent', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       const f = await svc.create(sender, form(), true);
       const results = await Promise.allSettled([svc.approve(f.id, a, null), svc.reject(f.id, a, 'Hayır')]);
       expect(outcome(results)).toEqual({ ok: 1, codes: ['onay_beklemiyor'] });
@@ -728,7 +883,7 @@ describe('expense service', () => {
     });
 
     it('keeps the steps consistent when the owner withdraws while the approver decides', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       const f = await svc.create(sender, form(), true);
       const results = await Promise.allSettled([svc.approve(f.id, a, null), svc.withdraw(f.id, sender)]);
       const d = await svc.detail(f.id, sender);
@@ -739,7 +894,7 @@ describe('expense service', () => {
     });
 
     it('sends a draft only once when it is submitted twice at the same time', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       const draft = await svc.create(sender, form(), false);
       const results = await Promise.allSettled([svc.submit(draft.id, sender), svc.submit(draft.id, sender)]);
       expect(outcome(results)).toEqual({ ok: 1, codes: ['gecersiz_durum'] });
@@ -750,7 +905,7 @@ describe('expense service', () => {
     });
 
     it('lets only one of two simultaneous forms claim the same invoice', async () => {
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       const faturaId = await makeInvoice(db, sender.id);
       const own = await makeInvoice(db, sender.id);
       const results = await Promise.allSettled([
@@ -771,7 +926,7 @@ describe('expense service', () => {
       a = await makeUser(db);
       sender = await makeUser(db);
       other = await makeUser(db);
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
     });
 
     it('attaches only invoices the user uploaded, and says which one is not', async () => {
@@ -851,6 +1006,59 @@ describe('expense service', () => {
       expect((await svc.update(second.id, sender, { faturaIdler: [] })).faturalar).toEqual([]);
     });
 
+    it('keeps an equivalent only for an invoice on the form that needs one', async () => {
+      const usd = await makeInvoice(db, sender.id, { genelToplam: 100, paraBirimi: 'USD' });
+      const lira = await makeInvoice(db, sender.id, { genelToplam: 50, paraBirimi: 'TRY' });
+      const extra = await makeInvoice(db, sender.id, { genelToplam: 10, paraBirimi: 'TRY' });
+      const stray = await svc.create(sender, form({ faturaIdler: [usd], yerelKarsiliklar: { [lira]: 10 } }), false).catch((e: unknown) => e);
+      expect(stray).toMatchObject({ status: 400, details: { alanlar: { [`yerelKarsiliklar.${lira}`]: 'Bu fatura masrafta yok.' } } });
+
+      // Given for a TRY invoice on a TRY form: not needed, not kept.
+      const draft = await svc.create(sender, form({ faturaIdler: [usd, lira], yerelKarsiliklar: { [usd]: 3300, [lira]: 99 } }), false);
+      expect(draft.faturalar.map((x) => x.yerelKarsilik)).toEqual([3300, null]);
+      // Another list without equivalents keeps those of the invoices that stay.
+      const more = await svc.update(draft.id, sender, { faturaIdler: [lira, usd, extra] });
+      expect(more.faturalar.map((x) => [x.id, x.yerelKarsilik])).toEqual([
+        [lira, null],
+        [usd, 3300],
+        [extra, null],
+      ]);
+      // On a USD form the USD invoice goes with the form rate: its equivalent goes away.
+      const inUsd = await svc.update(draft.id, sender, { paraBirimi: 'USD', kur: 33 });
+      expect(inUsd.faturalar.map((x) => [x.karsilikGerekli, x.yerelKarsilik])).toEqual([
+        [false, null],
+        [false, null],
+        [false, null],
+      ]);
+      const back = await svc.update(draft.id, sender, { paraBirimi: 'TRY' });
+      expect(back.faturalar[1]).toMatchObject({ karsilikGerekli: true, yerelKarsilik: null });
+    });
+
+    it('writes added and removed invoices to the history', async () => {
+      const [x, y, z] = [await makeInvoice(db, sender.id), await makeInvoice(db, sender.id), await makeInvoice(db, sender.id)];
+      const draft = await svc.create(sender, form({ faturaIdler: [x, y] }), false);
+      await svc.update(draft.id, sender, { faturaIdler: [y, z] });
+      await svc.update(draft.id, sender, { faturaIdler: [z, y] });
+      const d = await svc.update(draft.id, sender, { tutar: 70 });
+      expect(d.gecmis.filter((g) => g.islem === 'guncellendi').map((g) => g.aciklama)).toEqual([
+        '1 fatura eklendi, 1 fatura çıkarıldı.',
+        'Faturaların sırası değişti.',
+        null,
+      ]);
+    });
+
+    it("does not name another user's form that holds the same file", async () => {
+      // Both uploaded the same file: the stored record is shared, the forms are not.
+      const faturaId = await makeInvoice(db, other.id);
+      await execute(db, 'INSERT INTO dbo.fatura_yuklemeleri (kayit_id, kullanici_id, dosya_adi) VALUES (@k, @u, N\'kopya.pdf\')', {
+        k: p.ascii(faturaId, 24),
+        u: p.int(sender.id),
+      });
+      await svc.create(other, form({ faturaIdler: [faturaId] }), false);
+      const err = await svc.create(sender, form({ faturaIdler: [faturaId] }), false).catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 409, code: 'fatura_kullaniliyor', message: 'Bu fatura başka bir masraf formunda kullanılıyor.' });
+    });
+
     it('frees every invoice of a cancelled form', async () => {
       const [x, y] = [await makeInvoice(db, sender.id), await makeInvoice(db, sender.id)];
       const draft = await svc.create(sender, form({ faturaIdler: [x, y] }), false);
@@ -918,7 +1126,7 @@ describe('expense service', () => {
       sender = await makeUser(db, { departman: 'Satış' });
       accounting = await makeUser(db, { rol: 'muhasebe' });
       admin = await makeUser(db, { rol: 'yonetici' });
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
     });
 
     it('lists waiting approvals oldest first and decided ones newest first', async () => {
@@ -975,7 +1183,10 @@ describe('expense service', () => {
 
     it('previews who would approve, with a warning instead of an error when nobody can', async () => {
       const b = await makeUser(db);
-      await setFlow(db, [unlimited(a.id), unlimited(b.id, 5000.01)]);
+      await setFlow(db, [
+        { onayciId: a.id, limit: 5000 },
+        { onayciId: b.id, limit: null },
+      ]);
       expect(await svc.preview(sender, { tutar: 20000 })).toEqual({
         onayTutari: 20000,
         paraBirimi: 'TRY',
@@ -986,13 +1197,19 @@ describe('expense service', () => {
         ],
         uyari: null,
       });
+      // Their own expense: one approver up from the deciding one, or the administrator above the top.
       expect((await svc.preview(a, { tutar: 100 })).adimlar).toEqual([
         { sira: 1, onayci: { id: a.id, adSoyad: a.adSoyad }, durum: 'atlandi', yedek: false },
-        { sira: 2, onayci: { id: admin.id, adSoyad: admin.adSoyad }, durum: 'sirada', yedek: true },
+        { sira: 2, onayci: { id: b.id, adSoyad: b.adSoyad }, durum: 'sirada', yedek: false },
+      ]);
+      expect((await svc.preview(b, { tutar: 20000 })).adimlar).toEqual([
+        { sira: 1, onayci: { id: a.id, adSoyad: a.adSoyad }, durum: 'sirada', yedek: false },
+        { sira: 2, onayci: { id: b.id, adSoyad: b.adSoyad }, durum: 'atlandi', yedek: false },
+        { sira: 3, onayci: { id: admin.id, adSoyad: admin.adSoyad }, durum: 'sirada', yedek: true },
       ]);
       expect(await svc.preview(sender, { tutar: 50, paraBirimi: 'USD', kur: 40 })).toMatchObject({ onayTutari: 2000, paraBirimi: 'TRY' });
 
-      await setFlow(db, [unlimited(admin.id)]);
+      await setFlow(db, chainOf(admin.id));
       const nobody = await svc.preview(admin, { tutar: 100 });
       expect(nobody).toEqual({ onayTutari: 100, paraBirimi: 'TRY', akis: expect.objectContaining({ ad: 'Genel' }), adimlar: [], uyari: expect.stringContaining('onaylayabilecek') });
       // A preview changes nothing.
@@ -1001,8 +1218,8 @@ describe('expense service', () => {
 
     it("previews the sender's own flow, and lets an administrator try any saved flow", async () => {
       const b = await makeUser(db, { adSoyad: 'Bora' });
-      await setFlow(db, [unlimited(a.id)]);
-      const satis = await makeFlow(db, 'Satış', [unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id));
+      const satis = await makeFlow(db, 'Satış', chainOf(b.id));
       await assignFlow(db, sender.id, satis);
       expect(await svc.preview(sender, { tutar: 100 })).toMatchObject({
         akis: { id: satis, ad: 'Satış', varsayilan: false },

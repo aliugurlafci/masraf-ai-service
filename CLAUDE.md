@@ -1,6 +1,6 @@
 # Masraf: proje kuralları
 
-Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının Claude aboneliğiyle (`claude -p`) okur, masraf formlarını tutar aralığına göre onaycılara yönlendirir. Veriler Docker'daki SQL Server'dadır. Web paneli `public/`, mobil uygulama `masraf-app/` (Expo) içindedir. Kurulum ve fatura API'si için README.md'ye, onay kuralları ve API sözleşmesinin tamamı için `docs/onay-sistemi.md`'ye bakın.
+Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının Claude aboneliğiyle (`claude -p`) okur, masraf formlarını onay akışındaki limitlere göre onaycılara yönlendirir. Veriler Docker'daki SQL Server'dadır. Web paneli `public/`, mobil uygulama `masraf-app/` (Expo) içindedir. Kurulum ve fatura API'si için README.md'ye, onay kuralları ve API sözleşmesinin tamamı için `docs/onay-sistemi.md`'ye bakın.
 
 ## Yapı
 
@@ -11,7 +11,7 @@ Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının C
 `src/db/`: SQL Server katmanı (`mssql` paketi).
 
 - `sql.ts`: Tipli parametreler (`p.int`, `p.str`, `p.money`, …), `query`/`queryOne`/`execute`/`transaction`. Bütün sorgular parametrelidir; SQL'e değer birleştirilmez.
-- `database.ts`: Bağlanır (hazır olana kadar bekler), veritabanı yoksa oluşturur, `migrations/NNN_ad.sql` dosyalarını sırayla uygular (`sema_surumleri`).
+- `database.ts`: Bağlanır (hazır olana kadar bekler), veritabanı yoksa oluşturur, `migrations/NNN_ad.sql` dosyalarını sırayla uygular (`sema_surumleri`). Artık bulunmayan bir dosyanın kaydı olan veritabanını reddeder.
 - `migrations/`: Şema. Uygulanmış dosya değiştirilmez; değişiklik yeni numaralı dosyayla yapılır.
 - `audit.ts`: Denetim kaydı (`denetim_kayitlari`).
 
@@ -21,7 +21,7 @@ Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının C
 
 `src/approval/`: Onay akışı.
 
-- `flow.ts`: Saf kurallar. Aralık kapsamı (0'dan sınırsıza boşluksuz, kuruş hassasiyetinde), yönlendirme planı (`planApprovals`: eşleşen onaycılar sırayla, gönderenin kendi adımı atlanır, gerekirse yedek yönetici).
+- `flow.ts`: Saf kurallar. Akışın stratejisi (`zincir`: limiti tutara yeten onaycıya kadar herkes, `tek`: yalnızca o onaycı), onay limitleri (artan, kuruş hassas, son onaycı sınırsız), yönlendirme planı (`planApprovals`: gönderenin kendi adımı atlanır, son onay kendisindeyse bir üst onaycıya, en üstteyse yedek yöneticiye geçer).
 - `flow-store.ts`: Onay akışları (adlandırılmış, biri varsayılan). Okuma, kaydetme, varsayılan yapma, silme ve kullanıcının akışının bulunması (`loadUserFlow`: atanmış akış, yoksa varsayılan). Değişiklikler `sp_getapplock` ile sıralanır.
 
 `src/expenses/`: Masraf formları.

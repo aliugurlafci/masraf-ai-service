@@ -9,7 +9,7 @@ Bu belge web paneli, mobil uygulama (`masraf-app/`) ve sunucu için tek kaynakt�
 | Kullanıcı | E-posta ve şifreyle giriş yapar. Rolü `calisan`, `muhasebe` ya da `yonetici`dir. |
 | Fatura kaydı | Claude'un okuduğu fatura (`{fatura, kalemler}`), orijinal dosyasıyla birlikte veritabanında saklanır. Aynı dosya (SHA-256) ikinci kez okunmaz. |
 | Masraf formu | Çalışanın onaya sunduğu masraf. Bir başlık, kategori, tarih, tutar ve isteğe bağlı olarak bir ya da birden çok (en çok 20) fatura kaydından oluşur. Örneğin bir iş seyahatinin otel, taksi ve yemek fişleri tek formda toplanabilir. |
-| Onay akışı | Adı olan bir onaycı listesi (onay stratejisi). Her onaycının bir tutar aralığı vardır. Şirkette birden çok akış olabilir, biri varsayılandır. |
+| Onay akışı | Adı olan, sıralı bir onaycı listesi. Her onaycının bir onay limiti vardır; akışın stratejisi (zincirleme onay ya da tek onaycı) masrafı kimlerin onaylayacağını belirler. Şirkette birden çok akış olabilir, biri varsayılandır. |
 | Akış ataması | Kullanıcının masraflarının hangi akışla onaylanacağı. Atanmamış kullanıcı varsayılan akışı kullanır. |
 | Onay adımı | Gönderilen bir formun, gönderenin akışından kopyalanan onaycılarından biri. |
 
@@ -34,25 +34,32 @@ Onaycılık bir rol değildir. Her rolden aktif kullanıcı bir ya da birden ço
 - **Akış adı** 1–80 karakterdir ve benzersizdir (büyük/küçük harf ayrımı yapılmaz).
 - **Silme:** Varsayılan olmayan akış silinebilir. Ona atanmış kullanıcılar varsayılan akışa geçer (`onayAkisiId: null`). Süren formlar etkilenmez (kural 9).
 
-Her onay akışı sıralı bir onaycı listesidir. Her satırda bir kullanıcı ve bir tutar aralığı bulunur. Aşağıdaki kurallar her akış için ayrı ayrı geçerlidir.
+Her onay akışı sıralı bir onaycı listesidir. Her onaycının bir **onay limiti** vardır: son onayını verebileceği en yüksek tutar (dahil). Limitler sırayla büyür; son onaycının limiti sınırsızdır. Böylece her tutar için limiti o tutara yeten tam bir onaycı bulunur: **karar veren onaycı**. Akışın **stratejisi**, masrafı karar verenden başka kimin göreceğini belirler:
 
-```
-sıra  onaycı           alt limit    üst limit
-1     Ayşe (birim)     0,00         sınırsız
-2     Mehmet (finans)  5.000,01     sınırsız
-3     Zeynep (GM)      50.000,01    sınırsız
-```
+- **Zincirleme onay (`zincir`):** Masraf ilk onaycıdan başlar ve karar veren onaycıya kadar sıradaki herkesin onayından geçer. Tutar büyüdükçe zincir uzar.
+- **Tek onaycı (`tek`):** Masrafı yalnızca karar veren onaycı onaylar. Her tutar aralığının kendi onaycısı vardır.
+
+| Sıra | Onaycı | Onay limiti | Zincirleme onayda | Tek onaycıda |
+|---|---|---|---|---|
+| 1 | Ayşe (birim) | 5.000,00 | 5.000'e kadar: Ayşe | 5.000'e kadar: Ayşe |
+| 2 | Mehmet (finans) | 50.000,00 | 5.000,01 – 50.000: Ayşe → Mehmet | 5.000,01 – 50.000: Mehmet |
+| 3 | Zeynep (GM) | sınırsız | 50.000 üzeri: Ayşe → Mehmet → Zeynep | 50.000 üzeri: Zeynep |
 
 Kurallar:
 
-1. **En az bir onaycı zorunludur.** Hiçbir akış boş kalamaz. İlk yönetici oluşturulurken varsayılan akış o yöneticiyle (`0` – sınırsız) başlar.
-2. **Aralık:** Alt ve üst limit dahildir, kuruş hassasiyetindedir. `ustLimit: null` sınırsız demektir. `0 ≤ altLimit ≤ ustLimit`.
-3. **Kapsama:** Aralıkların birleşimi `0`'dan sonsuza boşluksuz uzanmalıdır. Böylece her tutarın en az bir onaycısı olur. Boşluk varsa kayıt reddedilir ve boşluk mesajda yazılır ("1.000,01 – 4.999,99 ₺ arası tutarlar için onaycı yok").
-4. **Bir kullanıcı bir akışta bir kez** yer alır, farklı akışlarda ayrı aralıklarla yer alabilir. Onaycı aktif olmalıdır.
-5. **Yönlendirme:** Form, **gönderenin akışında** (atanmış akış, yoksa varsayılan akış) aralığı onay tutarını içeren **bütün** onaycılara, sıra numarasına göre **sırayla** gider. Hangi akışın kullanıldığı gönderim anında belirlenir ve form geçmişine yazılır. Örnekte 3.000 ₺ yalnızca Ayşe'ye, 20.000 ₺ önce Ayşe'ye sonra Mehmet'e, 80.000 ₺ üçüne de gider. Kademeli (her tutar tek onaycıya) yapı için aralıklar çakışmayacak şekilde girilir: `0–5.000`, `5.000,01–50.000`, `50.000,01–sınırsız`.
-6. **Onay tutarı:** Formun yerel para birimindeki tutarı ile bağlı faturaların genel toplamlarının toplamından büyük olanıdır. Toplama yalnızca formla aynı para birimindeki (ya da para birimi okunamamış) ve genel toplamı okunmuş faturalar girer. Faturaların altında beyan edilen bir form daha düşük bir onay kademesine kaçamaz. İki tutar farklıysa onaycılar bunu formda uyarı olarak görür (`tutarFarki`).
-7. **Para birimi:** Aralıklar `.env` içindeki `PARA_BIRIMI` (varsayılan `TRY`) cinsindendir. Başka para birimindeki formda kur zorunludur. Yerel tutar, tutar × kur olarak hesaplanır.
-8. **Kendi masrafı:** Gönderen kişi kendi akışında yer alıyorsa onun adımı `atlandi` olur. Geriye adım kalmazsa form, gönderen dışındaki ilk aktif yöneticiye (`yedek: true`) gider. Böyle biri yoksa gönderim `409 onaylayan_yok` ile reddedilir.
+1. **En az bir onaycı zorunludur.** Hiçbir akış boş kalamaz. İlk yönetici oluşturulurken varsayılan akış o yöneticiyle (limiti sınırsız) başlar. Yeni akışın stratejisi belirtilir; ilk kurulumdaki "Genel" akışı zincirleme onaydır.
+2. **Onay limiti:** Kuruş hassasiyetindedir ve dahildir: limiti 5.000 olan onaycı tam 5.000'lik masrafın da son onayını verir, 5.000,01 bir sonrakine geçer. Son onaycı dışındaki her onaycının limiti 0'dan büyüktür ve bir öncekinden büyük olmalıdır. Son onaycının limiti sınırsızdır (`limit: null`). Bu kurallar her tutarın tam bir karar veren onaycısı olmasını sağlar; aralık boşluğu ya da çakışması oluşamaz. Kurala uymayan akış kaydedilmez (`400 gecersiz_akis`, sorunlar Türkçe listelenir).
+3. **Sıra = yetki sırası.** Onaycılar küçük limitten büyüğe dizilir. Zincirleme onayda masraf bu sırayla ilerler.
+4. **Bir kullanıcı bir akışta bir kez** yer alır, farklı akışlarda ayrı limitlerle yer alabilir. Onaycı aktif olmalıdır.
+5. **Yönlendirme:** Form, **gönderenin akışına** (atanmış akış, yoksa varsayılan akış) göre yönlenir: karar veren onaycı onay tutarına göre bulunur, stratejiye göre ondan önceki onaycılar da eklenir ve hepsi **sırayla** onaylar. Hangi akışın kullanıldığı gönderim anında belirlenir ve form geçmişine yazılır. Örnekte zincirleme onayda 3.000 ₺ yalnızca Ayşe'ye, 20.000 ₺ önce Ayşe'ye sonra Mehmet'e, 80.000 ₺ üçüne de gider; tek onaycıda 20.000 ₺ yalnızca Mehmet'e gider.
+6. **Onay tutarı:** Formun yerel para birimindeki (`PARA_BIRIMI`) tutarı ile bağlı faturaların yerel para birimindeki toplamından büyük olanıdır. Her faturanın yerel değeri şöyle bulunur:
+   - Formla aynı para birimindeki (ya da para birimi okunamamış) fatura: genel toplamı × formun kuru.
+   - Yerel para birimindeki fatura: genel toplamının kendisi.
+   - Başka bir para birimindeki fatura: gönderenin girdiği yerel karşılık (`yerelKarsilik`). Karşılığı girilmemiş böyle bir fatura varken form onaya gönderilemez (`409 karsilik_eksik`); taslak olarak kaydedilebilir.
+
+   Toplama genel toplamı (ya da karşılığı) sıfırdan büyük olan faturalar girer. Faturaların altında beyan edilen bir form daha düşük bir onay kademesine kaçamaz. İki tutar farklıysa onaycılar bunu formda uyarı olarak görür (`tutarFarki`).
+7. **Para birimi:** Onay limitleri `.env` içindeki `PARA_BIRIMI` (varsayılan `TRY`) cinsindendir. Başka para birimindeki formda kur zorunludur. Yerel tutar, tutar × kur olarak hesaplanır.
+8. **Kendi masrafı:** Kimse kendi masrafını onaylamaz. Gönderen, masrafın geçtiği onaycılardan biriyse onun adımı `atlandi` olur. Gönderen karar veren onaycıysa son onay **bir üst onaycıya** geçer (akışta ondan sonraki onaycı). Gönderen akışın en üstündeyse son onay, gönderen dışındaki ve bu masrafı zaten onaylamayan ilk aktif yöneticiye (`yedek: true`) gider; kimse aynı masrafı iki kez onaylamaz. Böyle biri de yoksa ve masrafı onaylayacak başka kimse kalmadıysa gönderim `409 onaylayan_yok` ile reddedilir. Örnekte Mehmet'in 20.000 ₺'lik masrafı zincirleme onayda Ayşe'ye, sonra Zeynep'e gider.
 9. **Anlık kopya:** Form gönderildiğinde eşleşen adımlar forma kopyalanır. Akış, akışın varsayılanlığı ya da kullanıcının ataması sonradan değişse de süren formlar etkilenmez.
 10. **Herhangi bir akışta onaycı olan kullanıcı pasifleştirilemez.** Önce o akışlardan çıkarılmalıdır. Bekleyen onayı olan kullanıcı da pasifleştirilemez; yönetici önce onayları devreder. Pasif kullanıcının akış ataması korunur.
 
@@ -95,8 +102,8 @@ Docker'daki SQL Server 2022 kullanılır (`docker compose up -d`). Sunucu açıl
 | `oturumlar` | Token'ın SHA-256 özeti, kullanıcı, istemci (`panel`/`mobil`/`api`), bitiş. Token'ın kendisi saklanmaz |
 | `masraf_kategorileri` | ad, simge, sıra, aktif |
 | `onay_akislari` | Akış adı (benzersiz), varsayılan mı (en fazla biri, filtreli benzersiz indeks), son değişiklik ve yapan |
-| `onay_adimlari` | Akışın adımları: akış, sıra, onaycı, alt limit, üst limit. Sıra ve onaycı akış içinde benzersizdir |
-| `form_faturalari` | Formun faturaları: form, fatura kaydı, sıra, `aktif` (form iptal edilince 0). Bir fatura en fazla bir aktif bağda bulunur |
+| `onay_adimlari` | Akışın adımları: akış, sıra, onaycı, onay limiti (`NULL` = sınırsız). Sıra ve onaycı akış içinde benzersizdir. Akışın stratejisi `onay_akislari.strateji` alanındadır |
+| `form_faturalari` | Formun faturaları: form, fatura kaydı, sıra, `aktif` (form iptal edilince 0), girilen yerel karşılık (`yerel_karsilik`). Bir fatura en fazla bir aktif bağda bulunur |
 | `fatura_kayitlari` | Okunan fatura (JSON), ölçüm (JSON), dosya özeti, liste için özet alanlar |
 | `fatura_dosyalari` | Orijinal dosya (`VARBINARY(MAX)`) ve MIME türü |
 | `fatura_yuklemeleri` | Hangi kullanıcı hangi faturayı ne zaman yükledi. Erişim yetkisi buradan gelir |
@@ -135,7 +142,9 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
   "onayAkisiId": null,                                        // atanmış akış; null = varsayılan akışı kullanır
   "onayAkisi": { "id": 1, "ad": "Genel", "varsayilan": true }, // masraflarının şu an gittiği akış (her zaman dolu)
   "onaycilik": [                                              // onaycı olduğu akışlar (varsayılan önce, sonra ada göre); yoksa []
-    { "akis": { "id": 1, "ad": "Genel" }, "sira": 1, "altLimit": 0, "ustLimit": null } ] }
+    { "akis": { "id": 1, "ad": "Genel", "strateji": "zincir" }, "sira": 1,
+      "limit": 5000,                                          // son onayını verebileceği en yüksek tutar; null = sınırsız
+      "altLimit": 0, "ustLimit": null } ] }                   // bu tutar aralığındaki masraflar ona gelir (ustLimit null = üst sınır yok)
 
 // AkisOzet
 { "id": 2, "ad": "Satış", "varsayilan": false }
@@ -155,13 +164,15 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
   "faturaIdler": ["20261105-163012-0b9c44d1"] }               // eklenme sırasıyla; faturasız formda []
 
 // MasrafDetay = MasrafOzet + aşağıdakiler
-{ "aciklama": "…", "kur": null, "onayTutari": 1800, "tur": 1, "sonuclanma": null, "odeme": null, "guncelleme": "…",
+{ "aciklama": "…", "kur": null, "onayTutari": 1800,   // son gönderimdeki onay tutarı; hiç gönderilmemiş formda null "tur": 1, "sonuclanma": null, "odeme": null, "guncelleme": "…",
   "faturalar": [                 // eklenme sırasıyla; faturasız formda []
     { "id": "…", "dosyaAdi": "fis.jpg", "dosyaVar": true, "mime": "image/jpeg", "faturaNo": "…",
-      "faturaTarihi": "2026-11-05", "saticiUnvan": "…", "genelToplam": 1800, "paraBirimi": "TRY" } ],
+      "faturaTarihi": "2026-11-05", "saticiUnvan": "…", "genelToplam": 1800, "paraBirimi": "TRY",
+      "karsilikGerekli": false,  // fatura üçüncü bir para biriminde: gönderim için yerelKarsilik gerekir
+      "yerelKarsilik": null } ],  // gönderenin girdiği yerel karşılık; yalnızca karsilikGerekli iken dolu
   "tutarFarki": null,            // ya da { "fatura": 1800, "beyan": 1500 } (fatura: toplama giren faturaların toplamı)
   "onaylar": [                   // yalnızca son tur, sıraya göre
-    { "id": 10, "tur": 1, "sira": 1, "onayci": { "id": 2, "adSoyad": "Mehmet Demir" }, "altLimit": 0, "ustLimit": null,
+    { "id": 10, "tur": 1, "sira": 1, "onayci": { "id": 2, "adSoyad": "Mehmet Demir" }, "altLimit": 0, "ustLimit": null, // onaycının akıştaki tutar aralığı (gönderimdeki kopya)
       "durum": "bekliyor", "aciklama": null, "kararTarihi": null, "yedek": false } ],
   "gecmis": [                    // eskiden yeniye
     { "islem": "gonderildi", "kullanici": { "id": 3, "adSoyad": "Ayşe Kaya" }, "aciklama": null, "tarih": "…" } ],
@@ -210,19 +221,20 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
 | İstek | Kim | Gövde | Yanıt |
 |---|---|---|---|
 | `GET /api/onay-akislari` | yonetici | | `Akis[]` (varsayılan önce, sonra ada göre) |
-| `POST /api/onay-akislari` | yonetici | `{ ad, adimlar: [{ onayciId, altLimit, ustLimit }] }` (dizi sırası = onay sırası) | `201 Akis` · `400 gecersiz_akis` (`sorunlar` listesiyle) · `409 akis_adi_kullaniliyor` |
+| `POST /api/onay-akislari` | yonetici | `{ ad, strateji, adimlar: [{ onayciId, limit }] }` (`strateji`: `zincir` ya da `tek`; dizi sırası = onay sırası; son adımın `limit` değeri `null`) | `201 Akis` · `400 gecersiz_akis` (`sorunlar` listesiyle) · `409 akis_adi_kullaniliyor` |
 | `GET /api/onay-akislari/:id` | yonetici | | `Akis` · `404 bulunamadi` |
-| `PUT /api/onay-akislari/:id` | yonetici | `{ ad, adimlar }` (akışın tamamı yerine geçer) | `Akis` · `400 gecersiz_akis` · `409 akis_adi_kullaniliyor` |
+| `PUT /api/onay-akislari/:id` | yonetici | `{ ad, strateji, adimlar }` (akışın tamamı yerine geçer) | `Akis` · `400 gecersiz_akis` · `409 akis_adi_kullaniliyor` |
 | `POST /api/onay-akislari/:id/varsayilan` | yonetici | | `Akis` (artık varsayılan) |
 | `DELETE /api/onay-akislari/:id` | yonetici | | `204` · `409 varsayilan_akis` (varsayılan silinemez) |
-| `POST /api/onay-akisi/onizle` | herkes | `{ tutar, paraBirimi?, kur?, faturaIdler?, akisId? }` | `Onizleme` · `403 yetki_yok` (`akisId` gönderen yönetici değilse) |
+| `POST /api/onay-akisi/onizle` | herkes | `{ tutar, paraBirimi?, kur?, faturaIdler?, yerelKarsiliklar?, akisId? }` | `Onizleme` · `403 yetki_yok` (`akisId` gönderen yönetici değilse) |
 
 ```jsonc
 // Akis
-{ "id": 1, "ad": "Genel", "varsayilan": true, "paraBirimi": "TRY",
+{ "id": 1, "ad": "Genel", "varsayilan": true, "strateji": "zincir", "paraBirimi": "TRY",
   "guncelleme": "…", "guncelleyen": { "id": 1, "adSoyad": "…" },   // guncelleyen null olabilir
   "kullaniciSayisi": 12,   // masrafları şu an bu akışa giden aktif kullanıcılar (varsayılan akışta atanmamış olanlar dahil)
-  "adimlar": [ { "sira": 1, "onayci": { "id": 2, "adSoyad": "…", "eposta": "…", "departman": "…" }, "altLimit": 0, "ustLimit": null } ] }
+  "adimlar": [ { "sira": 1, "onayci": { "id": 2, "adSoyad": "…", "eposta": "…", "departman": "…" }, "limit": 5000 },
+               { "sira": 2, "onayci": { "id": 5, "adSoyad": "…", "eposta": "…", "departman": null }, "limit": null } ] }
 
 // Onizleme: giriş yapan kullanıcı bu tutarla form gönderseydi
 { "onayTutari": 20000, "paraBirimi": "TRY", "akis": { "id": 2, "ad": "Satış", "varsayilan": false },
@@ -248,10 +260,10 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
 | İstek | Gövde | Yanıt |
 |---|---|---|
 | `GET /api/masraflar?kapsam=benim\|tumu&durum=onayda,taslak&q=&sayfa=1&adet=20` | | `{ kayitlar: MasrafOzet[], toplam, sayfa, adet }` (`tumu` yalnızca muhasebe/yonetici) |
-| `POST /api/masraflar` | `{ baslik, kategoriId, masrafTarihi, tutar, paraBirimi?, kur?, satici?, aciklama?, faturaIdler?, gonder? }` | `201 MasrafDetay` · `409 fatura_kullaniliyor` |
+| `POST /api/masraflar` | `{ baslik, kategoriId, masrafTarihi, tutar, paraBirimi?, kur?, satici?, aciklama?, faturaIdler?, yerelKarsiliklar?, gonder? }` | `201 MasrafDetay` · `409 fatura_kullaniliyor` · `409 karsilik_eksik` (`gonder: true` iken) |
 | `GET /api/masraflar/:id` | | `MasrafDetay` (sahibi, onaycıları, muhasebe, yonetici) |
 | `PATCH /api/masraflar/:id` | POST ile aynı alanlar, hepsi isteğe bağlı (`gonder` hariç) | `MasrafDetay` · `409 fatura_kullaniliyor` |
-| `POST /api/masraflar/:id/gonder` | | `MasrafDetay` · `409 onaylayan_yok` |
+| `POST /api/masraflar/:id/gonder` | | `MasrafDetay` · `409 onaylayan_yok` · `409 karsilik_eksik` |
 | `POST /api/masraflar/:id/geri-cek` | | `MasrafDetay` |
 | `POST /api/masraflar/:id/iptal` | | `MasrafDetay` |
 | `POST /api/masraflar/:id/onayla` | `{ aciklama? }` | `MasrafDetay` · `409 onay_beklemiyor` |
@@ -261,7 +273,7 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
 | `GET /api/masraflar/disa-aktar?durum=&baslangic=&bitis=` | | `text/csv` (UTF-8 BOM, `;` ayraçlı; Excel uyumlu) |
 | `GET /api/onaylar?durum=bekleyen\|karar` | | `MasrafOzet[]`: benim kararımı bekleyenler (eskiden yeniye) ya da karar verdiklerim (yeniden eskiye) |
 
-Alan kuralları: `baslik` 1–120 karakter. `masrafTarihi` gelecekte olamaz. `tutar` 0'dan büyük, en çok 2 ondalık. `paraBirimi` ISO 4217 (varsayılan `PARA_BIRIMI`). `kur` para birimi farklıysa zorunlu. `faturaIdler` en çok 20 farklı fatura kimliğidir; her biri kullanıcının yüklediği bir fatura olmalı ve iptal edilmemiş başka bir formda kullanılmamalıdır. Yüklemediği fatura `400 gecersiz_istek` ve `alanlar["faturaIdler.<sıra>"]` döner; başka formdaki fatura `409 fatura_kullaniliyor` döner, hangi faturanın sorunlu olduğu yine `alanlar["faturaIdler.<sıra>"]` içindedir (sıra 0'dan başlar). Durumu uygun olmayan işlem `409 gecersiz_durum` döner.
+Alan kuralları: `baslik` 1–120 karakter. `masrafTarihi` gelecekte olamaz. `tutar` 0'dan büyük, en çok 2 ondalık. `paraBirimi` ISO 4217 (varsayılan `PARA_BIRIMI`). `kur` para birimi farklıysa zorunlu. `faturaIdler` en çok 20 farklı fatura kimliğidir; her biri kullanıcının yüklediği bir fatura olmalı ve iptal edilmemiş başka bir formda kullanılmamalıdır. Yüklemediği fatura `400 gecersiz_istek` ve `alanlar["faturaIdler.<sıra>"]` döner; başka formdaki fatura `409 fatura_kullaniliyor` döner, hangi faturanın sorunlu olduğu yine `alanlar["faturaIdler.<sıra>"]` içindedir (sıra 0'dan başlar). İki istek aynı faturayı aynı anda alırsa ikincisi `alanlar` olmadan `409 fatura_kullaniliyor` alabilir. Fatura başka bir kullanıcının formundaysa mesaj o formun numarasını vermez. `yerelKarsiliklar` fatura kimliğinden yerel para birimindeki tutara bir eşlemedir (`{ "<faturaId>": 6500 }`, tutar 0'dan büyük, en çok 2 ondalık). Yalnızca formdaki faturalar için verilebilir (`400`, `alanlar["yerelKarsiliklar.<faturaId>"]`). Karşılığa ihtiyacı olmayan faturanın karşılığı saklanmaz. Gönderimde eksik karşılık `409 karsilik_eksik` döner; eksik her fatura `alanlar["yerelKarsiliklar.<faturaId>"]` içindedir. Durumu uygun olmayan işlem `409 gecersiz_durum` döner.
 
 Doğrulama hatası: `400 gecersiz_istek`, `alanlar` her alanın Türkçe hata mesajını taşır.
 
@@ -269,15 +281,16 @@ Ayrıntılar:
 
 - `POST /api/masraflar` ile `gonder: true` tek işlemdir. Gönderim başarısız olursa (ör. `409 onaylayan_yok`) form da oluşturulmaz; istemci aynı gövdeyi `gonder: false` ile taslak olarak kaydedebilir.
 - `PATCH` içinde `kur`, `satici` ve `aciklama` alanlarına `null` (metinlerde boş metin de olur) gönderilirse alan temizlenir. Gönderilmeyen alan değişmez.
-- `faturaIdler` gönderilirse formun fatura listesinin tamamı yerine geçer (sıra dahil). Fatura eklemek ya da çıkarmak için istemci güncel listenin tamamını gönderir; `[]` bütün faturaları kaldırır. Gönderilmezse faturalar değişmez.
-- `tutarFarki.fatura` ve `tutarFarki.beyan` formun kendi para birimindedir (`paraBirimi`). `tutarFarki.fatura`, formla aynı para birimindeki (ya da para birimi okunamamış) ve genel toplamı okunmuş faturaların toplamıdır. Böyle en az bir fatura varsa ve iki tutar kuruşa yuvarlandığında farklıysa dolar. Başka para birimindeki faturalar toplama girmez; istemci bunları ayrıca işaretleyebilir.
+- `faturaIdler` gönderilirse formun fatura listesinin tamamı yerine geçer (sıra dahil). Fatura eklemek ya da çıkarmak için istemci güncel listenin tamamını gönderir; `[]` bütün faturaları kaldırır. Gönderilmezse faturalar değişmez. Listedeki değişiklik form geçmişine yazılır ("1 fatura eklendi, 1 fatura çıkarıldı.").
+- `yerelKarsiliklar` gönderilirse bütün karşılıkların yerine geçer. Gönderilmezse formda kalan faturaların karşılıkları korunur. Formun para birimi değişip bir fatura artık karşılık gerektirmiyorsa karşılığı silinir.
+- `tutarFarki.fatura` ve `tutarFarki.beyan` formun kendi para birimindedir (`paraBirimi`). `tutarFarki.fatura`, 6. kuraldaki gibi toplama giren faturaların toplamıdır; yerel para birimindeki tutarlar (yerel faturalar ve girilen karşılıklar) formun kuruyla formun para birimine çevrilir. Toplama giren en az bir fatura varsa ve iki tutar kuruşa yuvarlandığında farklıysa dolar. Karşılığı girilmemiş fatura toplama girmez.
 - Temel para birimi (`PARA_BIRIMI`) `GET /api/ozet` ve `GET /api/onay-akislari` yanıtlarındaki `paraBirimi` alanından okunur.
-- `null` olabilen alanlar: `Kullanici.departman`, `Kullanici.sonGiris`, `Kullanici.onayAkisiId`, `Akis.guncelleyen`, `MasrafOzet.satici`, `MasrafOzet.gonderim`, `MasrafOzet.siradakiOnayci`, `MasrafDetay.aciklama`, `kur`, `sonuclanma`, `odeme` ve `faturalar` içindeki okunan alanlar (`faturaNo`, `faturaTarihi`, `saticiUnvan`, `genelToplam`, `paraBirimi`, `mime`). `Kategori.simge` her zaman doludur (varsayılan `diger`). `faturaIdler` ve `faturalar` her zaman dizidir.
+- `null` olabilen alanlar: `Kullanici.departman`, `Kullanici.sonGiris`, `Kullanici.onayAkisiId`, `Akis.guncelleyen`, `MasrafOzet.satici`, `MasrafOzet.gonderim`, `MasrafOzet.siradakiOnayci`, `MasrafDetay.aciklama`, `kur`, `onayTutari`, `sonuclanma`, `odeme`, `faturalar` içindeki okunan alanlar (`faturaNo`, `faturaTarihi`, `saticiUnvan`, `genelToplam`, `paraBirimi`, `mime`) ve `yerelKarsilik`. `Kategori.simge` her zaman doludur (varsayılan `diger`). `faturaIdler` ve `faturalar` her zaman dizidir.
 - Okuma kuyruğu sunucunun belleğindedir; sunucu yeniden başlarsa `GET /api/invoices/toplu/:id` `404` döner. Okunmuş faturalar kaybolmaz: `GET /api/invoices` kullanıcının yüklediklerini en yeniden listeler.
 - `GET /api/onaylar` sayfalanmaz: `bekleyen` bekleyenlerin hepsini, `karar` son 200 kararı döner.
 - Devretme: yalnızca karar verilmemiş adım (`bekliyor` ya da `sirada`) devredilir. Yeni onaycı aktif olmalı; formun sahibi, adımın şimdiki onaycısı ya da bu turda zaten bekleyen/sıradaki bir adımı olan kişi olamaz. Aykırı istekler `400 gecersiz_istek` ve `alanlar.onayId` ya da `alanlar.yeniOnayciId` ile döner. Devredilen eski onaycı form ve faturasını artık göremez (`404`).
 - Para birimi değiştirilip yeni `kur` verilmezse eski kur taşınmaz: yeni para birimi temel para birimi değilse `400` ve `alanlar.kur` döner.
-- `alanlar` anahtarları alan adlarıdır; dizi ve iç içe alanlarda yol olarak yazılır (`adimlar.0.altLimit`, `durum.0`). Belirli bir alana bağlanamayan hata (ör. bilinmeyen alan) `_` anahtarındadır. Devretme yalnızca yönetici işidir ve kullanıcı listesi gerektirdiği için panelden yapılır.
+- `alanlar` anahtarları alan adlarıdır; dizi ve iç içe alanlarda yol olarak yazılır (`adimlar.0.limit`, `durum.0`). Belirli bir alana bağlanamayan hata (ör. bilinmeyen alan) `_` anahtarındadır. Devretme yalnızca yönetici işidir ve kullanıcı listesi gerektirdiği için panelden yapılır.
 
 ### Faturalar (mevcut uçlar, artık oturum ister)
 
@@ -290,7 +303,7 @@ Ayrıntılar:
 | `GET /api/invoices/toplu/:id` | Yalnızca kuyruğu oluşturan kullanıcı (ve muhasebe/yonetici) |
 | `GET /api/izleme`, `/api/izleme/akis` | `calisan` yalnızca kendi etkinliklerini görür; sayaçlar geneldir |
 
-Mobil için önerilen okuma akışı: dosyayı `POST /api/invoices/toplu` ile gönder (`202`), `GET /api/invoices/toplu/:id` ile birkaç saniyede bir sor. Dosya `bitti` olunca `kayitId` ve `sonuc` gelir. Formu `sonuc.fatura` ile doldur (`genelToplam` → tutar, `paraBirimi`, `faturaTarihi` → masraf tarihi, `saticiUnvan` → satıcı), `faturaIdler: [kayitId]` ile kaydet. Birden çok fiş için her dosyanın `kayitId` değeri listeye eklenir ve tutar, aynı para birimindeki genel toplamların toplamıyla doldurulur. Okuma sırasında kullanıcı kategori ve açıklama girebilir.
+Mobil için önerilen okuma akışı: dosyayı `POST /api/invoices/toplu` ile gönder (`202`), `GET /api/invoices/toplu/:id` ile birkaç saniyede bir sor. Dosya `bitti` olunca `kayitId` ve `sonuc` gelir. Formu `sonuc.fatura` ile doldur (`genelToplam` → tutar, `paraBirimi`, `faturaTarihi` → masraf tarihi, `saticiUnvan` → satıcı), `faturaIdler: [kayitId]` ile kaydet. Birden çok fiş için her dosyanın `kayitId` değeri listeye eklenir ve tutar, aynı para birimindeki genel toplamların toplamıyla doldurulur. Formun ve yerel para biriminin dışındaki bir fişin yerel karşılığı kullanıcıdan istenir ve `yerelKarsiliklar` ile gönderilir. Okuma sırasında kullanıcı kategori ve açıklama girebilir.
 
 ## 7. Ayarlar (`.env`)
 

@@ -1,7 +1,7 @@
 // Users and the approval flow store against the test database (docs/onay-sistemi.md, sections 2 and 6).
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createFlow, deleteFlow, getFlow as getFlowById, listFlows, setDefaultFlow, updateFlow } from '../../src/approval/flow-store.ts';
-import type { FlowStep } from '../../src/approval/flow.ts';
+import type { FlowStep, Strateji } from '../../src/approval/flow.ts';
 import { verifyPassword } from '../../src/auth/password.ts';
 import { findSession, openSession } from '../../src/auth/sessions.ts';
 import { listAudit } from '../../src/db/audit.ts';
@@ -18,15 +18,14 @@ import {
   updateUser,
   type Kullanici,
 } from '../../src/users/users.ts';
-import { assignFlow, closeTestDb, defaultFlowId, makeFlow, makeUser, resetDb, setFlow, testDb, TEST_PASSWORD } from '../db.ts';
+import { assignFlow, chainOf, closeTestDb, defaultFlowId, makeFlow, makeUser, resetDb, setFlow, testDb, TEST_PASSWORD } from '../db.ts';
 
 const MIN = 8;
 const TTL = 3_600_000;
-const unlimited = (onayciId: number) => ({ onayciId, altLimit: 0, ustLimit: null });
 
 /** Saves the default flow under its seeded name, as the single flow used to be saved. */
-const saveFlow = async (db: Db, actor: Kullanici, adimlar: readonly FlowStep[], currency: string) =>
-  updateFlow(db, actor, await defaultFlowId(db), { ad: 'Genel', adimlar }, currency);
+const saveFlow = async (db: Db, actor: Kullanici, adimlar: readonly FlowStep[], currency: string, strateji: Strateji = 'zincir') =>
+  updateFlow(db, actor, await defaultFlowId(db), { ad: 'Genel', strateji, adimlar }, currency);
 const getFlow = async (db: Db, currency: string) => getFlowById(db, await defaultFlowId(db), currency);
 
 describe('users and the approval flow', () => {
@@ -102,14 +101,26 @@ describe('users and the approval flow', () => {
     it('lists users by name, filtered by text and state, with their place in the flow', async () => {
       const zehra = await makeUser(db, { adSoyad: 'Zehra Yıldız', departman: 'Finans' });
       const can = await makeUser(db, { adSoyad: 'Can Ak', aktif: false });
-      await setFlow(db, [{ onayciId: admin.id, altLimit: 0, ustLimit: null }, { onayciId: zehra.id, altLimit: 1000.5, ustLimit: 20000 }]);
+      await setFlow(
+        db,
+        [
+          { onayciId: admin.id, limit: 1000.49 },
+          { onayciId: zehra.id, limit: null },
+        ],
+        'tek',
+      );
       expect((await listUsers(db)).map((u) => u.id)).toEqual([can.id, admin.id, zehra.id]);
       expect((await listUsers(db, { aktif: false })).map((u) => u.id)).toEqual([can.id]);
       expect((await listUsers(db, { q: 'finans' })).map((u) => u.id)).toEqual([zehra.id]);
       expect((await listUsers(db, { q: '%' })).map((u) => u.id)).toEqual([]);
-      const genel = { id: await defaultFlowId(db), ad: 'Genel' };
-      expect((await getUser(db, zehra.id))?.onaycilik).toEqual([{ akis: genel, sira: 2, altLimit: 1000.5, ustLimit: 20000 }]);
-      expect((await listUsers(db)).find((u) => u.id === zehra.id)?.onaycilik).toEqual([{ akis: genel, sira: 2, altLimit: 1000.5, ustLimit: 20000 }]);
+      const genel = { id: await defaultFlowId(db), ad: 'Genel', strateji: 'tek' };
+      // Each approver's limit and the amounts that reach them, to the cent.
+      const zehraPlace = { akis: genel, sira: 2, limit: null, altLimit: 1000.5, ustLimit: null };
+      const adminPlace = { akis: genel, sira: 1, limit: 1000.49, altLimit: 0, ustLimit: 1000.49 };
+      expect((await getUser(db, zehra.id))?.onaycilik).toEqual([zehraPlace]);
+      expect((await listUsers(db)).find((u) => u.id === zehra.id)?.onaycilik).toEqual([zehraPlace]);
+      expect((await getUser(db, admin.id))?.onaycilik).toEqual([adminPlace]);
+      expect((await listUsers(db)).find((u) => u.id === admin.id)?.onaycilik).toEqual([adminPlace]);
       expect((await getUser(db, can.id))?.onaycilik).toEqual([]);
       expect(await getUser(db, 999_999)).toBeNull();
     });
@@ -181,7 +192,7 @@ describe('users and the approval flow', () => {
 
     it('does not deactivate a user who is in the approval flow', async () => {
       const approver = await makeUser(db, { adSoyad: 'Akıştaki Kişi' });
-      await setFlow(db, [{ onayciId: admin.id, altLimit: 0, ustLimit: null }, { onayciId: approver.id, altLimit: 0, ustLimit: null }]);
+      await setFlow(db, chainOf(admin.id, approver.id));
       const err = await updateUser(db, admin, approver.id, { aktif: false }).catch((e: unknown) => e);
       expect(err).toMatchObject({ status: 409, code: 'onay_akisinda', message: expect.stringContaining('Genel (2. sıra)') });
       // Other changes are fine.
@@ -192,10 +203,10 @@ describe('users and the approval flow', () => {
       const approver = await makeUser(db);
       const later = await makeUser(db);
       const sender = await makeUser(db);
-      await setFlow(db, [{ onayciId: admin.id, altLimit: 0, ustLimit: null }, { onayciId: approver.id, altLimit: 0, ustLimit: null }, { onayciId: later.id, altLimit: 0, ustLimit: null }]);
+      await setFlow(db, chainOf(admin.id, approver.id, later.id));
       const expenses = createExpenseService(db, { baseCurrency: 'TRY' });
       const f = await expenses.create(sender, { baslik: 'Yemek', kategoriId: 1, masrafTarihi: '2025-06-15', tutar: 100 }, true);
-      await setFlow(db, [{ onayciId: admin.id, altLimit: 0, ustLimit: null }]);
+      await setFlow(db, chainOf(admin.id));
 
       // `later` only waits for their turn ('sirada'); that counts as well.
       await fails(updateUser(db, admin, approver.id, { aktif: false }), 409, 'bekleyen_onay_var');
@@ -271,10 +282,11 @@ describe('users and the approval flow', () => {
         eposta: 'ilk@firma.com',
         rol: 'yonetici',
         aktif: true,
-        onaycilik: [{ akis: { id: await defaultFlowId(db), ad: 'Genel' }, sira: 1, altLimit: 0, ustLimit: null }],
+        onaycilik: [{ akis: { id: await defaultFlowId(db), ad: 'Genel', strateji: 'zincir' }, sira: 1, limit: null, altLimit: 0, ustLimit: null }],
       });
       const flow = await getFlow(db, 'TRY');
-      expect(flow).toMatchObject({ guncelleyen: { id: user?.id }, adimlar: [{ sira: 1, onayci: { id: user?.id }, altLimit: 0, ustLimit: null }] });
+      // The first flow is a chain that starts with the administrator, without a limit.
+      expect(flow).toMatchObject({ strateji: 'zincir', guncelleyen: { id: user?.id }, adimlar: [{ sira: 1, onayci: { id: user?.id }, limit: null }] });
       expect(await ensureFirstAdmin(db, { ...admin, eposta: 'ikinci@firma.com' })).toBe('kullanici_var');
       expect(await listUsers(db)).toHaveLength(1);
     });
@@ -289,7 +301,7 @@ describe('users and the approval flow', () => {
       admin = await makeUser(db, { rol: 'yonetici', adSoyad: 'Yönetici' });
       a = await makeUser(db, { adSoyad: 'Ayşe', eposta: 'ayse@firma.com', departman: 'Satış' });
       b = await makeUser(db, { adSoyad: 'Mehmet' });
-      await setFlow(db, [{ onayciId: admin.id, altLimit: 0, ustLimit: null }]);
+      await setFlow(db, chainOf(admin.id));
     });
 
     const invalid = async (promise: Promise<unknown>): Promise<string[]> => {
@@ -307,38 +319,42 @@ describe('users and the approval flow', () => {
       expect((await getFlow(db, 'TRY')).adimlar.map((s) => s.onayci.id)).toEqual([admin.id]);
     };
 
-    it('replaces the flow in the given order and writes the audit log', async () => {
-      const flow = await saveFlow(
-        db,
-        admin,
-        [
-          { onayciId: a.id, altLimit: 0, ustLimit: 5000 },
-          { onayciId: b.id, altLimit: 5000.01, ustLimit: null },
-          { onayciId: admin.id, altLimit: 50000.01, ustLimit: null },
-        ],
-        'TRY',
-      );
+    it('replaces the flow in the given order with its strategy and writes the audit log', async () => {
+      const steps = [
+        { onayciId: a.id, limit: 5000 },
+        { onayciId: b.id, limit: 50000 },
+        { onayciId: admin.id, limit: null },
+      ];
+      const flow = await saveFlow(db, admin, steps, 'TRY', 'tek');
       expect(flow).toEqual({
         id: await defaultFlowId(db),
         ad: 'Genel',
         varsayilan: true,
+        strateji: 'tek',
         paraBirimi: 'TRY',
         guncelleme: expect.any(String),
         guncelleyen: { id: admin.id, adSoyad: 'Yönetici' },
         kullaniciSayisi: 3,
         adimlar: [
-          { sira: 1, onayci: { id: a.id, adSoyad: 'Ayşe', eposta: 'ayse@firma.com', departman: 'Satış' }, altLimit: 0, ustLimit: 5000 },
-          { sira: 2, onayci: { id: b.id, adSoyad: 'Mehmet', eposta: b.eposta, departman: null }, altLimit: 5000.01, ustLimit: null },
-          { sira: 3, onayci: { id: admin.id, adSoyad: 'Yönetici', eposta: admin.eposta, departman: null }, altLimit: 50000.01, ustLimit: null },
+          { sira: 1, onayci: { id: a.id, adSoyad: 'Ayşe', eposta: 'ayse@firma.com', departman: 'Satış' }, limit: 5000 },
+          { sira: 2, onayci: { id: b.id, adSoyad: 'Mehmet', eposta: b.eposta, departman: null }, limit: 50000 },
+          { sira: 3, onayci: { id: admin.id, adSoyad: 'Yönetici', eposta: admin.eposta, departman: null }, limit: null },
         ],
       });
       expect(await getFlow(db, 'TRY')).toEqual(flow);
       expect((await listAudit(db, 1))[0]).toMatchObject({
         islem: 'onay_akisi_guncellendi',
         kullanici: { id: admin.id },
-        ayrinti: expect.stringContaining('1) Ayşe: 0,00 TRY – 5.000,00 TRY'),
+        ayrinti: "Genel: tek onaycı; 1) Ayşe: 5.000,00 TRY'ye kadar; 2) Mehmet: 50.000,00 TRY'ye kadar; 3) Yönetici: sınırsız",
       });
-      expect((await getUser(db, b.id))?.onaycilik).toEqual([{ akis: { id: flow.id, ad: 'Genel' }, sira: 2, altLimit: 5000.01, ustLimit: null }]);
+      // A single approver gets the amounts from just above the previous limit up to their own.
+      expect((await getUser(db, b.id))?.onaycilik).toEqual([{ akis: { id: flow.id, ad: 'Genel', strateji: 'tek' }, sira: 2, limit: 50000, altLimit: 5000.01, ustLimit: 50000 }]);
+
+      // The same approvers as a chain: larger amounts pass through them too.
+      const chain = await saveFlow(db, admin, steps, 'TRY', 'zincir');
+      expect(chain).toMatchObject({ strateji: 'zincir', adimlar: [{ limit: 5000 }, { limit: 50000 }, { limit: null }] });
+      expect((await listAudit(db, 1))[0]?.ayrinti).toBe("Genel: zincirleme onay; 1) Ayşe: 5.000,00 TRY'ye kadar; 2) Mehmet: 50.000,00 TRY'ye kadar; 3) Yönetici: sınırsız");
+      expect((await getUser(db, b.id))?.onaycilik).toEqual([{ akis: { id: flow.id, ad: 'Genel', strateji: 'zincir' }, sira: 2, limit: 50000, altLimit: 5000.01, ustLimit: null }]);
     });
 
     it('refuses an empty flow', async () => {
@@ -346,38 +362,61 @@ describe('users and the approval flow', () => {
       await unchanged();
     });
 
-    it('names every gap in the coverage', async () => {
-      const sorunlar = await invalid(
+    it('requires a limit on every approver but the last, and none on the last', async () => {
+      const limited = await invalid(
         saveFlow(
           db,
           admin,
           [
-            { onayciId: a.id, altLimit: 0, ustLimit: 1000 },
-            { onayciId: b.id, altLimit: 5000, ustLimit: 10000 },
+            { onayciId: a.id, limit: 1000 },
+            { onayciId: b.id, limit: 10000 },
           ],
           'TRY',
         ),
       );
-      expect(sorunlar).toEqual([
-        '1.000,01 TRY – 4.999,99 TRY arası tutarlar için onaycı yok.',
-        '10.000,01 TRY ve üzeri tutarlar için onaycı yok. En az bir onaycının üst limiti sınırsız olmalıdır.',
-      ]);
+      expect(limited).toEqual(['Son onaycının limiti sınırsız olmalıdır; böylece her tutarı onaylayacak biri olur.']);
+      const open = await invalid(
+        saveFlow(
+          db,
+          admin,
+          [
+            { onayciId: a.id, limit: null },
+            { onayciId: b.id, limit: null },
+          ],
+          'TRY',
+          'tek',
+        ),
+      );
+      expect(open).toEqual(['1. onaycı: onay limiti girilmelidir. Yalnızca son onaycının limiti sınırsızdır.']);
       await unchanged();
     });
 
-    it('refuses repeated approvers and reversed ranges', async () => {
+    it('refuses repeated approvers, limits that do not rise and limits that are not above zero', async () => {
       const sorunlar = await invalid(
         saveFlow(
           db,
           admin,
           [
-            { onayciId: a.id, altLimit: 0, ustLimit: null },
-            { onayciId: a.id, altLimit: 100, ustLimit: 50 },
+            { onayciId: a.id, limit: 5000 },
+            { onayciId: a.id, limit: 5000 },
+            { onayciId: b.id, limit: null },
           ],
           'TRY',
         ),
       );
-      expect(sorunlar).toEqual(['2. onaycı: aynı kullanıcı akışta birden fazla kez yer alamaz.', '2. onaycı: üst limit alt limitten küçük olamaz.']);
+      expect(sorunlar).toEqual(['2. onaycı: aynı kullanıcı akışta birden fazla kez yer alamaz.', '2. onaycının limiti, 1. onaycınınkinden (5.000,00 TRY) büyük olmalıdır.']);
+      const zero = await invalid(
+        saveFlow(
+          db,
+          admin,
+          [
+            { onayciId: a.id, limit: 0 },
+            { onayciId: b.id, limit: null },
+          ],
+          'EUR',
+        ),
+      );
+      expect(zero).toEqual(["1. onaycı: onay limiti 0'dan büyük ve en fazla 90.000.000.000.000,00 EUR olmalıdır."]);
       await unchanged();
     });
 
@@ -387,11 +426,7 @@ describe('users and the approval flow', () => {
         saveFlow(
           db,
           admin,
-          [
-            { onayciId: a.id, altLimit: 0, ustLimit: null },
-            { onayciId: gone.id, altLimit: 0, ustLimit: null },
-            { onayciId: 999_999, altLimit: 0, ustLimit: null },
-          ],
+          chainOf(a.id, gone.id, 999_999),
           'TRY',
         ),
       );
@@ -402,7 +437,7 @@ describe('users and the approval flow', () => {
 
     it('never leaves an inactive user in the flow when adding and deactivating race', async () => {
       const results = await Promise.allSettled([
-        saveFlow(db, admin, [unlimited(a.id), unlimited(admin.id)], 'TRY'),
+        saveFlow(db, admin, chainOf(a.id, admin.id), 'TRY'),
         updateUser(db, admin, a.id, { aktif: false }),
       ]);
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
@@ -413,11 +448,11 @@ describe('users and the approval flow', () => {
     });
 
     it('lets a user leave the flow and then be deactivated', async () => {
-      await saveFlow(db, admin, [{ onayciId: a.id, altLimit: 0, ustLimit: null }, { onayciId: admin.id, altLimit: 0, ustLimit: null }], 'TRY');
+      await saveFlow(db, admin, chainOf(a.id, admin.id), 'TRY');
       await fails(updateUser(db, admin, a.id, { aktif: false }), 409, 'onay_akisinda');
-      await saveFlow(db, admin, [{ onayciId: admin.id, altLimit: 0, ustLimit: null }], 'TRY');
+      await saveFlow(db, admin, chainOf(admin.id), 'TRY');
       expect((await updateUser(db, admin, a.id, { aktif: false })).aktif).toBe(false);
-      await expect(saveFlow(db, admin, [{ onayciId: a.id, altLimit: 0, ustLimit: null }], 'TRY')).rejects.toMatchObject({ code: 'gecersiz_akis' });
+      await expect(saveFlow(db, admin, chainOf(a.id), 'TRY')).rejects.toMatchObject({ code: 'gecersiz_akis' });
     });
   });
 
@@ -432,60 +467,84 @@ describe('users and the approval flow', () => {
       a = await makeUser(db, { adSoyad: 'Ayşe' });
       b = await makeUser(db, { adSoyad: 'Mehmet' });
       genel = await defaultFlowId(db);
-      await setFlow(db, [unlimited(admin.id)]);
+      await setFlow(db, chainOf(admin.id));
     });
 
     it('creates a flow, checks its rules and lists the default first', async () => {
-      const satis = await createFlow(db, admin, { ad: '  Satış ', adimlar: [{ onayciId: a.id, altLimit: 0, ustLimit: 5000 }, unlimited(b.id)] }, 'TRY');
+      const satis = await createFlow(
+        db,
+        admin,
+        {
+          ad: '  Satış ',
+          strateji: 'tek',
+          adimlar: [
+            { onayciId: a.id, limit: 5000 },
+            { onayciId: b.id, limit: null },
+          ],
+        },
+        'TRY',
+      );
       expect(satis).toMatchObject({
         ad: 'Satış',
         varsayilan: false,
+        strateji: 'tek',
         guncelleyen: { id: admin.id },
         kullaniciSayisi: 0,
         adimlar: [
-          { sira: 1, onayci: { id: a.id }, altLimit: 0, ustLimit: 5000 },
-          { sira: 2, onayci: { id: b.id }, altLimit: 0, ustLimit: null },
+          { sira: 1, onayci: { id: a.id }, limit: 5000 },
+          { sira: 2, onayci: { id: b.id }, limit: null },
         ],
       });
-      expect((await listAudit(db, 1))[0]).toMatchObject({ islem: 'onay_akisi_olusturuldu', ayrinti: expect.stringContaining('Satış: 1) Ayşe') });
-      await createFlow(db, admin, { ad: 'Ar-Ge', adimlar: [unlimited(b.id)] }, 'TRY');
+      expect((await listAudit(db, 1))[0]).toMatchObject({ islem: 'onay_akisi_olusturuldu', ayrinti: "Satış: tek onaycı; 1) Ayşe: 5.000,00 TRY'ye kadar; 2) Mehmet: sınırsız" });
+      expect(await createFlow(db, admin, { ad: 'Ar-Ge', strateji: 'zincir', adimlar: chainOf(b.id) }, 'TRY')).toMatchObject({ strateji: 'zincir', adimlar: [{ limit: null }] });
       expect((await listFlows(db, 'TRY')).map((f) => [f.ad, f.varsayilan, f.kullaniciSayisi])).toEqual([
         ['Genel', true, 3],
         ['Ar-Ge', false, 0],
         ['Satış', false, 0],
       ]);
       // Names are unique whatever their case; every flow has the same rules as before.
-      await fails(createFlow(db, admin, { ad: 'SATIŞ', adimlar: [unlimited(a.id)] }, 'TRY'), 409, 'akis_adi_kullaniliyor');
-      await fails(createFlow(db, admin, { ad: 'Boş', adimlar: [] }, 'TRY'), 400, 'gecersiz_akis');
-      await fails(createFlow(db, admin, { ad: 'Boşluklu', adimlar: [{ onayciId: a.id, altLimit: 100, ustLimit: null }] }, 'TRY'), 400, 'gecersiz_akis');
+      await fails(createFlow(db, admin, { ad: 'SATIŞ', strateji: 'zincir', adimlar: chainOf(a.id) }, 'TRY'), 409, 'akis_adi_kullaniliyor');
+      await fails(createFlow(db, admin, { ad: 'Boş', strateji: 'zincir', adimlar: [] }, 'TRY'), 400, 'gecersiz_akis');
+      await fails(createFlow(db, admin, { ad: 'Sınırlı', strateji: 'tek', adimlar: [{ onayciId: a.id, limit: 100 }] }, 'TRY'), 400, 'gecersiz_akis');
       expect(await listFlows(db, 'TRY')).toHaveLength(3);
     });
 
-    it('lets one user approve in several flows, each with its own range', async () => {
-      const satis = await makeFlow(db, 'Satış', [{ onayciId: a.id, altLimit: 0, ustLimit: 1000 }, unlimited(admin.id)]);
-      await setFlow(db, [unlimited(admin.id), { onayciId: a.id, altLimit: 5000.01, ustLimit: null }]);
+    it('lets one user approve in several flows, each with its own limit and strategy', async () => {
+      const satis = await makeFlow(
+        db,
+        'Satış',
+        [
+          { onayciId: a.id, limit: 1000 },
+          { onayciId: admin.id, limit: null },
+        ],
+        'tek',
+      );
+      await setFlow(db, [
+        { onayciId: admin.id, limit: 5000 },
+        { onayciId: a.id, limit: null },
+      ]);
       expect((await getUser(db, a.id))?.onaycilik).toEqual([
-        { akis: { id: genel, ad: 'Genel' }, sira: 2, altLimit: 5000.01, ustLimit: null },
-        { akis: { id: satis, ad: 'Satış' }, sira: 1, altLimit: 0, ustLimit: 1000 },
+        { akis: { id: genel, ad: 'Genel', strateji: 'zincir' }, sira: 2, limit: null, altLimit: 5000.01, ustLimit: null },
+        { akis: { id: satis, ad: 'Satış', strateji: 'tek' }, sira: 1, limit: 1000, altLimit: 0, ustLimit: 1000 },
       ]);
       const err = await updateUser(db, admin, a.id, { aktif: false }).catch((e: unknown) => e);
       expect(err).toMatchObject({ status: 409, code: 'onay_akisinda', message: 'Ayşe onay akışında onaycı: Genel (2. sıra), Satış (1. sıra). Önce bu akışlardan çıkarın.' });
     });
 
     it('renames and replaces a flow, and refuses a taken name or an unknown flow', async () => {
-      const satis = await makeFlow(db, 'Satış', [unlimited(a.id)]);
-      await makeFlow(db, 'Yönetim', [unlimited(admin.id)]);
-      const after = await updateFlow(db, admin, satis, { ad: 'Satış ve Pazarlama', adimlar: [unlimited(b.id)] }, 'TRY');
-      expect(after).toMatchObject({ id: satis, ad: 'Satış ve Pazarlama', adimlar: [{ sira: 1, onayci: { id: b.id } }] });
-      expect((await listAudit(db, 1))[0]?.ayrinti).toContain('Satış → Satış ve Pazarlama');
-      await fails(updateFlow(db, admin, satis, { ad: 'yönetim', adimlar: [unlimited(b.id)] }, 'TRY'), 409, 'akis_adi_kullaniliyor');
-      await fails(updateFlow(db, admin, 999_999, { ad: 'Yok', adimlar: [unlimited(b.id)] }, 'TRY'), 404, 'bulunamadi');
+      const satis = await makeFlow(db, 'Satış', chainOf(a.id));
+      await makeFlow(db, 'Yönetim', chainOf(admin.id));
+      const after = await updateFlow(db, admin, satis, { ad: 'Satış ve Pazarlama', strateji: 'tek', adimlar: chainOf(b.id) }, 'TRY');
+      expect(after).toMatchObject({ id: satis, ad: 'Satış ve Pazarlama', strateji: 'tek', adimlar: [{ sira: 1, onayci: { id: b.id }, limit: null }] });
+      expect((await listAudit(db, 1))[0]?.ayrinti).toContain('Satış → Satış ve Pazarlama: tek onaycı');
+      await fails(updateFlow(db, admin, satis, { ad: 'yönetim', strateji: 'zincir', adimlar: chainOf(b.id) }, 'TRY'), 409, 'akis_adi_kullaniliyor');
+      await fails(updateFlow(db, admin, 999_999, { ad: 'Yok', strateji: 'zincir', adimlar: chainOf(b.id) }, 'TRY'), 404, 'bulunamadi');
       await fails(getFlowById(db, 999_999, 'TRY'), 404, 'bulunamadi');
       expect((await getFlowById(db, satis, 'TRY')).ad).toBe('Satış ve Pazarlama');
     });
 
     it('assigns users to a flow; unassigned users follow the default', async () => {
-      const satis = await makeFlow(db, 'Satış', [unlimited(a.id)]);
+      const satis = await makeFlow(db, 'Satış', chainOf(a.id));
       const created = await createUser(db, admin, { eposta: 'yeni@firma.com', adSoyad: 'Yeni', rol: 'calisan', sifre: 'GizliSifre1', onayAkisiId: satis }, MIN);
       expect(created).toMatchObject({ onayAkisiId: satis, onayAkisi: { id: satis, ad: 'Satış', varsayilan: false } });
       expect((await listAudit(db, 1))[0]?.ayrinti).toContain('onay akışı: Satış');
@@ -509,8 +568,8 @@ describe('users and the approval flow', () => {
     });
 
     it('switches the default: unassigned users follow it, assigned users stay', async () => {
-      const satis = await makeFlow(db, 'Satış', [unlimited(a.id)]);
-      const yonetim = await makeFlow(db, 'Yönetim', [unlimited(admin.id)]);
+      const satis = await makeFlow(db, 'Satış', chainOf(a.id));
+      const yonetim = await makeFlow(db, 'Yönetim', chainOf(admin.id));
       await assignFlow(db, b.id, yonetim);
       const now = await setDefaultFlow(db, admin, satis, 'TRY');
       expect(now).toMatchObject({ id: satis, varsayilan: true, kullaniciSayisi: 2 });
@@ -525,14 +584,14 @@ describe('users and the approval flow', () => {
     });
 
     it('keeps exactly one default when two flows are made default at once', async () => {
-      const x = await makeFlow(db, 'X', [unlimited(a.id)]);
-      const y = await makeFlow(db, 'Y', [unlimited(b.id)]);
+      const x = await makeFlow(db, 'X', chainOf(a.id));
+      const y = await makeFlow(db, 'Y', chainOf(b.id));
       await Promise.all([setDefaultFlow(db, admin, x, 'TRY'), setDefaultFlow(db, admin, y, 'TRY')]);
       expect((await listFlows(db, 'TRY')).filter((f) => f.varsayilan)).toHaveLength(1);
     });
 
     it('deletes a flow: its users go back to the default; the default cannot be deleted', async () => {
-      const satis = await makeFlow(db, 'Satış', [unlimited(a.id)]);
+      const satis = await makeFlow(db, 'Satış', chainOf(a.id));
       await assignFlow(db, b.id, satis);
       await fails(deleteFlow(db, admin, genel), 409, 'varsayilan_akis');
       await deleteFlow(db, admin, satis);

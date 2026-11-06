@@ -3,7 +3,7 @@ import { execute, isUniqueViolation, iso, p, query, queryOne, transaction, type 
 import { conflict, HttpError, notFound } from '../errors.ts';
 import type { Actor } from '../expenses/rules.ts';
 import { lockFlow } from '../users/users.ts';
-import { formatMoney, validateFlow, type FlowStep, type OrderedStep } from './flow.ts';
+import { formatMoney, validateFlow, type FlowStep, type OrderedStep, type Strateji } from './flow.ts';
 
 /** A flow by name, as other objects refer to it. */
 export interface AkisOzet {
@@ -13,6 +13,7 @@ export interface AkisOzet {
 }
 
 export interface FlowView extends AkisOzet {
+  readonly strateji: Strateji;
   readonly paraBirimi: string;
   readonly guncelleme: string | null;
   readonly guncelleyen: { readonly id: number; readonly adSoyad: string } | null;
@@ -21,19 +22,21 @@ export interface FlowView extends AkisOzet {
   readonly adimlar: ReadonlyArray<{
     readonly sira: number;
     readonly onayci: { readonly id: number; readonly adSoyad: string; readonly eposta: string; readonly departman: string | null };
-    readonly altLimit: number;
-    readonly ustLimit: number | null;
+    /** Largest amount this approver gives the last approval for; null = no limit (the last approver). */
+    readonly limit: number | null;
   }>;
 }
 
 /** A flow ready for routing: its name and steps in order. */
 export interface RoutingFlow {
   readonly akis: AkisOzet;
+  readonly strateji: Strateji;
   readonly adimlar: OrderedStep[];
 }
 
 export interface FlowInput {
   readonly ad: string;
+  readonly strateji: Strateji;
   readonly adimlar: readonly FlowStep[];
 }
 
@@ -41,6 +44,7 @@ interface FlowRow {
   id: number;
   ad: string;
   varsayilan: boolean;
+  strateji: Strateji;
   guncelleme: Date;
   guncelleyen_id: number | null;
   guncelleyen_ad: string | null;
@@ -51,8 +55,7 @@ interface StepRow {
   akis_id: number;
   sira: number;
   onayci_id: number;
-  alt_limit: number;
-  ust_limit: number | null;
+  onay_limiti: number | null;
   ad_soyad: string;
   eposta: string;
   departman: string | null;
@@ -60,26 +63,25 @@ interface StepRow {
 
 const toNumber = (v: number | null): number | null => (v === null ? null : Number(v));
 
-const toOrdered = (r: Pick<StepRow, 'sira' | 'onayci_id' | 'alt_limit' | 'ust_limit'>): OrderedStep => ({
+const toOrdered = (r: Pick<StepRow, 'sira' | 'onayci_id' | 'onay_limiti'>): OrderedStep => ({
   sira: r.sira,
   onayciId: r.onayci_id,
-  altLimit: Number(r.alt_limit),
-  ustLimit: toNumber(r.ust_limit),
+  limit: toNumber(r.onay_limiti),
 });
 
-async function routingFlow(ex: Executor, flow: AkisOzet | null): Promise<RoutingFlow | null> {
+async function routingFlow(ex: Executor, flow: (AkisOzet & { strateji: Strateji }) | null): Promise<RoutingFlow | null> {
   if (flow === null) return null;
-  const rows = await query<StepRow>(ex, 'SELECT sira, onayci_id, alt_limit, ust_limit FROM dbo.onay_adimlari WHERE akis_id = @id ORDER BY sira', {
+  const rows = await query<StepRow>(ex, 'SELECT sira, onayci_id, onay_limiti FROM dbo.onay_adimlari WHERE akis_id = @id ORDER BY sira', {
     id: p.int(flow.id),
   });
-  return { akis: { id: flow.id, ad: flow.ad, varsayilan: flow.varsayilan }, adimlar: rows.map(toOrdered) };
+  return { akis: { id: flow.id, ad: flow.ad, varsayilan: flow.varsayilan }, strateji: flow.strateji, adimlar: rows.map(toOrdered) };
 }
 
 /** The flow a user's expenses go to: their assigned flow, otherwise the default. Null only without a default flow. */
 export async function loadUserFlow(ex: Executor, userId: number): Promise<RoutingFlow | null> {
-  const flow = await queryOne<AkisOzet>(
+  const flow = await queryOne<AkisOzet & { strateji: Strateji }>(
     ex,
-    `SELECT TOP (1) a.id, a.ad, a.varsayilan FROM dbo.kullanicilar k
+    `SELECT TOP (1) a.id, a.ad, a.varsayilan, a.strateji FROM dbo.kullanicilar k
      JOIN dbo.onay_akislari a ON a.id = k.onay_akisi_id OR (k.onay_akisi_id IS NULL AND a.varsayilan = 1)
      WHERE k.id = @u`,
     { u: p.int(userId) },
@@ -89,16 +91,18 @@ export async function loadUserFlow(ex: Executor, userId: number): Promise<Routin
 
 /** A flow by id, for routing (the admin's "try an amount" on a chosen flow). */
 export async function loadFlowById(ex: Executor, flowId: number): Promise<RoutingFlow | null> {
-  const flow = await queryOne<AkisOzet>(ex, 'SELECT id, ad, varsayilan FROM dbo.onay_akislari WHERE id = @id', { id: p.int(flowId) });
+  const flow = await queryOne<AkisOzet & { strateji: Strateji }>(ex, 'SELECT id, ad, varsayilan, strateji FROM dbo.onay_akislari WHERE id = @id', {
+    id: p.int(flowId),
+  });
   return routingFlow(ex, flow);
 }
 
-const FLOW_SELECT = `SELECT a.id, a.ad, a.varsayilan, a.guncelleme, a.guncelleyen_id, g.ad_soyad AS guncelleyen_ad,
+const FLOW_SELECT = `SELECT a.id, a.ad, a.varsayilan, a.strateji, a.guncelleme, a.guncelleyen_id, g.ad_soyad AS guncelleyen_ad,
     (SELECT COUNT(*) FROM dbo.kullanicilar k
      WHERE k.aktif = 1 AND (k.onay_akisi_id = a.id OR (k.onay_akisi_id IS NULL AND a.varsayilan = 1))) AS kullanici_sayisi
   FROM dbo.onay_akislari a LEFT JOIN dbo.kullanicilar g ON g.id = a.guncelleyen_id`;
 
-const STEP_SELECT = `SELECT s.akis_id, s.sira, s.onayci_id, s.alt_limit, s.ust_limit, k.ad_soyad, k.eposta, k.departman
+const STEP_SELECT = `SELECT s.akis_id, s.sira, s.onayci_id, s.onay_limiti, k.ad_soyad, k.eposta, k.departman
   FROM dbo.onay_adimlari s JOIN dbo.kullanicilar k ON k.id = s.onayci_id`;
 
 function toView(f: FlowRow, steps: readonly StepRow[], currency: string): FlowView {
@@ -106,6 +110,7 @@ function toView(f: FlowRow, steps: readonly StepRow[], currency: string): FlowVi
     id: f.id,
     ad: f.ad,
     varsayilan: f.varsayilan,
+    strateji: f.strateji,
     paraBirimi: currency,
     guncelleme: iso(f.guncelleme),
     guncelleyen: f.guncelleyen_id === null ? null : { id: f.guncelleyen_id, adSoyad: f.guncelleyen_ad ?? '' },
@@ -115,8 +120,7 @@ function toView(f: FlowRow, steps: readonly StepRow[], currency: string): FlowVi
       .map((s) => ({
         sira: s.sira,
         onayci: { id: s.onayci_id, adSoyad: s.ad_soyad, eposta: s.eposta, departman: s.departman },
-        altLimit: Number(s.alt_limit),
-        ustLimit: toNumber(s.ust_limit),
+        limit: toNumber(s.onay_limiti),
       })),
   };
 }
@@ -145,12 +149,12 @@ export async function createFlow(db: Db, actor: Actor, input: FlowInput, currenc
       const names = await checkApprovers(tx, input.adimlar);
       const row = await queryOne<{ id: number }>(
         tx,
-        'INSERT INTO dbo.onay_akislari (ad, guncelleyen_id) OUTPUT inserted.id VALUES (@ad, @u)',
-        { ad: p.str(input.ad.trim(), 80), u: p.int(actor.id) },
+        'INSERT INTO dbo.onay_akislari (ad, strateji, guncelleyen_id) OUTPUT inserted.id VALUES (@ad, @st, @u)',
+        { ad: p.str(input.ad.trim(), 80), st: p.ascii(input.strateji, 8), u: p.int(actor.id) },
       );
       if (row === null) throw new Error('onay akışı eklenemedi');
       await writeSteps(tx, row.id, input.adimlar);
-      await audit(tx, actor.id, 'onay_akisi_olusturuldu', `${input.ad.trim()}: ${describeSteps(input.adimlar, names, currency)}`);
+      await audit(tx, actor.id, 'onay_akisi_olusturuldu', `${input.ad.trim()}: ${describeSteps(input, names, currency)}`);
       return row.id;
     }),
   );
@@ -168,15 +172,16 @@ export async function updateFlow(db: Db, actor: Actor, id: number, input: FlowIn
       if (before === null) throw notFound('Onay akışı bulunamadı.');
       const names = await checkApprovers(tx, input.adimlar);
       const ad = input.ad.trim();
-      await execute(tx, 'UPDATE dbo.onay_akislari SET ad = @ad, guncelleme = SYSUTCDATETIME(), guncelleyen_id = @u WHERE id = @id', {
+      await execute(tx, 'UPDATE dbo.onay_akislari SET ad = @ad, strateji = @st, guncelleme = SYSUTCDATETIME(), guncelleyen_id = @u WHERE id = @id', {
         ad: p.str(ad, 80),
+        st: p.ascii(input.strateji, 8),
         u: p.int(actor.id),
         id: p.int(id),
       });
       await execute(tx, 'DELETE FROM dbo.onay_adimlari WHERE akis_id = @id', { id: p.int(id) });
       await writeSteps(tx, id, input.adimlar);
       const renamed = before.ad === ad ? ad : `${before.ad} → ${ad}`;
-      await audit(tx, actor.id, 'onay_akisi_guncellendi', `${renamed}: ${describeSteps(input.adimlar, names, currency)}`);
+      await audit(tx, actor.id, 'onay_akisi_guncellendi', `${renamed}: ${describeSteps(input, names, currency)}`);
     }),
   );
   return getFlow(db, id, currency);
@@ -246,20 +251,22 @@ async function checkApprovers(tx: Executor, steps: readonly FlowStep[]): Promise
 
 async function writeSteps(tx: Executor, flowId: number, steps: readonly FlowStep[]): Promise<void> {
   for (const [i, s] of steps.entries()) {
-    await execute(tx, 'INSERT INTO dbo.onay_adimlari (akis_id, sira, onayci_id, alt_limit, ust_limit) VALUES (@f, @s, @o, @a, @u)', {
+    await execute(tx, 'INSERT INTO dbo.onay_adimlari (akis_id, sira, onayci_id, onay_limiti) VALUES (@f, @s, @o, @l)', {
       f: p.int(flowId),
       s: p.int(i + 1),
       o: p.int(s.onayciId),
-      a: p.money(s.altLimit),
-      u: p.money(s.ustLimit),
+      l: p.money(s.limit),
     });
   }
 }
 
-function describeSteps(steps: readonly FlowStep[], names: Map<number, string>, currency: string): string {
-  return steps
-    .map((s, i) => `${i + 1}) ${names.get(s.onayciId) ?? s.onayciId}: ${formatMoney(s.altLimit, currency)} – ${s.ustLimit === null ? 'sınırsız' : formatMoney(s.ustLimit, currency)}`)
+const STRATEGY_NAMES: Record<Strateji, string> = { zincir: 'zincirleme onay', tek: 'tek onaycı' };
+
+function describeSteps(input: FlowInput, names: Map<number, string>, currency: string): string {
+  const steps = input.adimlar
+    .map((s, i) => `${i + 1}) ${names.get(s.onayciId) ?? s.onayciId}: ${s.limit === null ? 'sınırsız' : `${formatMoney(s.limit, currency)}'ye kadar`}`)
     .join('; ');
+  return `${STRATEGY_NAMES[input.strateji]}; ${steps}`;
 }
 
 async function withNameCheck<T>(run: () => Promise<T>): Promise<T> {

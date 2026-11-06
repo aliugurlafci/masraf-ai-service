@@ -11,6 +11,7 @@ import {
   isPrivileged,
   localAmount,
   MAX_INVOICES,
+  needsEquivalent,
   permissions,
   type Actor,
   type AdimDurum,
@@ -72,6 +73,10 @@ export interface FaturaOzeti {
   readonly saticiUnvan: string | null;
   readonly genelToplam: number | null;
   readonly paraBirimi: string | null;
+  /** Base-currency equivalent the sender entered; set only while the invoice needs one. */
+  readonly yerelKarsilik: number | null;
+  /** The invoice is in a third currency: the form cannot be sent without `yerelKarsilik`. */
+  readonly karsilikGerekli: boolean;
 }
 
 export interface MasrafDetay extends MasrafOzet {
@@ -100,6 +105,11 @@ export interface FormInput {
   readonly aciklama?: string | null | undefined;
   /** The whole invoice list; on update it replaces the form's invoices, left out it keeps them. */
   readonly faturaIdler?: readonly string[] | undefined;
+  /**
+   * Base-currency equivalents by invoice id, for invoices in a third currency. On update it replaces
+   * them all; left out, the equivalents of the invoices still on the form stay.
+   */
+  readonly yerelKarsiliklar?: Readonly<Record<string, number>> | undefined;
 }
 
 export type FormPatch = Partial<FormInput>;
@@ -297,6 +307,7 @@ export interface ExpenseService {
       paraBirimi?: string | undefined;
       kur?: number | null | undefined;
       faturaIdler?: readonly string[] | undefined;
+      yerelKarsiliklar?: Readonly<Record<string, number>> | undefined;
       akisId?: number | undefined;
     },
   ): Promise<Onizleme>;
@@ -356,15 +367,52 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
     };
   }
 
-  async function invoiceTotals(ex: Executor, ids: readonly string[]): Promise<InvoiceTotal[]> {
-    if (ids.length === 0) return [];
+  async function invoiceTotals(ex: Executor, ids: readonly string[]): Promise<Map<string, InvoiceTotal>> {
+    if (ids.length === 0) return new Map();
     const { list, params } = idList(ids);
-    const rows = await query<{ genel_toplam: number | null; para_birimi: string | null }>(
+    const rows = await query<{ id: string; genel_toplam: number | null; para_birimi: string | null }>(
       ex,
-      `SELECT genel_toplam, para_birimi FROM dbo.fatura_kayitlari WHERE id IN (${list})`,
+      `SELECT id, genel_toplam, para_birimi FROM dbo.fatura_kayitlari WHERE id IN (${list})`,
       params,
     );
-    return rows.map((r) => ({ genelToplam: r.genel_toplam, paraBirimi: r.para_birimi }));
+    return new Map(rows.map((r) => [r.id, { genelToplam: r.genel_toplam, paraBirimi: r.para_birimi }]));
+  }
+
+  /** The form's invoices in order, with the equivalents entered for them. */
+  async function formInvoices(ex: Executor, formId: number): Promise<Array<InvoiceTotal & { id: string; yerelKarsilik: number | null }>> {
+    const rows = await query<{ kayit_id: string; yerel_karsilik: number | null; genel_toplam: number | null; para_birimi: string | null }>(
+      ex,
+      `SELECT ff.kayit_id, ff.yerel_karsilik, r.genel_toplam, r.para_birimi
+       FROM dbo.form_faturalari ff JOIN dbo.fatura_kayitlari r ON r.id = ff.kayit_id
+       WHERE ff.form_id = @f ORDER BY ff.sira`,
+      { f: p.int(formId) },
+    );
+    return rows.map((r) => ({ id: r.kayit_id, yerelKarsilik: num(r.yerel_karsilik), genelToplam: r.genel_toplam, paraBirimi: r.para_birimi }));
+  }
+
+  /**
+   * The equivalents to store for `ids` on a form in `formCurrency`: only for invoices that need one.
+   * With `strict`, an equivalent for an invoice not in `ids` is refused.
+   */
+  async function equivalentsFor(
+    ex: Executor,
+    ids: readonly string[],
+    given: Readonly<Record<string, number>>,
+    formCurrency: string,
+    strict: boolean,
+  ): Promise<Map<string, number>> {
+    if (strict) {
+      const stray = Object.keys(given).find((id) => !ids.includes(id));
+      if (stray !== undefined) fail(`yerelKarsiliklar.${stray}`, 'Bu fatura masrafta yok.');
+    }
+    const facts = await invoiceTotals(ex, ids);
+    const kept = new Map<string, number>();
+    for (const id of ids) {
+      const value = given[id];
+      const invoice = facts.get(id);
+      if (value !== undefined && invoice !== undefined && needsEquivalent(formCurrency, base, invoice)) kept.set(id, value);
+    }
+    return kept;
   }
 
   /** The ids among `ids` that `actor` uploaded. */
@@ -390,28 +438,56 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
     const foreign = ids.findIndex((id) => !own.has(id));
     if (foreign >= 0) fail(`faturaIdler.${foreign}`, `${which(foreign)} bulunamadı. Yalnızca kendi yüklediğiniz faturaları ekleyebilirsiniz.`);
     const { list, params } = idList(ids);
-    const used = await query<{ kayit_id: string; form_id: number }>(
+    const used = await query<{ kayit_id: string; form_id: number; olusturan_id: number }>(
       ex,
-      `SELECT kayit_id, form_id FROM dbo.form_faturalari WHERE aktif = 1 AND kayit_id IN (${list}) AND (@self IS NULL OR form_id <> @self)`,
+      `SELECT ff.kayit_id, ff.form_id, f.olusturan_id FROM dbo.form_faturalari ff JOIN dbo.masraf_formlari f ON f.id = ff.form_id
+       WHERE ff.aktif = 1 AND ff.kayit_id IN (${list}) AND (@self IS NULL OR ff.form_id <> @self)`,
       { ...params, self: p.int(formId) },
     );
     if (used.length === 0) return;
-    const byInvoice = new Map(used.map((u) => [u.kayit_id, u.form_id]));
+    const byInvoice = new Map(used.map((u) => [u.kayit_id, u]));
     const i = ids.findIndex((id) => byInvoice.has(id));
-    const mesaj = `${ids.length === 1 ? 'Bu fatura' : `${i + 1}. fatura`} #${byInvoice.get(ids[i] ?? '')} numaralı masraf formunda kullanılıyor.`;
+    const hit = byInvoice.get(ids[i] ?? '');
+    // Someone else who uploaded the same file must not learn their form's number.
+    const where = hit !== undefined && hit.olusturan_id === actor.id ? `#${hit.form_id} numaralı masraf formunda` : 'başka bir masraf formunda';
+    const mesaj = `${ids.length === 1 ? 'Bu fatura' : `${i + 1}. fatura`} ${where} kullanılıyor.`;
     throw new HttpError(409, 'fatura_kullaniliyor', mesaj, { alanlar: { [`faturaIdler.${i}`]: mesaj } });
   }
 
-  /** Replaces the form's invoices with `ids`, in this order. */
-  async function setInvoices(tx: sql.Transaction, formId: number, ids: readonly string[]): Promise<void> {
+  /** Replaces the form's invoices with `ids`, in this order, with their entered equivalents. */
+  async function setInvoices(tx: sql.Transaction, formId: number, ids: readonly string[], equivalents: ReadonlyMap<string, number>): Promise<void> {
     await execute(tx, 'DELETE FROM dbo.form_faturalari WHERE form_id = @f', { f: p.int(formId) });
     if (ids.length === 0) return;
     const { params } = idList(ids);
+    const amounts = Object.fromEntries(ids.map((id, i) => [`k${i}`, p.money(equivalents.get(id) ?? null)]));
     await execute(
       tx,
-      `INSERT INTO dbo.form_faturalari (form_id, kayit_id, sira) VALUES ${ids.map((_, i) => `(@f, @i${i}, ${i + 1})`).join(', ')}`,
-      { ...params, f: p.int(formId) },
+      `INSERT INTO dbo.form_faturalari (form_id, kayit_id, sira, yerel_karsilik)
+       VALUES ${ids.map((_, i) => `(@f, @i${i}, ${i + 1}, @k${i})`).join(', ')}`,
+      { ...params, ...amounts, f: p.int(formId) },
     );
+  }
+
+  /** "2 fatura eklendi, 1 fatura çıkarıldı." for the history, or null when the list kept its invoices. */
+  function invoiceChanges(before: readonly string[], after: readonly string[]): string | null {
+    const added = after.filter((id) => !before.includes(id)).length;
+    const removed = before.filter((id) => !after.includes(id)).length;
+    const parts = [added > 0 ? `${added} fatura eklendi` : null, removed > 0 ? `${removed} fatura çıkarıldı` : null].filter((x) => x !== null);
+    if (parts.length === 0) return before.join() === after.join() ? null : 'Faturaların sırası değişti.';
+    return `${parts.join(', ')}.`.replace(/^./, (c) => c.toUpperCase());
+  }
+
+  /** Sending needs the base-currency equivalent of every invoice in a third currency. */
+  function checkEquivalents(row: FormRow, invoices: ReadonlyArray<InvoiceTotal & { id: string; yerelKarsilik: number | null }>): void {
+    const missing = invoices
+      .map((inv, i) => ({ inv, i }))
+      .filter(({ inv }) => needsEquivalent(row.para_birimi, base, inv) && !(inv.yerelKarsilik !== null && inv.yerelKarsilik > 0));
+    if (missing.length === 0) return;
+    const text = ({ inv, i }: (typeof missing)[number]): string =>
+      `${invoices.length === 1 ? 'Fatura' : `${i + 1}. fatura`} ${inv.paraBirimi} cinsinden; onaya göndermek için ${base} karşılığını girin.`;
+    throw new HttpError(409, 'karsilik_eksik', text(missing[0] as (typeof missing)[number]), {
+      alanlar: Object.fromEntries(missing.map((m) => [`yerelKarsiliklar.${m.inv.id}`, text(m)])),
+    });
   }
 
   function checkCurrency(paraBirimi: string, kur: number | null | undefined): number | null {
@@ -480,12 +556,11 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
     flow?: RoutingFlow | null,
   ): Promise<{ akis: AkisOzet | null; steps: PlannedStep[] | null }> {
     const routing = flow === undefined ? await loadUserFlow(ex, senderId) : flow;
-    const fallback = await queryOne<{ id: number }>(
-      ex,
-      `SELECT TOP (1) id FROM dbo.kullanicilar WHERE rol = 'yonetici' AND aktif = 1 AND id <> @s ORDER BY id`,
-      { s: p.int(senderId) },
-    );
-    return { akis: routing?.akis ?? null, steps: planApprovals(routing?.adimlar ?? [], amount, senderId, fallback?.id ?? null) };
+    const admins = await query<{ id: number }>(ex, `SELECT id FROM dbo.kullanicilar WHERE rol = 'yonetici' AND aktif = 1 AND id <> @s ORDER BY id`, {
+      s: p.int(senderId),
+    });
+    const fallbacks = admins.map((a) => a.id);
+    return { akis: routing?.akis ?? null, steps: planApprovals(routing?.strateji ?? 'zincir', routing?.adimlar ?? [], amount, senderId, fallbacks) };
   }
 
   const nobodyToApprove = (): HttpError =>
@@ -493,10 +568,9 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
 
   /** Sends a locked form: copies the matching approvers, the first one waits for a decision. */
   async function submitLocked(tx: sql.Transaction, row: FormRow, actor: Actor): Promise<void> {
-    const amount = approvalAmount(
-      { tutar: Number(row.tutar), paraBirimi: row.para_birimi, kur: num(row.kur) },
-      await invoiceTotals(tx, invoiceIdsOf(row)),
-    );
+    const invoices = await formInvoices(tx, row.id);
+    checkEquivalents(row, invoices);
+    const amount = approvalAmount({ tutar: Number(row.tutar), paraBirimi: row.para_birimi, kur: num(row.kur) }, base, invoices);
     const { akis, steps } = await plan(tx, row.olusturan_id, amount);
     if (steps === null) throw nobodyToApprove();
     const tur = row.tur + 1;
@@ -546,9 +620,10 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
         genel_toplam: number | null;
         para_birimi: string | null;
         mime: string | null;
+        yerel_karsilik: number | null;
       }>(
         db,
-        `SELECT r.id, r.dosya_adi, r.fatura_no, r.fatura_tarihi, r.satici_unvan, r.genel_toplam, r.para_birimi, d.mime
+        `SELECT r.id, r.dosya_adi, r.fatura_no, r.fatura_tarihi, r.satici_unvan, r.genel_toplam, r.para_birimi, d.mime, ff.yerel_karsilik
          FROM dbo.form_faturalari ff
          JOIN dbo.fatura_kayitlari r ON r.id = ff.kayit_id
          LEFT JOIN dbo.fatura_dosyalari d ON d.kayit_id = r.id
@@ -592,6 +667,8 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       saticiUnvan: invoice.satici_unvan,
       genelToplam: invoice.genel_toplam,
       paraBirimi: invoice.para_birimi,
+      yerelKarsilik: num(invoice.yerel_karsilik),
+      karsilikGerekli: needsEquivalent(row.para_birimi, base, { paraBirimi: invoice.para_birimi }),
     }));
     return {
       ...toSummary(row),
@@ -603,7 +680,7 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       odeme: iso(row.odeme),
       guncelleme: iso(row.guncelleme) ?? '',
       faturalar,
-      tutarFarki: amountMismatch({ tutar: Number(row.tutar), paraBirimi: row.para_birimi }, faturalar),
+      tutarFarki: amountMismatch({ tutar: Number(row.tutar), paraBirimi: row.para_birimi, kur: num(row.kur) }, base, faturalar),
       onaylar: steps.map((s) => ({
         id: s.id,
         tur: s.tur,
@@ -678,6 +755,7 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
           const c = await checkInput(tx, input);
           const invoices = input.faturaIdler ?? [];
           await checkInvoices(tx, actor, invoices, null);
+          const equivalents = await equivalentsFor(tx, invoices, input.yerelKarsiliklar ?? {}, c.paraBirimi, true);
           const row = await queryOne<{ id: number }>(
             tx,
             `INSERT INTO dbo.masraf_formlari
@@ -687,7 +765,7 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
             { me: p.int(actor.id), ...inputParams(c) },
           );
           if (row === null) throw new Error('masraf formu eklenemedi');
-          await setInvoices(tx, row.id, invoices);
+          await setInvoices(tx, row.id, invoices, equivalents);
           await history(tx, row.id, actor.id, 'olusturuldu');
           if (gonder) await submitLocked(tx, await lockForm(tx, row.id, actor), actor);
           return row.id;
@@ -716,11 +794,14 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
           };
           // A changed date is checked; an untouched one stays as it was.
           const c = await checkInput(tx, merged, patch.masrafTarihi !== undefined);
-          // A new list replaces the invoices; without one they stay as they are.
-          if (patch.faturaIdler !== undefined) {
-            await checkInvoices(tx, actor, patch.faturaIdler, row.id);
-            await setInvoices(tx, row.id, patch.faturaIdler);
-          }
+          // A new list replaces the invoices; without one they stay as they are. Equivalents follow the
+          // same rule, and only those the invoices still need on this form (its currency may change) are kept.
+          const before = invoiceIdsOf(row);
+          const invoices = patch.faturaIdler ?? before;
+          if (patch.faturaIdler !== undefined) await checkInvoices(tx, actor, invoices, row.id);
+          const stored = Object.fromEntries((await formInvoices(tx, row.id)).flatMap((x) => (x.yerelKarsilik === null ? [] : [[x.id, x.yerelKarsilik]])));
+          const given = patch.yerelKarsiliklar ?? stored;
+          await setInvoices(tx, row.id, invoices, await equivalentsFor(tx, invoices, given, c.paraBirimi, patch.yerelKarsiliklar !== undefined));
           await execute(
             tx,
             `UPDATE dbo.masraf_formlari SET baslik = @baslik, aciklama = @aciklama, kategori_id = @kat, masraf_tarihi = @tarih,
@@ -729,7 +810,7 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
              WHERE id = @id`,
             { id: p.int(row.id), ...inputParams(c) },
           );
-          await history(tx, row.id, actor.id, 'guncellendi');
+          await history(tx, row.id, actor.id, 'guncellendi', invoiceChanges(before, invoices));
         });
       } catch (err) {
         if (isUniqueViolation(err)) throw invoiceInUse();
@@ -844,7 +925,7 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       });
     },
 
-    async preview(actor, { tutar, paraBirimi, kur, faturaIdler, akisId }) {
+    async preview(actor, { tutar, paraBirimi, kur, faturaIdler, yerelKarsiliklar, akisId }) {
       let chosen: RoutingFlow | undefined;
       if (akisId !== undefined) {
         if (actor.rol !== 'yonetici') throw forbidden('Başka bir onay akışını yalnızca yönetici deneyebilir.');
@@ -857,11 +938,12 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       // Only the actor's own uploads count; other ids are ignored, as the preview binds nothing.
       const requested = [...new Set(faturaIdler ?? [])].slice(0, MAX_INVOICES);
       const own = await uploadedBy(db, actor, requested);
-      const invoices = await invoiceTotals(
+      const facts = await invoiceTotals(
         db,
         requested.filter((id) => own.has(id)),
       );
-      const amount = approvalAmount({ tutar, paraBirimi: pb, kur: k }, invoices);
+      const invoices = [...facts].map(([id, invoice]) => ({ ...invoice, yerelKarsilik: yerelKarsiliklar?.[id] ?? null }));
+      const amount = approvalAmount({ tutar, paraBirimi: pb, kur: k }, base, invoices);
       const { akis, steps } = await plan(db, actor.id, amount, chosen);
       if (steps === null) return { onayTutari: amount, paraBirimi: base, akis, adimlar: [], uyari: nobodyToApprove().message };
       const who = await names(db, steps.map((s) => s.onayciId));

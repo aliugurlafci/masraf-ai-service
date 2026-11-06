@@ -3,8 +3,8 @@
 // #/profil?bolum=sifre opens with the focus on the password form (user menu "Şifre değiştir").
 
 import { el, ICONS, reducedMotion } from '../dom.js';
-import { fmtDateTime, fmtRelative } from '../format.js';
-import { rangeText, ROLE_HINTS, roleLabel } from '../labels.js';
+import { fmtCurrency, fmtDateTime, fmtRelative } from '../format.js';
+import { bandPhrase, ROLE_HINTS, roleLabel, STRATEGY_LABEL } from '../labels.js';
 import * as session from '../session.js';
 import { avatar, btn, pageHead, toast } from '../ui.js';
 import { passwordForm } from './login.js';
@@ -25,15 +25,24 @@ function ownFlow(u) {
   );
 }
 
-/** The flows the user approves in, each with the order and the amount range. */
+/** One flow the user approves in: their place, the amounts that reach them and their limit. */
+function approverLine(o, cur) {
+  const strategy = STRATEGY_LABEL[o.akis.strateji];
+  const where = `“${o.akis.ad}” akışında ${o.sira}. onaycısınız${strategy ? ` (${strategy.toLocaleLowerCase('tr-TR')})` : ''}.`;
+  const reach = bandPhrase(o.altLimit, o.ustLimit, cur);
+  const comes = `${reach.charAt(0).toLocaleUpperCase('tr-TR')}${reach.slice(1)} masraflar size gelir.`;
+  let limit;
+  if (o.limit === null || o.limit === undefined) limit = 'Son onaycısınız; limitiniz yok.';
+  else if (o.akis.strateji === 'zincir') limit = `Onay limitiniz ${fmtCurrency(o.limit, cur)}; daha büyük tutarlar sizin onayınızdan sonra bir üst onaycıya geçer.`;
+  else limit = `Onay limitiniz ${fmtCurrency(o.limit, cur)}.`;
+  return `${where} ${comes} ${limit}`;
+}
+
+/** The flows the user approves in. */
 function approverIn(u, cur) {
   const list = u.onaycilik ?? [];
   if (list.length === 0) return 'Hiçbir onay akışında onaycı değilsiniz.';
-  return el(
-    'ul',
-    { className: 'kv-list' },
-    ...list.map((o) => el('li', { text: `“${o.akis.ad}” akışında ${o.sira}. sıradasınız; ${rangeText(o.altLimit, o.ustLimit, cur)} tutarındaki masraflar size gelir.` })),
-  );
+  return el('ul', { className: 'kv-list' }, ...list.map((o) => el('li', { text: approverLine(o, cur) })));
 }
 
 export const profileView = {
@@ -44,7 +53,7 @@ export const profileView = {
       'section',
       { className: 'card', id: 'sifre', 'aria-labelledby': 'pw-h' },
       el('h2', { className: 'card-title', id: 'pw-h', text: 'Şifre değiştir' }),
-      el('p', { className: 'muted small', text: 'Şifreniz değişince bu cihaz dışındaki oturumlarınız kapanır.' }),
+      el('p', { className: 'card-sub', text: 'Şifreniz değişince bu cihaz dışındaki oturumlarınız kapanır.' }),
       pf.form,
     );
 

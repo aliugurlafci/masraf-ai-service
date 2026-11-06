@@ -5,8 +5,9 @@
 import * as api from '../api.js';
 import { el, icon, ICONS } from '../dom.js';
 import { fmtCurrency, fmtDateLong, fmtDateTime, fmtRateInput, fmtRelative } from '../format.js';
+import { invoicesTotal } from '../equivalents.js';
 import { approveDialog, approverChain, chainLead, invoicePreview, rejectDialog } from '../expense-ui.js';
-import { categoryIcon, HISTORY_LABEL, HISTORY_TONE, humanize, rangeText, STEP_STATUS, statusBadge } from '../labels.js';
+import { bandText, categoryIcon, HISTORY_LABEL, HISTORY_TONE, humanize, STEP_STATUS, statusBadge } from '../labels.js';
 import * as session from '../session.js';
 import { actionDialog, alertBox, btn, field, loadFailed, openDialog, pageHead, select, setPageTitle, setFieldError, toast } from '../ui.js';
 
@@ -38,30 +39,57 @@ function kv(label, value, { wide = false } = {}) {
 
 const invoicesOf = (d) => (Array.isArray(d?.faturalar) ? d.faturalar : []);
 
+const positive = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+
+/** Invoices in a third currency whose base-currency equivalent was not entered (sending is refused). */
+const missingEquivalents = (d) => invoicesOf(d).filter((f) => f.karsilikGerekli && !positive(f.yerelKarsilik));
+
+/** The entered equivalents ({ faturaId: amount }); the server keeps only those the form needs. */
+function equivalentsOf(d) {
+  const out = {};
+  for (const f of invoicesOf(d)) if (positive(f.yerelKarsilik)) out[f.id] = f.yerelKarsilik;
+  return out;
+}
+
 /** Who the saved form would go to if sent now (POST /api/onay-akisi/onizle). */
 function previewBody(d) {
   const body = { tutar: d.tutar, paraBirimi: d.paraBirimi };
   if (d.kur !== null && d.kur !== undefined) body.kur = d.kur;
   const ids = Array.isArray(d.faturaIdler) ? d.faturaIdler : invoicesOf(d).map((f) => f.id);
   if (ids.length > 0) body.faturaIdler = ids;
+  const eq = equivalentsOf(d);
+  if (Object.keys(eq).length > 0) body.yerelKarsiliklar = eq;
   return body;
 }
 
-/**
- * Display only, mirroring comparableInvoiceTotal in src/expenses/rules.ts: an invoice adds to the
- * amount when its grand total was read and its currency is the form's (or was not read).
- */
-function countsToward(f, cur) {
-  const t = f?.genelToplam;
-  if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0) return false;
-  return f.paraBirimi === null || f.paraBirimi === undefined || f.paraBirimi === cur;
-}
+/** The invoices' total in the form's currency (equivalents.js), as tutarFarki.fatura counts it. */
+const invoiceTotalOf = (d, base) =>
+  invoicesTotal(
+    invoicesOf(d).map((f) => ({ fatura: f, equivalent: f.karsilikGerekli ? f.yerelKarsilik : null })),
+    d.paraBirimi ?? base,
+    base,
+    d.kur,
+  );
 
-function invoiceNote(f, cur) {
-  let text = null;
-  if (typeof f.genelToplam !== 'number' || !(f.genelToplam > 0)) text = 'Genel toplam okunamadı; onay tutarına katılmaz.';
-  else if (!countsToward(f, cur)) text = `Fatura ${f.paraBirimi} cinsinden; masraf ${cur} olduğu için onay tutarına katılmaz.`;
-  return text ? el('p', { className: 'inv-card-note' }, icon(ICONS.info), el('span', { text })) : null;
+/**
+ * Under an invoice: its entered base-currency equivalent, or why it does not add to the amount, or
+ * that it adds converted (a base-currency receipt on a foreign-currency form).
+ */
+function invoiceNote(f, d, base) {
+  const cur = d.paraBirimi ?? base;
+  const note = (glyph, text) => el('p', { className: 'inv-card-note' }, icon(glyph), el('span', { text }));
+  if (f.karsilikGerekli) {
+    if (positive(f.yerelKarsilik)) return el('p', { className: 'inv-eq-line' }, el('span', { text: `${base} karşılığı: ` }), el('strong', { text: fmtCurrency(f.yerelKarsilik, base) }));
+    return note(
+      ICONS.warn,
+      d.izinler?.duzenle
+        ? `Fatura ${f.paraBirimi} cinsinden ve ${base} karşılığı girilmedi. Onaya göndermeden önce masrafı düzenleyip girin.`
+        : `Fatura ${f.paraBirimi} cinsinden ve ${base} karşılığı girilmedi; onay tutarına katılmaz.`,
+    );
+  }
+  if (!positive(f.genelToplam)) return note(ICONS.info, 'Genel toplam okunamadı; onay tutarına katılmaz.');
+  if (f.paraBirimi === base && cur !== base) return note(ICONS.info, `Fatura ${base} cinsinden; toplama kurla ${cur} karşılığı olarak katılır.`);
+  return null;
 }
 
 export const expenseDetailView = {
@@ -104,15 +132,28 @@ export const expenseDetailView = {
         if (p.ok) chainSlot.replaceChildren(el('p', { className: 'dlg-text', text: chainLead(p.body, 'masraf şu onaycılara sırayla gidecek:') }), approverChain(p.body));
         else if (!p.unauthorized) chainSlot.replaceChildren(el('p', { className: 'muted', text: p.error.mesaj }));
       });
+      const missing = missingEquivalents(d).length;
       const r = await actionDialog({
         title: 'Onaya gönder',
         message: d.tur >= 1 && d.durum === 'reddedildi' ? 'Masraf yeni bir turla yeniden onaya gönderilecek.' : 'Gönderdikten sonra masrafı düzenleyemezsiniz; gerekirse geri çekebilirsiniz.',
-        details: [chainSlot],
+        details: [missing > 0 ? alertBox('warn', null, [missingLead(missing)]) : null, chainSlot],
         confirmLabel: 'Onaya gönder',
         confirmIcon: ICONS.send,
-        run: () => api.expenseAction(d.id, 'gonder'),
+        run: async () => {
+          const res = await api.expenseAction(d.id, 'gonder');
+          // 409 karsilik_eksik names every invoice without its equivalent in alanlar.
+          if (!res.ok && res.error?.kod === 'karsilik_eksik') {
+            const items = res.error.alanlar ? [...new Set(Object.values(res.error.alanlar).map(String))] : [res.error.mesaj];
+            return { ...res, error: { ...res.error, mesaj: `Onaya gönderilemedi. Masrafı düzenleyip ${base} karşılığını girin.`, sorunlar: items } };
+          }
+          return res;
+        },
       });
       after(r, 'Masraf onaya gönderildi.');
+    }
+
+    function missingLead(n) {
+      return `${n === 1 ? 'Bir faturanın' : `${n} faturanın`} ${base} karşılığı girilmedi. Göndermeden önce düzenleyip ${base} karşılığını girin.`;
     }
 
     async function doSimple(d, action) {
@@ -230,9 +271,18 @@ export const expenseDetailView = {
       ].filter(Boolean);
       if (buttons.length === 0) return null;
       let lead = null;
+      const missing = iz.gonder ? missingEquivalents(d).length : 0;
       if (iz.onayla || iz.reddet) lead = 'Sıra sizde: bu masrafı inceleyip onaylayın ya da reddedin.';
       else if (iz.odendi) lead = 'Masraf onaylandı; ödeme yapıldığında işaretleyin.';
+      else if (missing > 0) lead = d.durum === 'reddedildi' ? `Masraf reddedildi. ${missingLead(missing)}` : missingLead(missing);
       else if (iz.gonder && d.durum === 'reddedildi') lead = 'Masraf reddedildi. Düzenleyip yeniden gönderebilirsiniz.';
+      else if (iz.gonder) lead = 'Masraf taslak. Hazır olduğunda onaya gönderin.';
+      else if (iz.geriCek) {
+        const waiting = (d.onaylar ?? []).find((s) => s.durum === 'bekliyor');
+        lead = waiting?.onayci?.adSoyad
+          ? `${waiting.onayci.adSoyad} kararını bekliyor. Geri çekerseniz masraf taslağa döner.`
+          : 'Masraf onayda. Geri çekerseniz taslağa döner.';
+      } else if (iz.devret) lead = 'Onaycı karar veremiyorsa onayı başka birine devredebilirsiniz.';
       return el('div', { className: `action-bar${iz.onayla ? ' is-turn' : ''}`, role: 'group', 'aria-label': 'İşlemler' }, lead ? el('p', { className: 'action-lead', text: lead }) : null, el('div', { className: 'action-buttons' }, ...buttons));
     }
 
@@ -289,18 +339,18 @@ export const expenseDetailView = {
       return details;
     }
 
+    /** The invoices' total in the form's currency: equivalents and base-currency invoices converted by the rate. */
     function invoiceSum(d, list) {
-      const counted = list.filter((f) => countsToward(f, d.paraBirimi));
-      const left = list.length - counted.length;
-      const cents = counted.reduce((acc, f) => acc + Math.round(f.genelToplam * 100), 0);
+      const total = invoiceTotalOf(d, base);
+      const left = list.length - total.count;
       return el(
         'div',
         { className: 'inv-sum' },
         el(
           'p',
           { className: 'inv-sum-line' },
-          el('span', { text: counted.length > 0 ? `Faturaların toplamı · ${counted.length} fatura` : `${d.paraBirimi} cinsinden toplanacak fatura yok` }),
-          el('strong', { text: counted.length > 0 ? fmtCurrency(cents / 100, d.paraBirimi) : '—' }),
+          el('span', { text: total.count > 0 ? `Faturaların toplamı · ${total.count} fatura` : 'Toplanacak fatura yok' }),
+          el('strong', { text: total.count > 0 ? fmtCurrency(total.value, d.paraBirimi) : '—' }),
         ),
         left > 0 ? el('p', { className: 'inv-sum-note', text: `${left} fatura onay tutarına katılmıyor; nedeni altında yazıyor.` }) : null,
       );
@@ -325,7 +375,7 @@ export const expenseDetailView = {
           { className: 'card', 'aria-labelledby': 'inv-title' },
           el('div', { className: 'card-head' }, title, el('a', { className: 'card-link', href: `#/okuma/${encodeURIComponent(f.id)}`, text: 'Okunan faturayı aç' })),
           invoiceFacts(f, false),
-          invoiceNote(f, d.paraBirimi),
+          invoiceNote(f, d, base),
           f.dosyaVar ? filePreview(f) : el('p', { className: 'muted', text: 'Bu faturanın orijinal dosyası saklanmamış.' }),
         );
       }
@@ -342,7 +392,7 @@ export const expenseDetailView = {
             el('a', { className: 'card-link', href: `#/okuma/${encodeURIComponent(f.id)}`, text: 'Okunan faturayı aç', 'aria-label': `Okunan faturayı aç: ${name}` }),
           ),
           invoiceFacts(f, true),
-          invoiceNote(f, d.paraBirimi),
+          invoiceNote(f, d, base),
           f.dosyaVar ? lazyPreview(f, name) : el('p', { className: 'muted small', text: 'Bu faturanın orijinal dosyası saklanmamış.' }),
         );
       });
@@ -396,7 +446,7 @@ export const expenseDetailView = {
                 s.yedek ? el('span', { className: 'tag', text: 'Yedek yönetici' }) : null,
                 statusBadge(s.durum, { map: STEP_STATUS, className: 'sm' }),
               ),
-              el('p', { className: 'tl-meta', text: [`${s.sira}. adım`, rangeText(s.altLimit, s.ustLimit, base), s.kararTarihi ? fmtDateTime(s.kararTarihi) : null].filter(Boolean).join(' · ') }),
+              el('p', { className: 'tl-meta', text: [`${s.sira}. adım`, s.yedek ? null : `Aralık: ${bandText(s.altLimit, s.ustLimit, base).toLocaleLowerCase('tr-TR')}`, s.kararTarihi ? fmtDateTime(s.kararTarihi) : null].filter(Boolean).join(' · ') }),
               s.aciklama ? el('blockquote', { className: 'tl-note', text: s.aciklama }) : null,
             ),
           ),
@@ -441,13 +491,21 @@ export const expenseDetailView = {
         if (step) rejection = alertBox('err', `${step.onayci?.adSoyad ?? 'Onaycı'} masrafı reddetti`, [step.aciklama ? `Neden: ${step.aciklama}` : null]);
       }
       const many = invoicesOf(d).length > 1;
-      const diff = d.tutarFarki
-        ? alertBox('warn', many ? 'Beyan edilen tutar faturalardan farklı' : 'Beyan edilen tutar faturadan farklı', [
-            // Both figures are in the form's own currency (contract: tutarFarki); `fatura` is the
-            // total of the invoices that count toward it.
-            `${many ? 'Faturaların' : 'Faturanın'} genel toplamı ${fmtCurrency(d.tutarFarki.fatura, d.paraBirimi ?? base)}, beyan edilen tutar ${fmtCurrency(d.tutarFarki.beyan, d.paraBirimi ?? base)}. Onay tutarı ikisinden büyük olan ${fmtCurrency(Math.max(d.tutarFarki.fatura, d.tutarFarki.beyan), d.paraBirimi ?? base)} üzerinden belirlendi.`,
-          ])
-        : null;
+      let diff = null;
+      if (d.tutarFarki) {
+        // Both figures are in the form's own currency (contract: tutarFarki). `fatura` is the total of
+        // the invoices that count, base-currency amounts and equivalents converted with the form's rate.
+        const cur = d.paraBirimi ?? base;
+        const money = (v) => fmtCurrency(v, cur);
+        const larger = money(Math.max(d.tutarFarki.fatura, d.tutarFarki.beyan));
+        const converted = cur !== base && invoicesOf(d).some((f) => f.karsilikGerekli || f.paraBirimi === base);
+        diff = alertBox('warn', many ? 'Beyan edilen tutar faturalardan farklı' : 'Beyan edilen tutar faturadan farklı', [
+          `${many ? 'Faturaların toplamı' : 'Faturanın tutarı'} ${money(d.tutarFarki.fatura)}, beyan edilen tutar ${money(d.tutarFarki.beyan)}.${converted ? ` ${base} tutarlar masrafın kuruyla ${cur} karşılığına çevrildi.` : ''}`,
+          d.onayTutari !== null && d.onayTutari !== undefined
+            ? `Onay tutarı ikisinden büyük olan ${larger} üzerinden belirlendi.`
+            : `Onaya gönderildiğinde ikisinden büyük olan ${larger} esas alınır.`,
+        ]);
+      }
 
       page.replaceChildren(...[
         pageHead({

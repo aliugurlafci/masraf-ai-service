@@ -10,6 +10,7 @@ import { $, el, reducedMotion, replay } from '../dom.js';
 import { errorView, invoiceView, jsonView, loadingView, metricsView, originalView, readingView, welcomeView } from '../invoice.js';
 import { connectLive } from '../live.js';
 import { createMonitor } from '../monitor.js';
+import { downloadObjectUrl, knownType, safeObjectUrl, sniffType, typedObjectUrl } from '../files.js';
 import { navigate } from '../router.js';
 import { setBusy, setFileTarget, setTitleCount, tickClocks, toast } from '../ui.js';
 import { fmtCount } from '../format.js';
@@ -38,7 +39,7 @@ let live = null; // the live connection, open while signed in
 
 const sent = new Map(); // panel tag -> File[] in send order (an activity's sira - 1)
 const byRecord = new Map(); // record id -> File
-const urls = new WeakMap(); // File -> object URL
+const urls = new WeakMap(); // File -> { url, mime }: an object URL typed by the file's content
 const originals = new Map(); // record id -> { state: loading|ok|missing|error, promise, url, type, name, blob, error }
 
 function fileFor(a) {
@@ -46,13 +47,26 @@ function fileFor(a) {
   return sent.get(a.etiket)?.[(a.sira ?? 1) - 1] ?? null;
 }
 
+/** The original of a file this tab sent, typed by its content (never by its name; see files.js). */
 function urlOf(file) {
-  let url = urls.get(file);
-  if (!url) {
-    url = URL.createObjectURL(file);
-    urls.set(file, url);
+  let entry = urls.get(file);
+  if (entry) return entry;
+  const type = knownType(file);
+  if (type === null) {
+    // Reading the first bytes takes a moment; show the original once it is done.
+    sniffType(file).then(() => {
+      if (active && state.view === 'orijinal') renderDetail(false);
+    });
+    return null;
   }
-  return url;
+  entry = typedObjectUrl(file, type);
+  urls.set(file, entry);
+  return entry;
+}
+
+function localOriginal(file) {
+  const o = urlOf(file);
+  return o ? originalView({ name: file.name, type: o.mime }, o.url) : loadingView();
 }
 
 function remember(a) {
@@ -106,6 +120,7 @@ export function onReadingCount(fn) {
 /** Files another view sent with this tag, so retry and "Orijinal" work for them here too. */
 export function rememberSent(tag, files) {
   sent.set(tag, [...files]);
+  for (const f of files) sniffType(f);
 }
 
 // ---------- State ----------
@@ -233,10 +248,10 @@ function loadOriginal(id) {
   const existing = originals.get(id);
   if (existing?.state === 'loading') return existing.promise;
   if (existing?.state === 'ok') return Promise.resolve();
-  const promise = api.getInvoiceFile(id).then((r) => {
+  const promise = api.getInvoiceFile(id).then(async (r) => {
     if (r.ok) {
-      const type = (r.type ?? '').split(';')[0].trim() || r.blob.type;
-      originals.set(id, { state: 'ok', url: URL.createObjectURL(r.blob), type, name: nameFor(id), blob: r.blob });
+      const { url, mime } = await safeObjectUrl(r.blob);
+      originals.set(id, { state: 'ok', url, type: mime, name: nameFor(id), blob: r.blob });
     } else if (r.unauthorized || r.aborted) {
       originals.delete(id);
     } else {
@@ -305,7 +320,7 @@ function renderDetail(animate) {
   let content;
   let fresh = false;
   if (t === '') content = welcomeView();
-  else if (state.view === 'orijinal') content = file ? originalView(file, urlOf(file)) : serverOriginal(record.id);
+  else if (state.view === 'orijinal') content = file ? localOriginal(file) : serverOriginal(record.id);
   else if (state.view === 'json') content = jsonView(record.body);
   else if (activity) content = activity.durum === 'hata' ? errorView(activity.hata, { canRetry: canRetry(activity) }) : readingView(activity);
   else if (record) {
@@ -449,6 +464,7 @@ export function resetReading() {
 async function send(files, { force = false } = {}) {
   const list = [...files].filter(Boolean);
   if (list.length === 0) return;
+  for (const file of list) sniffType(file);
   const f = { tags: new Set(), single: list.length === 1, base: state.target, done: false };
   follow = f;
   toast(list.length === 1 ? `${list[0].name || 'Dosya'} gönderildi.` : `${fmtCount(list.length)} dosya gönderildi; sırayla okunacak.`);
@@ -608,7 +624,7 @@ copyBtn.addEventListener('click', async () => {
 downloadBtn.addEventListener('click', () => {
   if (!state.record) return;
   const blob = new Blob([`${JSON.stringify(state.record.body, null, 2)}\n`], { type: 'application/json' });
-  const a = el('a', { href: URL.createObjectURL(blob), download: downloadName() });
+  const a = el('a', { href: downloadObjectUrl(blob), download: downloadName() });
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 0);
 });

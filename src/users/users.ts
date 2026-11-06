@@ -3,13 +3,17 @@ import { execute, isUniqueViolation, iso, p, query, queryOne, transaction, type 
 import { conflict, HttpError, notFound } from '../errors.ts';
 import { ROLES, type Actor, type Rol } from '../expenses/rules.ts';
 import { hashPassword, passwordProblem, verifyPassword } from '../auth/password.ts';
+import { stepBand, type Strateji } from '../approval/flow.ts';
 import type { AkisOzet } from '../approval/flow-store.ts';
 import type { FirstAdmin } from '../config.ts';
 
-/** One flow the user approves in: their order and amount range there. */
+/** One flow the user approves in: their order, approval limit and the amounts that reach them there. */
 export interface OnayciYeri {
-  readonly akis: { readonly id: number; readonly ad: string };
+  readonly akis: { readonly id: number; readonly ad: string; readonly strateji: Strateji };
   readonly sira: number;
+  /** Largest amount they give the last approval for; null = no limit. */
+  readonly limit: number | null;
+  /** Expenses of these amounts (inclusive) come to them; null upper limit = no limit. */
   readonly altLimit: number;
   readonly ustLimit: number | null;
 }
@@ -70,9 +74,9 @@ interface PlaceRow {
   onayci_id: number;
   akis_id: number;
   akis_ad: string;
+  strateji: Strateji;
   sira: number;
-  alt_limit: number;
-  ust_limit: number | null;
+  onay_limiti: number | null;
 }
 
 export const normalizeEmail = (eposta: string): string => eposta.trim().toLowerCase();
@@ -102,21 +106,27 @@ function toUser(r: UserRow, places: readonly OnayciYeri[]): Kullanici {
   };
 }
 
-/** Where each user approves; `userId` narrows it to one user. */
+/** Where each user approves; `userId` narrows it to one user. The amounts that reach a step depend on the steps around it. */
 async function approverPlaces(ex: Executor, userId?: number): Promise<Map<number, OnayciYeri[]>> {
   const rows = await query<PlaceRow>(
     ex,
-    `SELECT s.onayci_id, a.id AS akis_id, a.ad AS akis_ad, s.sira, s.alt_limit, s.ust_limit
+    `SELECT s.onayci_id, a.id AS akis_id, a.ad AS akis_ad, a.strateji, s.sira, s.onay_limiti
      FROM dbo.onay_adimlari s JOIN dbo.onay_akislari a ON a.id = s.akis_id
-     ${userId === undefined ? '' : 'WHERE s.onayci_id = @u'}
-     ORDER BY a.varsayilan DESC, a.ad, a.id`,
+     ${userId === undefined ? '' : 'WHERE s.akis_id IN (SELECT akis_id FROM dbo.onay_adimlari WHERE onayci_id = @u)'}
+     ORDER BY a.varsayilan DESC, a.ad, a.id, s.sira`,
     userId === undefined ? {} : { u: p.int(userId) },
   );
+  const flows = new Map<number, PlaceRow[]>();
+  for (const r of rows) flows.set(r.akis_id, [...(flows.get(r.akis_id) ?? []), r]);
   const out = new Map<number, OnayciYeri[]>();
-  for (const r of rows) {
-    const list = out.get(r.onayci_id) ?? [];
-    list.push({ akis: { id: r.akis_id, ad: r.akis_ad }, sira: r.sira, altLimit: Number(r.alt_limit), ustLimit: r.ust_limit === null ? null : Number(r.ust_limit) });
-    out.set(r.onayci_id, list);
+  for (const steps of flows.values()) {
+    const limits = steps.map((s) => ({ onayciId: s.onayci_id, limit: s.onay_limiti === null ? null : Number(s.onay_limiti) }));
+    steps.forEach((r, i) => {
+      if (userId !== undefined && r.onayci_id !== userId) return;
+      const band = stepBand(r.strateji, limits, i);
+      const place: OnayciYeri = { akis: { id: r.akis_id, ad: r.akis_ad, strateji: r.strateji }, sira: r.sira, limit: limits[i]?.limit ?? null, ...band };
+      out.set(r.onayci_id, [...(out.get(r.onayci_id) ?? []), place]);
+    });
   }
   return out;
 }
@@ -392,7 +402,7 @@ export async function ensureFirstAdmin(db: Db, admin: FirstAdmin | null): Promis
     if (row === null) throw new Error('ilk yönetici eklenemedi');
     const flow = await queryOne<{ id: number; ad: string }>(tx, 'SELECT id, ad FROM dbo.onay_akislari WHERE varsayilan = 1');
     if (flow === null) throw new Error('varsayılan onay akışı yok');
-    await execute(tx, 'INSERT INTO dbo.onay_adimlari (akis_id, sira, onayci_id, alt_limit, ust_limit) VALUES (@f, 1, @id, 0, NULL)', {
+    await execute(tx, 'INSERT INTO dbo.onay_adimlari (akis_id, sira, onayci_id, onay_limiti) VALUES (@f, 1, @id, NULL)', {
       f: p.int(flow.id),
       id: p.int(row.id),
     });

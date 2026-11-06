@@ -5,8 +5,8 @@
 
 import * as api from '../api.js';
 import { el, icon, ICONS } from '../dom.js';
-import { fmtCount, fmtDateTime, fmtRelative } from '../format.js';
-import { rangeText, ROLE_HINTS, roleLabel, ROLES } from '../labels.js';
+import { fmtCount, fmtCurrency, fmtDateTime, fmtRelative } from '../format.js';
+import { limitText, ROLE_HINTS, roleLabel, ROLES, STRATEGY_LABEL } from '../labels.js';
 import { href, navigate } from '../router.js';
 import * as session from '../session.js';
 import {
@@ -190,7 +190,7 @@ export const usersView = {
             el('td', { 'data-label': 'Rol' }, el('span', { className: `role-badge ${u.rol}`, text: roleLabel(u.rol) })),
             el('td', { 'data-label': 'Departman', text: u.departman || '—' }),
             el('td', { className: 't-flow', 'data-label': 'Onay akışı' }, flowCell(u)),
-            el('td', { 'data-label': 'Durum' }, el('span', { className: `status ${u.aktif ? 'ok' : 'off'} sm` }, icon(u.aktif ? ICONS.check : ICONS.ban), el('span', { text: u.aktif ? 'Aktif' : 'Pasif' })), u.sifreDegismeli ? el('span', { className: 'tag warn', title: 'İlk girişte şifresini değiştirecek', text: 'Şifre bekliyor' }) : null),
+            el('td', { 'data-label': 'Durum' }, el('span', { className: 'chips' }, el('span', { className: `status ${u.aktif ? 'ok' : 'off'} sm` }, icon(u.aktif ? ICONS.check : ICONS.ban), el('span', { text: u.aktif ? 'Aktif' : 'Pasif' })), u.sifreDegismeli ? el('span', { className: 'tag warn', title: 'İlk girişte şifresini değiştirecek', text: 'Şifre bekliyor' }) : null)),
             el('td', { 'data-label': 'Son giriş' }, u.sonGiris ? el('time', { datetime: u.sonGiris, title: fmtDateTime(u.sonGiris), text: fmtRelative(u.sonGiris) }) : el('span', { className: 'muted', text: 'Hiç' })),
             el(
               'td',
@@ -237,7 +237,14 @@ export const usersView = {
       );
     }
 
-    /** The flow the user's expenses go to, and the flows they approve in (order and range). */
+    /** "“Genel” akışında 1. onaycı (zincirleme onay); onay limiti ₺5.000,00". */
+    function approverTitle(o) {
+      const strategy = STRATEGY_LABEL[o.akis.strateji];
+      const limit = o.limit === null || o.limit === undefined ? 'son onaycı, limiti sınırsız' : `onay limiti ${fmtCurrency(o.limit, base)}`;
+      return `“${o.akis.ad}” akışında ${o.sira}. onaycı${strategy ? ` (${strategy.toLocaleLowerCase('tr-TR')})` : ''}; ${limit}`;
+    }
+
+    /** The flow the user's expenses go to, and the flows they approve in (order and limit). */
     function flowCell(u) {
       const own = u.onayAkisi
         ? el(
@@ -259,10 +266,10 @@ export const usersView = {
           ...approves.map((o) =>
             el(
               'li',
-              { className: 'range-badge', title: `“${o.akis.ad}” akışında ${o.sira}. sırada; ${rangeText(o.altLimit, o.ustLimit, base)}` },
-              // Two parts that each stay on one line: "Satış 1." and "0,00 – 10.000,00".
-              el('span', { className: 'rb-part' }, el('span', { className: 'rb-flow', text: o.akis.ad }), el('strong', { text: `${o.sira}.` })),
-              el('span', { className: 'rb-part' }, el('span', { text: rangeText(o.altLimit, o.ustLimit, null) }), el('span', { className: 'visually-hidden', text: ` ${base}` })),
+              { className: 'range-badge', title: approverTitle(o) },
+              // Two parts that each stay on one line: "Satış 1." and "limit 10.000,00" (or "sınırsız").
+              el('span', { className: 'rb-part' }, el('span', { className: 'rb-flow', text: o.akis.ad }), el('strong', { text: `${o.sira}.` }), el('span', { className: 'visually-hidden', text: ' onaycı,' })),
+              el('span', { className: 'rb-part' }, el('span', { text: limitText(o.limit, null) }), o.limit === null || o.limit === undefined ? null : el('span', { className: 'visually-hidden', text: ` ${base}` })),
             ),
           ),
         ),

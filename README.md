@@ -8,12 +8,12 @@
 
 ## Onay sistemi kısaca
 
-- Yönetici "Onay akışı" sayfasında birden çok adlandırılmış onay akışı (onay stratejisi) tanımlayabilir: örneğin "Satış", "Yönetim". Biri varsayılandır. Her kullanıcı "Kullanıcılar" sayfasından bir akışa atanır; atanmamış kullanıcılar varsayılan akışı kullanır.
-- Her akışta onaycılar sırayla tanımlanır. Her onaycının bir tutar aralığı vardır (alt limit, üst limit; üst limit boşsa sınırsız). Her akışta en az bir onaycı olmak zorundadır ve aralıklar 0'dan sınırsıza kadar her tutarı kapsamalıdır; boşluk varsa akış kaydedilmez. Aynı kişi farklı akışlarda farklı aralıklarla yer alabilir.
-- Gönderilen form, gönderenin akışında tutarı aralığına giren bütün onaycılara akıştaki sırayla gider. Önce 1. onaycı karar verir, onaylarsa sıradaki. Aralıklar çakışmıyorsa (0–5.000, 5.000,01–50.000, …) tek onaycı karar verir; çakışıyorsa (0–∞, 5.000,01–∞, …) büyük tutarlar birden çok onaydan geçer.
+- Yönetici "Onay akışı" sayfasında birden çok adlandırılmış onay akışı tanımlayabilir: örneğin "Satış", "Yönetim". Biri varsayılandır. Her kullanıcı "Kullanıcılar" sayfasından bir akışa atanır; atanmamış kullanıcılar varsayılan akışı kullanır.
+- Her akışta onaycılar sırayla tanımlanır ve her onaycının bir onay limiti vardır: son onayını verebileceği en yüksek tutar (dahil, kuruş hassasiyetinde). Limitler sırayla büyür, son onaycının limiti sınırsızdır; böylece her tutarı onaylayacak tam bir onaycı (karar veren onaycı) bulunur. Her akışta en az bir onaycı olmak zorundadır; kurala uymayan akış kaydedilmez. Aynı kişi farklı akışlarda farklı limitlerle yer alabilir.
+- Akışın stratejisi masrafı kimin göreceğini belirler. **Zincirleme onayda** (`zincir`) masraf ilk onaycıdan başlar ve karar veren onaycıya kadar sıradaki herkesin onayından geçer; tutar büyüdükçe zincir uzar. **Tek onaycıda** (`tek`) masrafı yalnızca karar veren onaycı onaylar. Örneğin limitler 5.000, 50.000 ve sınırsızsa 20.000'lik masraf zincirleme onayda 1. ve 2. onaycıya sırayla, tek onaycıda yalnızca 2. onaycıya gider.
 - Bir masrafa birden çok fatura eklenebilir (en çok 20; örneğin bir seyahatin otel, taksi ve yemek fişleri). Bir fatura iptal edilmemiş yalnızca bir masrafta kullanılabilir.
-- Yönlendirmede kullanılan tutar, beyan edilen tutar ile bağlı faturaların genel toplamlarının toplamından büyük olanıdır (yabancı para biriminde kurla çevrilir; formdan farklı para birimindeki faturalar toplama girmez).
-- Gönderenin kendisi onaycıysa kendi adımı atlanır. Eşleşen tek onaycı kendisiyse form bir yöneticiye gider.
+- Yönlendirmede kullanılan tutar, beyan edilen tutar ile bağlı faturaların toplamından büyük olanıdır (yabancı para biriminde kurla çevrilir). Formun ve TRY'nin dışında bir para birimindeki faturanın TRY karşılığını çalışan girer; karşılığı girilmemiş faturayla form onaya gönderilemez.
+- Gönderenin kendisi onaycıysa kendi adımı atlanır. Karar veren onaycı kendisiyse son onay bir üst onaycıya geçer; akışın en üstündeyse bir yöneticiye gider.
 - Reddedilen form sahibine döner; düzeltilip yeniden gönderilebilir. Yönetici bekleyen bir onayı başka bir kullanıcıya devredebilir.
 
 Roller: `calisan` (kendi masrafları ve onaycısı olduğu formlar), `muhasebe` (bütün masrafları görür, ödendi işaretler, dışa aktarır), `yonetici` (her şey; kullanıcılar, onay akışları, kategoriler). Onaycı olmak bir rol değildir: bir akışa eklenen herkes onaycıdır.
@@ -63,7 +63,7 @@ Roller: `calisan` (kendi masrafları ve onaycısı olduğu formlar), `muhasebe` 
 
    İlk açılışta konsolda "İlk yönetici oluşturuldu" yazar. Bundan sonra `.env` içindeki `ILK_YONETICI_SIFRE` değerini silebilirsiniz.
 
-5. Tarayıcıda `http://127.0.0.1:4000` adresini açın ve ilk yöneticiyle giriş yapın. "Onay akışı" sayfasından onaycıları ve tutar aralıklarını tanımlayın (gerekirse ekip başına ayrı akışlar ekleyin), "Kullanıcılar" sayfasından çalışanları ekleyip akışlarına atayın. Yeni kullanıcılar ilk girişte şifrelerini değiştirir.
+5. Tarayıcıda `http://127.0.0.1:4000` adresini açın ve ilk yöneticiyle giriş yapın. "Onay akışı" sayfasından onaycıları, onay limitlerini ve akışın stratejisini (zincirleme onay ya da tek onaycı) tanımlayın (gerekirse ekip başına ayrı akışlar ekleyin), "Kullanıcılar" sayfasından çalışanları ekleyip akışlarına atayın. Yeni kullanıcılar ilk girişte şifrelerini değiştirir.
 
 ## API
 
@@ -264,7 +264,7 @@ Hatalı isteklerde gövde `{"hata": {"kod": "...", "mesaj": "..."}}` biçiminded
 | 400 | `dosya_yok`, `gecersiz_form` | Dosya gönderilmedi veya form bozuk (çoklu gönderme yalnızca multipart kabul eder) |
 | 400 | `cok_fazla_dosya` | Çoklu gönderimde 50'den fazla dosya |
 | 400 | `gecersiz_istek`, `gecersiz_json` | Alanlar kurallara uymuyor ya da gövde JSON değil |
-| 400 | `gecersiz_akis` | Onay akışında boşluk, çakışan kullanıcı ya da hatalı limit var |
+| 400 | `gecersiz_akis` | Onay akışı boş, bir kullanıcı iki kez yer alıyor, limitler sırayla büyümüyor ya da son onaycının limiti sınırsız değil |
 | 401 | `oturum_gerekli`, `hatali_giris` | Oturum yok/süresi dolmuş ya da e-posta veya şifre yanlış |
 | 403 | `yetki_yok`, `hesap_pasif`, `sifre_degismeli` | Rol yetmiyor, hesap pasif ya da önce şifre değiştirilmeli |
 | 403 | `izinsiz_host`, `izinsiz_kaynak`, `izinsiz_ag` | İstek izinli adresler (127.0.0.1, localhost; yerel ağ erişimi açıksa bilgisayarın yerel ağ adresi) dışından, başka bir web sitesinden ya da yerel ağ dışından geldi |
@@ -298,11 +298,11 @@ Bütün ayarlar kök dizindeki `.env` dosyasındadır (şablon: `env.example`). 
 | `MSSQL_POOL_MAX` | `10` | Bağlantı havuzu boyutu (1–100) |
 | `MSSQL_CONNECT_WAIT_SEC` | `60` | Açılışta veritabanını bekleme süresi (0–600) |
 | `MSSQL_IMAGE`, `MSSQL_PID` | `…/mssql/server:2022-latest`, `Developer` | Docker imajı ve SQL Server sürümü (yalnızca `docker compose`) |
-| `ILK_YONETICI_EPOSTA`, `ILK_YONETICI_SIFRE`, `ILK_YONETICI_AD` | (yok) | Veritabanında hiç kullanıcı yokken oluşturulan yönetici; akışın ilk onaycısı olur (0 – sınırsız) |
+| `ILK_YONETICI_EPOSTA`, `ILK_YONETICI_SIFRE`, `ILK_YONETICI_AD` | (yok) | Veritabanında hiç kullanıcı yokken oluşturulan yönetici; varsayılan akışın ilk onaycısı olur (limiti sınırsız) |
 | `OTURUM_SURESI_SAAT` | `168` | Oturum süresi; kullanıldıkça uzar (1–8760) |
 | `GIRIS_DENEME_SINIRI`, `GIRIS_KILIT_DAKIKA` | `10`, `15` | Bu kadar hatalı girişte e-posta bu kadar dakika kilitlenir |
 | `SIFRE_MIN_UZUNLUK` | `8` | En kısa şifre (8–128) |
-| `PARA_BIRIMI` | `TRY` | Onay aralıklarının ve raporların para birimi; başka para birimindeki masraflarda kur girilir |
+| `PARA_BIRIMI` | `TRY` | Onay limitlerinin ve raporların para birimi; başka para birimindeki masraflarda kur girilir |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI'nin yolu |
 | `CLAUDE_MODEL` | `haiku,opus` | Modeller, en ucuzdan başlayarak virgülle (en çok 4). Sonraki model yalnızca önceki okuma kontrollerden geçmezse çalışır (aşağıda "Kademeli okuma"). Tek model için örneğin `opus` |
 | `CLAUDE_EFFORT` | `low` | Claude'un düşünme düzeyi (`low`, `medium`, `high`, `xhigh`, `max`). `default` CLI'nin kendi ayarını kullanır. Karmaşık faturalarda yanlış okuma görürseniz `medium` deneyin |
@@ -394,6 +394,6 @@ npm run db:logs    # SQL Server günlüğü
 
 Testler gerçek Claude'u hiç çağırmaz; `tests/fixtures/fake-claude.mjs` onun yerine geçer. Veritabanı testleri `.env` içindeki SQL Server'a bağlanır ama kendi veritabanlarını kullanır (`<MSSQL_DATABASE>_test_<n>`, her test işçisi için bir tane); asıl veritabanınıza dokunmaz.
 
-Veritabanı şeması `src/db/migrations/` altındaki numaralı SQL dosyalarıdır. Sunucu açılışta uygulanmamış olanları sırayla uygular ve `sema_surumleri` tablosuna yazar. Şemayı değiştirmek için yeni bir dosya ekleyin (`002_….sql`); uygulanmış bir dosyayı değiştirmeyin.
+Veritabanı şeması `src/db/migrations/` altındaki numaralı SQL dosyalarıdır. Sunucu açılışta uygulanmamış olanları sırayla uygular ve `sema_surumleri` tablosuna yazar. Şemayı değiştirmek için sıradaki numarayla yeni bir dosya ekleyin (`003_….sql`); uygulanmış bir dosyayı değiştirmeyin. Veritabanında artık bulunmayan bir dosyanın kaydı varsa (örneğin dosyalar birleştirildiyse) sunucu o veritabanıyla açılmaz; veritabanını silin ya da `MSSQL_DATABASE` ile yeni bir ad verin.
 
 Panelin derleme adımı yoktur: `public/index.html`, `public/css/app.css` ve `public/js/` altındaki ES modülleri doğrudan sunulur.

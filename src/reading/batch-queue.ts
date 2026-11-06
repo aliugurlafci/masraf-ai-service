@@ -64,6 +64,12 @@ export interface BatchQueueOptions<C> {
   readonly esZamanli: number;
   /** Finished batches kept for status queries; unfinished ones are never dropped. */
   readonly keep?: number;
+  /**
+   * A finished batch beyond `keep` is still kept this long after it was first seen finished, so a
+   * client polling every few seconds gets the result even when many batches finish at once (the
+   * mobile app opens one batch per file; cached files finish immediately).
+   */
+  readonly graceMs?: number;
   readonly onResult?: (result: ReadResult) => void;
   readonly onError?: (err: unknown) => void;
   /** Called for a file refused before reading (wrong type, too large). */
@@ -86,6 +92,8 @@ interface Batch<C> {
   readonly context: C | undefined;
   readonly olusturulma: string;
   readonly items: Item[];
+  /** When the batch was first seen finished (ms); unset while files are still being read. */
+  finishedAt?: number;
 }
 
 /** ExtractionError messages are Turkish and safe to show; anything else may hold internals. */
@@ -104,6 +112,7 @@ const finished = (b: Batch<unknown>): boolean => b.items.every((i) => i.durum ==
 export function createBatchQueue<C = undefined>(read: BatchRead<C>, opts: BatchQueueOptions<C>): BatchQueue<C> {
   const batches = new Map<string, Batch<C>>();
   const keep = opts.keep ?? 20;
+  const graceMs = opts.graceMs ?? 10 * 60_000;
   const now = opts.now ?? (() => new Date());
 
   const view = (b: Batch<C>): BatchView => {
@@ -120,8 +129,12 @@ export function createBatchQueue<C = undefined>(read: BatchRead<C>, opts: BatchQ
   };
 
   const prune = (): void => {
+    const at = now().getTime();
     const done = [...batches.values()].filter(finished);
-    for (const b of done.slice(0, Math.max(0, done.length - keep))) batches.delete(b.id);
+    for (const b of done) b.finishedAt ??= at;
+    for (const b of done.slice(0, Math.max(0, done.length - keep))) {
+      if (at - (b.finishedAt ?? at) >= graceMs) batches.delete(b.id);
+    }
   };
 
   return {

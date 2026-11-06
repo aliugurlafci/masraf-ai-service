@@ -7,7 +7,7 @@ import type { ExtractInvoice } from '../../src/claude/extractor.ts';
 import { execute, p, queryOne, type Db } from '../../src/db/sql.ts';
 import type { Kullanici } from '../../src/users/users.ts';
 import { sampleExtraction } from '../helpers.ts';
-import { closeTestDb, defaultFlowId, makeUser, resetDb, setFlow, testDb, TEST_PASSWORD, tokenFor } from '../db.ts';
+import { chainOf, closeTestDb, defaultFlowId, makeUser, resetDb, setFlow, testDb, TEST_PASSWORD, tokenFor } from '../db.ts';
 
 const MAX_ATTEMPTS = 3;
 const SESSION_SECONDS = DEFAULT_AUTH.sessionTtlMs / 1000;
@@ -264,7 +264,7 @@ describe('sessions and account endpoints', () => {
     it('returns the user and the pending approval count from GET /api/ben', async () => {
       const approver = await makeUser(db, { adSoyad: 'Onaycı', departman: 'Finans' });
       const sender = await makeUser(db);
-      await setFlow(db, [{ onayciId: approver.id, altLimit: 0, ustLimit: null }]);
+      await setFlow(db, chainOf(approver.id));
       const senderToken = await tokenFor(db, sender.id);
       for (let i = 0; i < 2; i++) {
         const sent = await call('POST', '/api/masraflar', {
@@ -286,7 +286,7 @@ describe('sessions and account endpoints', () => {
           sifreDegismeli: false,
           onayAkisiId: null,
           onayAkisi: { id: genel, ad: 'Genel', varsayilan: true },
-          onaycilik: [{ akis: { id: genel, ad: 'Genel' }, sira: 1, altLimit: 0, ustLimit: null }],
+          onaycilik: [{ akis: { id: genel, ad: 'Genel', strateji: 'zincir' }, sira: 1, limit: null, altLimit: 0, ustLimit: null }],
         }),
         bekleyenOnay: 2,
       });

@@ -11,8 +11,12 @@ export interface Palette {
   readonly textMuted: string;
   readonly textFaint: string;
   readonly primary: string;
+  /** Primary as text on surfaces and on primarySoft; lighter than primary in the dark theme so small text reads (WCAG AA). */
+  readonly primaryText: string;
   readonly primarySoft: string;
   readonly onPrimary: string;
+  /** Text and icons on a solid danger, success or warning fill (white in light, dark ink in dark, where those fills are bright). */
+  readonly onAccent: string;
   readonly danger: string;
   readonly dangerSoft: string;
   readonly success: string;
@@ -37,15 +41,18 @@ const light: Palette = {
   border: '#E3E0D8',
   text: '#16131F',
   textMuted: '#625F70',
-  textFaint: '#8F8C9C',
+  // Contrast (WCAG): textFaint ≥ 4.7 on bg and surface; warning and success ≥ 4.7 on their soft fills.
+  textFaint: '#6E6B80',
   primary: '#5B3DF5',
+  primaryText: '#5B3DF5',
   primarySoft: '#ECE8FF',
   onPrimary: '#FFFFFF',
+  onAccent: '#FFFFFF',
   danger: '#C92F2F',
   dangerSoft: '#FCEBEB',
-  success: '#157F4E',
+  success: '#137A4A',
   successSoft: '#E3F4EA',
-  warning: '#A86200',
+  warning: '#9A5A00',
   warningSoft: '#FFF2D9',
   info: '#2058D6',
   infoSoft: '#E5EDFF',
@@ -65,10 +72,13 @@ const dark: Palette = {
   border: '#2E2A3A',
   text: '#F3F1F8',
   textMuted: '#ABA7B9',
-  textFaint: '#77738A',
+  // Contrast (WCAG): textFaint ≥ 4.6 on bg, surface and surfaceAlt; primaryText ≥ 5.8 on surfaces and primarySoft.
+  textFaint: '#8A869E',
   primary: '#6E55FF',
+  primaryText: '#A493FF',
   primarySoft: '#272050',
   onPrimary: '#FFFFFF',
+  onAccent: '#0D0B14',
   danger: '#FF6B6B',
   dangerSoft: '#3A1A1F',
   success: '#45D493',
@@ -126,6 +136,26 @@ export const typography = {
   amount: { fontSize: 17, lineHeight: 22, fontWeight: '700', fontVariant: tabular, letterSpacing: -0.2 },
   amountLarge: { fontSize: 36, lineHeight: 42, fontWeight: '800', fontVariant: tabular, letterSpacing: -1 },
 } as const satisfies Record<string, TextStyle>;
+
+/**
+ * An amount style scaled to the length of one formatted amount, so it stays on one line on a 360 pt screen
+ * without depending on platform text fitting. Up to `fullChars` characters keep the full size.
+ */
+function scaledAmount(base: TextStyle & { fontSize: number }, text: string, fullChars: number, minSize: number): TextStyle {
+  if (text.length <= fullChars) return base;
+  const fontSize = Math.max(minSize, Math.floor((base.fontSize * fullChars) / text.length));
+  return { ...base, fontSize, lineHeight: Math.round(fontSize * 1.25) };
+}
+
+/** amountLarge (hero and detail): "₺1.323.413,40" is shown slightly smaller, "₺999.999.999,99" still fits. */
+export function amountLargeFor(text: string): TextStyle {
+  return scaledAmount(typography.amountLarge, text, 12, 24);
+}
+
+/** amount in list rows: from 13 characters ("₺1.234.567,89") it shrinks a little so the title keeps room. */
+export function amountFor(text: string): TextStyle {
+  return scaledAmount(typography.amount, text, 12, 14);
+}
 
 export type TypographyVariant = keyof typeof typography;
 

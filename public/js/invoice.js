@@ -2,6 +2,7 @@
 // and the states around them (empty, loading, reading, error).
 
 import { el, icon, ICONS } from './dom.js';
+import { safeType } from './files.js';
 import {
   fmtAmount,
   fmtCount,
@@ -265,12 +266,15 @@ export function jsonView(inv) {
   return pre;
 }
 
+/** file: { name, type }, where type is the URL's own (safe) type; only PDF and invoice images are shown. */
 export function originalView(file, url) {
   const name = file.name || 'fatura';
-  if (file.type === 'application/pdf' || /\.pdf$/i.test(name)) {
+  const type = safeType(file.type);
+  if (type === 'application/pdf') {
     return el('iframe', { className: 'original', src: url, title: `Orijinal dosya: ${name}` });
   }
-  return el('img', { className: 'original', src: url, alt: `Orijinal dosya: ${name}` });
+  if (type.startsWith('image/')) return el('img', { className: 'original', src: url, alt: `Orijinal dosya: ${name}` });
+  return el('div', { className: 'notice neutral' }, el('p', { text: 'Bu dosya türü burada gösterilemiyor.' }));
 }
 
 // ---------- States around the invoice ----------

@@ -1,6 +1,7 @@
 import express, { type Router } from 'express';
 import { z } from 'zod';
 import { createFlow, deleteFlow, getFlow, listFlows, setDefaultFlow, updateFlow } from '../approval/flow-store.ts';
+import { STRATEGIES } from '../approval/flow.ts';
 import { listAudit } from '../db/audit.ts';
 import type { Db } from '../db/sql.ts';
 import { notFound } from '../errors.ts';
@@ -48,12 +49,12 @@ const AuditQuery = z.object({ adet: z.coerce.number().int().min(1).max(500).defa
 
 const FlowBody = z.object({
   ad: text('Akış adı', 80),
+  strateji: z.enum(STRATEGIES, { error: 'Strateji "zincir" ya da "tek" olmalıdır.' }),
   adimlar: z
     .array(
       z.object({
         onayciId: id('Onaycı'),
-        altLimit: limit('Alt limit'),
-        ustLimit: limit('Üst limit').nullable(),
+        limit: limit('Onay limiti').nullable(),
       }),
       { error: 'Onay adımları liste olmalıdır.' },
     )

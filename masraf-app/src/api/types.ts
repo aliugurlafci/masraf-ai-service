@@ -5,6 +5,12 @@
 
 export type Rol = 'calisan' | 'muhasebe' | 'yonetici';
 
+/**
+ * How a flow routes an expense (contract section 2). `zincir`: everyone in order up to the deciding
+ * approver (the first whose limit covers the amount) approves. `tek`: only the deciding approver does.
+ */
+export type Strateji = 'zincir' | 'tek';
+
 export type MasrafDurum = 'taslak' | 'onayda' | 'onaylandi' | 'reddedildi' | 'odendi' | 'iptal';
 
 export type AdimDurum = 'sirada' | 'bekliyor' | 'onaylandi' | 'reddedildi' | 'atlandi' | 'iptal';
@@ -55,12 +61,14 @@ export interface AkisOzet {
   readonly varsayilan: boolean;
 }
 
-/** One flow the user approves in, with their order and amount range there. */
+/** One flow the user approves in: their order, approval limit and the amounts that reach them there. */
 export interface OnayciYeri {
-  readonly akis: { readonly id: number; readonly ad: string };
+  readonly akis: { readonly id: number; readonly ad: string; readonly strateji: Strateji };
   readonly sira: number;
+  /** Largest amount (inclusive) they give the last approval for; null = no limit (the flow's last approver). */
+  readonly limit: number | null;
+  /** Expenses of these amounts (inclusive) come to them; a null upper limit means no upper end. */
   readonly altLimit: number;
-  /** null means unlimited. */
   readonly ustLimit: number | null;
 }
 
@@ -126,11 +134,16 @@ export interface MasrafFatura {
   readonly saticiUnvan: string | null;
   readonly genelToplam: number | null;
   readonly paraBirimi: string | null;
+  /** The invoice is in a third currency (neither the form's nor the base one): sending needs yerelKarsilik. */
+  readonly karsilikGerekli: boolean;
+  /** Base-currency equivalent the sender entered; only set while karsilikGerekli. */
+  readonly yerelKarsilik: number | null;
 }
 
 /**
- * Declared amount vs. invoices, both in the form's own currency (`paraBirimi`). `fatura` is the sum of the
- * invoices in the form's currency (or whose currency was not read); invoices in other currencies are left out.
+ * Declared amount vs. invoices, both in the form's own currency (`paraBirimi`). `fatura` is the total of
+ * the invoices that count (contract rule 6): base-currency amounts (base-currency invoices and entered
+ * equivalents) are converted with the form rate; an invoice whose equivalent is missing does not count.
  */
 export interface TutarFarki {
   readonly fatura: number;
@@ -142,6 +155,7 @@ export interface FormOnay {
   readonly tur: number;
   readonly sira: number;
   readonly onayci: KisiOzet;
+  /** The amounts that reached this approver in the flow when the form was sent; null upper = no upper end. */
   readonly altLimit: number;
   readonly ustLimit: number | null;
   readonly durum: AdimDurum;
@@ -173,7 +187,11 @@ export interface Izinler {
 export interface MasrafDetay extends MasrafOzet {
   readonly aciklama: string | null;
   readonly kur: number | null;
-  readonly onayTutari: number;
+  /**
+   * Local-currency amount the form was routed with at its last submission; null for a form never sent.
+   * It is not recomputed when a returned form is edited, so it can be out of date for drafts.
+   */
+  readonly onayTutari: number | null;
   readonly tur: number;
   readonly sonuclanma: string | null;
   readonly odeme: string | null;
@@ -243,6 +261,8 @@ export interface OnizlemeIstegi {
   readonly kur?: number;
   /** Invoices whose totals count toward the approval amount (only the user's own uploads count). */
   readonly faturaIdler?: readonly string[];
+  /** Base-currency equivalents by invoice id, for invoices in a third currency. */
+  readonly yerelKarsiliklar?: Readonly<Record<string, number>>;
 }
 
 export interface OnizlemeAdimi {
@@ -295,6 +315,11 @@ export interface MasrafAlanlari {
    * (`[]` removes them all); leave it out to keep them unchanged.
    */
   readonly faturaIdler?: readonly string[];
+  /**
+   * Base-currency equivalents by invoice id (> 0, at most 2 decimals), only for invoices on the form. On
+   * PATCH the map replaces every equivalent; leave it out to keep those of the invoices that stay.
+   */
+  readonly yerelKarsiliklar?: Readonly<Record<string, number>>;
 }
 
 export interface MasrafOlusturIstegi extends MasrafAlanlari {

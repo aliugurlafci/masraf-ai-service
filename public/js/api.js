@@ -137,9 +137,15 @@ export const listAudit = (adet, opts) => get(`/api/denetim${qs({ adet })}`, opts
 /** Akis[]: the default flow first, then by name. */
 export const listFlows = (opts) => get('/api/onay-akislari', opts);
 export const getFlow = (id, opts) => get(`/api/onay-akislari/${seg(id)}`, opts);
-/** { ad, adimlar: [{ onayciId, altLimit, ustLimit }] } (array order = approval order) → 201 Akis. */
+/**
+ * { ad, strateji: 'zincir'|'tek', adimlar: [{ onayciId, limit }] } → 201 Akis. Array order = approval
+ * order; `limit` is the approver's inclusive approval limit (base currency), rising down the list, and
+ * null for the last approver only. 400 gecersiz_akis brings `sorunlar`; 409 akis_adi_kullaniliyor.
+ * Akis: { id, ad, varsayilan, strateji, paraBirimi, guncelleme, guncelleyen, kullaniciSayisi,
+ * adimlar: [{ sira, onayci: { id, adSoyad, eposta, departman }, limit }] }.
+ */
 export const createFlow = (data) => send('POST', '/api/onay-akislari', data);
-/** { ad, adimlar }: replaces the whole flow. */
+/** { ad, strateji, adimlar }: replaces the whole flow. */
 export const updateFlow = (id, data) => send('PUT', `/api/onay-akislari/${seg(id)}`, data);
 export const setDefaultFlow = (id) => send('POST', `/api/onay-akislari/${seg(id)}/varsayilan`);
 /** 204; users assigned to the flow fall back to the default one. 409 varsayilan_akis for the default. */
@@ -194,14 +200,19 @@ export const invoiceFileUrl = (id) => `/api/invoices/${seg(id)}/dosya`;
 /** The original file of a record as a Blob; notFound for old records without one. */
 export const getInvoiceFile = (id, opts) => fetchBlob(invoiceFileUrl(id), opts);
 
-/** One file; the request stays open until Claude has read it (or the stored result is found). */
-export async function sendOne(file, { force, tag }) {
+/**
+ * One file; the request stays open until Claude has read it (or the stored result is found).
+ * Aborting `signal` frees the connection and resolves with { aborted: true }; the server still
+ * finishes the read and keeps the record.
+ */
+export async function sendOne(file, { force, tag, signal }) {
   const form = new FormData();
   form.append('file', file);
   const r = await call(force ? '/api/invoices?yenile=1' : '/api/invoices', {
     method: 'POST',
     body: form,
     headers: { 'X-Panel-Etiket': tag },
+    signal,
   });
   if (!r.ok) return r;
   const id = r.res.headers.get('X-Fatura-Id');

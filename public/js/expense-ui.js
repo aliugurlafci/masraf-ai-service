@@ -3,6 +3,7 @@
 
 import * as api from './api.js';
 import { el, icon, ICONS } from './dom.js';
+import { safeType } from './files.js';
 import { fmtCurrency, fmtDateShort } from './format.js';
 import { amountTexts, categoryIcon, statusBadge } from './labels.js';
 import { field, openDialog, setFieldError, textarea } from './ui.js';
@@ -51,13 +52,17 @@ export function expenseSummary(m, base) {
 
 // ---------- Invoice file preview ----------
 
-/** An image or a PDF, with a link that opens the file in a new tab. */
+/**
+ * An image or a PDF, with a link that opens the file in a new tab. Only the type decides (never the
+ * file name), and only PDF and the invoice image types are shown or opened; anything else is offered
+ * as a download.
+ */
 export function invoicePreview({ url, mime, name }) {
   if (!url) return null;
   const label = name || 'fatura';
-  const type = (mime ?? '').toLowerCase();
-  const isPdf = type === 'application/pdf' || /\.pdf$/i.test(label);
-  const isImage = type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(label);
+  const type = safeType(mime);
+  const isPdf = type === 'application/pdf';
+  const isImage = type.startsWith('image/');
   let media = null;
   if (isPdf) {
     media = el('iframe', { className: 'preview-frame', src: url, title: `Fatura dosyası: ${label}` });
@@ -75,7 +80,9 @@ export function invoicePreview({ url, mime, name }) {
       'figcaption',
       {},
       el('span', { className: 'preview-name', text: label }),
-      el('a', { className: 'link-ext', href: url, target: '_blank', rel: 'noopener' }, el('span', { text: 'Yeni sekmede aç' }), icon(ICONS.external)),
+      isPdf || isImage
+        ? el('a', { className: 'link-ext', href: url, target: '_blank', rel: 'noopener' }, el('span', { text: 'Yeni sekmede aç' }), icon(ICONS.external))
+        : el('a', { className: 'link-ext', href: url, download: label }, el('span', { text: 'İndir' }), icon(ICONS.download)),
     ),
   );
 }

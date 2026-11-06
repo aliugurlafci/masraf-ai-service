@@ -41,12 +41,12 @@ export function Button({
   const { colors } = useTheme();
   const look: Record<ButtonVariant, { bg: string; fg: string; border: string }> = {
     primary: { bg: colors.primary, fg: colors.onPrimary, border: colors.primary },
-    secondary: { bg: colors.primarySoft, fg: colors.primary, border: colors.primarySoft },
+    secondary: { bg: colors.primarySoft, fg: colors.primaryText, border: colors.primarySoft },
     outline: { bg: 'transparent', fg: colors.text, border: colors.border },
-    ghost: { bg: 'transparent', fg: colors.primary, border: 'transparent' },
-    danger: { bg: colors.danger, fg: '#FFFFFF', border: colors.danger },
+    ghost: { bg: 'transparent', fg: colors.primaryText, border: 'transparent' },
+    danger: { bg: colors.danger, fg: colors.onAccent, border: colors.danger },
     dangerSoft: { bg: colors.dangerSoft, fg: colors.danger, border: colors.dangerSoft },
-    success: { bg: colors.success, fg: '#FFFFFF', border: colors.success },
+    success: { bg: colors.success, fg: colors.onAccent, border: colors.success },
   };
   const { bg, fg, border } = look[variant];
   const inactive = disabled || loading;

@@ -103,12 +103,35 @@ export function categoryIcon(simge, { label = null, className = '' } = {}) {
 
 export const roleLabel = (rol) => ROLES[rol] ?? rol ?? '';
 
-/** "0 – sınırsız" or "5.000,01 – 50.000,00" (limits are in the company currency). */
-export function rangeText(altLimit, ustLimit, cur) {
-  const lo = fmtAmount(altLimit ?? 0);
-  const hi = ustLimit === null || ustLimit === undefined ? 'sınırsız' : fmtAmount(ustLimit);
-  return `${lo} – ${hi}${cur ? ` ${cur}` : ''}`;
+/** The approval strategies of a flow (`strateji`). */
+export const STRATEGY_LABEL = { zincir: 'Zincirleme onay', tek: 'Tek onaycı' };
+
+const limitMoney = (v, cur) => (cur ? fmtCurrency(v, cur) : fmtAmount(v));
+const isOpen = (v) => v === null || v === undefined;
+
+/**
+ * The amounts (company currency, both ends inclusive) that reach an approval step:
+ * "Her tutar", "₺5.000,00 ve altı", "₺5.000,01 ve üzeri" or "₺5.000,01 – ₺50.000,00".
+ */
+export function bandText(altLimit, ustLimit, cur) {
+  const lo = altLimit ?? 0;
+  if (lo <= 0 && isOpen(ustLimit)) return 'Her tutar';
+  if (isOpen(ustLimit)) return `${limitMoney(lo, cur)} ve üzeri`;
+  if (lo <= 0) return `${limitMoney(ustLimit, cur)} ve altı`;
+  return `${limitMoney(lo, cur)} – ${limitMoney(ustLimit, cur)}`;
 }
+
+/** The same band as an adjective before "masraflar": "her tutardaki", "₺5.000,01 ve üzerindeki" … */
+export function bandPhrase(altLimit, ustLimit, cur) {
+  const lo = altLimit ?? 0;
+  if (lo <= 0 && isOpen(ustLimit)) return 'her tutardaki';
+  if (isOpen(ustLimit)) return `${limitMoney(lo, cur)} ve üzerindeki`;
+  if (lo <= 0) return `${limitMoney(ustLimit, cur)} ve altındaki`;
+  return `${limitMoney(lo, cur)} – ${limitMoney(ustLimit, cur)} arasındaki`;
+}
+
+/** An approver's approval limit: "limit ₺5.000,00", or "sınırsız" for the last approver. */
+export const limitText = (limit, cur) => (isOpen(limit) ? 'sınırsız' : `limit ${limitMoney(limit, cur)}`);
 
 /**
  * The amount line of an expense: the declared amount, and the local one when the currency differs.
@@ -119,6 +142,22 @@ export function amountTexts(m, base) {
   const differs = m.paraBirimi && base && m.paraBirimi !== base && m.yerelTutar !== null && m.yerelTutar !== undefined;
   return { main, local: differs ? fmtCurrency(m.yerelTutar, base) : null };
 }
+
+/** The audit log's action codes (src/ audit calls); an unknown code is shown humanized. */
+export const AUDIT_LABEL = {
+  ilk_yonetici: 'İlk yönetici oluşturuldu',
+  kullanici_olusturuldu: 'Kullanıcı oluşturuldu',
+  kullanici_guncellendi: 'Kullanıcı güncellendi',
+  sifre_sifirlandi: 'Şifre sıfırlandı',
+  kategori_olusturuldu: 'Kategori oluşturuldu',
+  kategori_guncellendi: 'Kategori güncellendi',
+  onay_akisi_olusturuldu: 'Onay akışı oluşturuldu',
+  onay_akisi_guncellendi: 'Onay akışı güncellendi',
+  onay_akisi_silindi: 'Onay akışı silindi',
+  varsayilan_akis_degisti: 'Varsayılan akış değişti',
+};
+
+export const auditLabel = (code) => AUDIT_LABEL[code] ?? humanize(code);
 
 export function humanize(code) {
   const s = String(code ?? '').replace(/[_-]+/g, ' ').trim();

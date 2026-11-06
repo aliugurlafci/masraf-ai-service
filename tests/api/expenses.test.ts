@@ -9,7 +9,7 @@ import type { ExtractInvoice } from '../../src/claude/extractor.ts';
 import { type Db } from '../../src/db/sql.ts';
 import type { Kullanici } from '../../src/users/users.ts';
 import { PDF_BYTES, PNG_BYTES, sampleExtraction, sampleInvoice, sampleOlcum } from '../helpers.ts';
-import { assignFlow, closeTestDb, defaultFlowId, makeFlow, makeInvoice, makeUser, resetDb, setFlow, testDb, tokenFor } from '../db.ts';
+import { assignFlow, chainOf, closeTestDb, defaultFlowId, makeFlow, makeInvoice, makeUser, resetDb, setFlow, testDb, tokenFor } from '../db.ts';
 
 interface Answer {
   readonly status: number;
@@ -19,7 +19,6 @@ interface Answer {
 
 const PAST = '2025-06-15';
 const formBody = (over: Record<string, unknown> = {}) => ({ baslik: 'Müşteri yemeği', kategoriId: 1, masrafTarihi: PAST, tutar: 100, ...over });
-const unlimited = (onayciId: number, altLimit = 0) => ({ onayciId, altLimit, ustLimit: null });
 
 const SUMMARY_KEYS = ['id', 'baslik', 'kategori', 'masrafTarihi', 'satici', 'tutar', 'paraBirimi', 'yerelTutar', 'durum', 'olusturan', 'olusturma', 'gonderim', 'siradakiOnayci', 'faturaIdler'];
 const DETAIL_KEYS = [...SUMMARY_KEYS, 'aciklama', 'kur', 'onayTutari', 'tur', 'sonuclanma', 'odeme', 'guncelleme', 'faturalar', 'tutarFarki', 'onaylar', 'gecmis', 'izinler'];
@@ -57,7 +56,7 @@ describe('expense, approval and administration API', () => {
     outsider = await makeUser(db, { adSoyad: 'Başkası' });
     tokens.clear();
     for (const u of [admin, accounting, a, b, owner, outsider]) tokens.set(u.id, await tokenFor(db, u.id));
-    await setFlow(db, [unlimited(admin.id)]);
+    await setFlow(db, chainOf(admin.id));
 
     extract = vi.fn<ExtractInvoice>(async () => sampleExtraction());
     server = createServer();
@@ -132,9 +131,9 @@ describe('expense, approval and administration API', () => {
         ['POST', `${someone}/sifre`, { yeniSifre: 'YeniSifre2026' }],
         ['GET', '/api/denetim'],
         ['GET', '/api/onay-akislari'],
-        ['POST', '/api/onay-akislari', { ad: 'Satış', adimlar: [unlimited(a.id)] }],
+        ['POST', '/api/onay-akislari', { ad: 'Satış', strateji: 'zincir', adimlar: chainOf(a.id) }],
         ['GET', `/api/onay-akislari/${genel}`],
-        ['PUT', `/api/onay-akislari/${genel}`, { ad: 'Genel', adimlar: [unlimited(a.id)] }],
+        ['PUT', `/api/onay-akislari/${genel}`, { ad: 'Genel', strateji: 'zincir', adimlar: chainOf(a.id) }],
         ['POST', `/api/onay-akislari/${genel}/varsayilan`],
         ['DELETE', `/api/onay-akislari/${genel}`],
         ['POST', '/api/kategoriler', { ad: 'Yeni' }],
@@ -174,10 +173,10 @@ describe('expense, approval and administration API', () => {
       expectError(await call(admin, 'PATCH', `/api/kullanicilar/${admin.id}`, { rol: 'calisan' }), 409, 'son_yonetici');
       expectError(await call(admin, 'PATCH', `/api/kullanicilar/${admin.id}`, { aktif: false }), 409, 'kendi_hesabi');
 
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       expectError(await call(admin, 'PATCH', `/api/kullanicilar/${a.id}`, { aktif: false }), 409, 'onay_akisinda');
       await create(owner);
-      await setFlow(db, [unlimited(admin.id)]);
+      await setFlow(db, chainOf(admin.id));
       expectError(await call(admin, 'PATCH', `/api/kullanicilar/${b.id}`, { aktif: false }), 409, 'bekleyen_onay_var');
       expectError(await call(admin, 'PATCH', `/api/kullanicilar/${owner.id}`, { eposta: a.eposta.toUpperCase() }), 409, 'eposta_kullaniliyor');
 
@@ -196,56 +195,94 @@ describe('expense, approval and administration API', () => {
 
     it('saves an approval flow or lists every problem in sorunlar', async () => {
       const url = `/api/onay-akislari/${await defaultFlowId(db)}`;
-      const empty = await call(admin, 'PUT', url, { ad: 'Genel', adimlar: [] });
+      const empty = await call(admin, 'PUT', url, { ad: 'Genel', strateji: 'zincir', adimlar: [] });
       expectError(empty, 400, 'gecersiz_akis');
       expect(empty.body.hata.sorunlar).toEqual(['Onay akışında en az bir onaycı olmalıdır.']);
 
-      const gap = await call(admin, 'PUT', url, { ad: 'Genel', adimlar: [{ onayciId: a.id, altLimit: 0, ustLimit: 1000 }, unlimited(b.id, 5000)] });
-      expectError(gap, 400, 'gecersiz_akis');
-      expect(gap.body.hata.sorunlar).toEqual(['1.000,01 TRY – 4.999,99 TRY arası tutarlar için onaycı yok.']);
-      expect(gap.body.hata.mesaj).toBe(gap.body.hata.sorunlar[0]);
+      // Limits rise along the flow and only the last approver has none.
+      const falling = await call(admin, 'PUT', url, { ad: 'Genel', strateji: 'tek', adimlar: [{ onayciId: a.id, limit: 5000 }, { onayciId: b.id, limit: 1000 }] });
+      expectError(falling, 400, 'gecersiz_akis');
+      expect(falling.body.hata.sorunlar).toEqual([
+        'Son onaycının limiti sınırsız olmalıdır; böylece her tutarı onaylayacak biri olur.',
+        '2. onaycının limiti, 1. onaycınınkinden (5.000,00 TRY) büyük olmalıdır.',
+      ]);
+      expect(falling.body.hata.mesaj).toBe(falling.body.hata.sorunlar[0]);
+      const open = await call(admin, 'PUT', url, { ad: 'Genel', strateji: 'zincir', adimlar: [{ onayciId: a.id, limit: null }, { onayciId: b.id, limit: null }] });
+      expectError(open, 400, 'gecersiz_akis');
+      expect(open.body.hata.sorunlar).toEqual(['1. onaycı: onay limiti girilmelidir. Yalnızca son onaycının limiti sınırsızdır.']);
+      const zero = await call(admin, 'PUT', url, { ad: 'Genel', strateji: 'zincir', adimlar: [{ onayciId: a.id, limit: 0 }, { onayciId: b.id, limit: null }] });
+      expectError(zero, 400, 'gecersiz_akis');
+      expect(zero.body.hata.sorunlar).toEqual(["1. onaycı: onay limiti 0'dan büyük ve en fazla 90.000.000.000.000,00 TRY olmalıdır."]);
 
       const passive = await makeUser(db, { adSoyad: 'Pasif Onaycı', aktif: false });
-      const users = await call(admin, 'PUT', url, { ad: 'Genel', adimlar: [unlimited(a.id), unlimited(passive.id), unlimited(999_999)] });
+      const users = await call(admin, 'PUT', url, { ad: 'Genel', strateji: 'zincir', adimlar: chainOf(a.id, passive.id, 999_999) });
       expectError(users, 400, 'gecersiz_akis');
       expect(users.body.hata.sorunlar).toEqual(['2. onaycı: Pasif Onaycı pasif bir kullanıcı.', '3. onaycı: kullanıcı bulunamadı.']);
 
-      fieldError(await call(admin, 'PUT', url, { ad: 'Genel', adimlar: [{ onayciId: a.id, altLimit: -1, ustLimit: null }] }), 'adimlar.0.altLimit');
-      fieldError(await call(admin, 'PUT', url, { ad: 'Genel', adimlar: [{ onayciId: a.id, altLimit: 0.001, ustLimit: null }] }), 'adimlar.0.altLimit');
-      fieldError(await call(admin, 'PUT', url, { ad: 'Genel' }), 'adimlar');
-      fieldError(await call(admin, 'PUT', url, { adimlar: [unlimited(a.id)] }), 'ad');
-      fieldError(await call(admin, 'PUT', url, { ad: 'x'.repeat(81), adimlar: [unlimited(a.id)] }), 'ad');
-      expectError(await call(admin, 'PUT', '/api/onay-akislari/999999', { ad: 'Yok', adimlar: [unlimited(a.id)] }), 404, 'bulunamadi');
-      expect((await call(admin, 'GET', url)).body.adimlar.map((s: { onayci: { id: number } }) => s.onayci.id)).toEqual([admin.id]);
+      const limitError = async (adimlar: unknown, mesaj: string): Promise<void> => {
+        const res = await call(admin, 'PUT', url, { ad: 'Genel', strateji: 'zincir', adimlar });
+        fieldError(res, 'adimlar.0.limit');
+        expect(res.body.hata.alanlar['adimlar.0.limit']).toBe(mesaj);
+      };
+      await limitError([{ onayciId: a.id, limit: -1 }, { onayciId: b.id, limit: null }], 'Onay limiti sıfırdan küçük olamaz.');
+      await limitError([{ onayciId: a.id, limit: 0.001 }, { onayciId: b.id, limit: null }], 'Onay limiti en fazla iki ondalık basamak içerebilir.');
+      await limitError([{ onayciId: a.id, limit: '5000' }, { onayciId: b.id, limit: null }], 'Onay limiti sayı olmalıdır.');
+      // "No limit" is said with null, not by leaving the field out.
+      await limitError([{ onayciId: a.id }], 'Onay limiti sayı olmalıdır.');
+      for (const strateji of [undefined, 'hepsi', 'ZINCIR', null]) {
+        const res = await call(admin, 'PUT', url, { ad: 'Genel', strateji, adimlar: chainOf(a.id) });
+        fieldError(res, 'strateji');
+        expect(res.body.hata.alanlar.strateji, String(strateji)).toBe('Strateji "zincir" ya da "tek" olmalıdır.');
+      }
+      fieldError(await call(admin, 'PUT', url, { ad: 'Genel', strateji: 'zincir' }), 'adimlar');
+      fieldError(await call(admin, 'PUT', url, { strateji: 'zincir', adimlar: chainOf(a.id) }), 'ad');
+      fieldError(await call(admin, 'PUT', url, { ad: 'x'.repeat(81), strateji: 'zincir', adimlar: chainOf(a.id) }), 'ad');
+      expectError(await call(admin, 'PUT', '/api/onay-akislari/999999', { ad: 'Yok', strateji: 'zincir', adimlar: chainOf(a.id) }), 404, 'bulunamadi');
+      expect((await call(admin, 'GET', url)).body).toMatchObject({ strateji: 'zincir', adimlar: [{ onayci: { id: admin.id }, limit: null }] });
 
-      const saved = await call(admin, 'PUT', url, { ad: 'Genel', adimlar: [{ onayciId: a.id, altLimit: 0, ustLimit: 5000 }, unlimited(b.id, 5000.01)] });
+      const saved = await call(admin, 'PUT', url, { ad: 'Genel', strateji: 'tek', adimlar: [{ onayciId: a.id, limit: 5000 }, { onayciId: b.id, limit: null }] });
       expect(saved.status).toBe(200);
       expect(saved.body).toEqual({
         id: await defaultFlowId(db),
         ad: 'Genel',
         varsayilan: true,
+        strateji: 'tek',
         paraBirimi: 'TRY',
         guncelleme: expect.any(String),
         guncelleyen: { id: admin.id, adSoyad: 'Yönetici' },
         kullaniciSayisi: 6,
         adimlar: [
-          { sira: 1, onayci: { id: a.id, adSoyad: 'Onaycı A', eposta: a.eposta, departman: null }, altLimit: 0, ustLimit: 5000 },
-          { sira: 2, onayci: { id: b.id, adSoyad: 'Onaycı B', eposta: b.eposta, departman: null }, altLimit: 5000.01, ustLimit: null },
+          { sira: 1, onayci: { id: a.id, adSoyad: 'Onaycı A', eposta: a.eposta, departman: null }, limit: 5000 },
+          { sira: 2, onayci: { id: b.id, adSoyad: 'Onaycı B', eposta: b.eposta, departman: null }, limit: null },
         ],
       });
       expect((await call(admin, 'GET', url)).body).toEqual(saved.body);
-      expect((await call(admin, 'GET', '/api/denetim?adet=1')).body[0]).toMatchObject({ islem: 'onay_akisi_guncellendi', kullanici: { id: admin.id } });
+      expect((await call(admin, 'GET', '/api/denetim?adet=1')).body[0]).toMatchObject({
+        islem: 'onay_akisi_guncellendi',
+        kullanici: { id: admin.id },
+        ayrinti: "Genel: tek onaycı; 1) Onaycı A: 5.000,00 TRY'ye kadar; 2) Onaycı B: sınırsız",
+      });
+      // Each approver's place: their limit and the amounts that come to them.
+      const genel = { id: saved.body.id, ad: 'Genel', strateji: 'tek' };
+      expect((await call(admin, 'GET', `/api/kullanicilar/${a.id}`)).body.onaycilik).toEqual([{ akis: genel, sira: 1, limit: 5000, altLimit: 0, ustLimit: 5000 }]);
+      expect((await call(admin, 'GET', `/api/kullanicilar/${b.id}`)).body.onaycilik).toEqual([{ akis: genel, sira: 2, limit: null, altLimit: 5000.01, ustLimit: null }]);
+      expect((await call(a, 'GET', '/api/ben')).body.kullanici.onaycilik).toEqual([{ akis: genel, sira: 1, limit: 5000, altLimit: 0, ustLimit: 5000 }]);
     });
 
     it('creates, lists, defaults and deletes flows, and assigns users to them', async () => {
       const genel = await defaultFlowId(db);
-      const created = await call(admin, 'POST', '/api/onay-akislari', { ad: 'Satış', adimlar: [unlimited(a.id)] });
+      const created = await call(admin, 'POST', '/api/onay-akislari', { ad: 'Satış', strateji: 'zincir', adimlar: chainOf(a.id) });
       expect(created.status, JSON.stringify(created.body)).toBe(201);
       expect(created.headers.get('location')).toBe(`/api/onay-akislari/${created.body.id}`);
-      expect(created.body).toMatchObject({ ad: 'Satış', varsayilan: false, kullaniciSayisi: 0, adimlar: [{ sira: 1, onayci: { id: a.id } }] });
+      expect(created.body).toMatchObject({ ad: 'Satış', varsayilan: false, strateji: 'zincir', kullaniciSayisi: 0, adimlar: [{ sira: 1, onayci: { id: a.id }, limit: null }] });
       const satis: number = created.body.id;
-      expectError(await call(admin, 'POST', '/api/onay-akislari', { ad: 'satış', adimlar: [unlimited(b.id)] }), 409, 'akis_adi_kullaniliyor');
-      expectError(await call(admin, 'POST', '/api/onay-akislari', { ad: 'Boş', adimlar: [] }), 400, 'gecersiz_akis');
+      expectError(await call(admin, 'POST', '/api/onay-akislari', { ad: 'satış', strateji: 'zincir', adimlar: chainOf(b.id) }), 409, 'akis_adi_kullaniliyor');
+      expectError(await call(admin, 'POST', '/api/onay-akislari', { ad: 'Boş', strateji: 'zincir', adimlar: [] }), 400, 'gecersiz_akis');
+      fieldError(await call(admin, 'POST', '/api/onay-akislari', { ad: 'Stratejisiz', adimlar: chainOf(b.id) }), 'strateji');
+      const tek = await call(admin, 'POST', '/api/onay-akislari', { ad: 'Kademe', strateji: 'tek', adimlar: [{ onayciId: b.id, limit: 1000 }, { onayciId: a.id, limit: null }] });
+      expect(tek.status, JSON.stringify(tek.body)).toBe(201);
+      expect(tek.body).toMatchObject({ strateji: 'tek', adimlar: [{ onayci: { id: b.id }, limit: 1000 }, { onayci: { id: a.id }, limit: null }] });
+      expect((await call(admin, 'DELETE', `/api/onay-akislari/${tek.body.id}`)).status).toBe(204);
 
       // Assigning: on create and on change; null goes back to the default.
       const user = await call(admin, 'POST', '/api/kullanicilar', { eposta: 'satisci@firma.test', adSoyad: 'Satışçı', rol: 'calisan', sifre: 'GizliSifre1', onayAkisiId: satis });
@@ -254,7 +291,9 @@ describe('expense, approval and administration API', () => {
       expect(moved.body).toMatchObject({ onayAkisiId: satis, onayAkisi: { id: satis } });
       fieldError(await call(admin, 'PATCH', `/api/kullanicilar/${owner.id}`, { onayAkisiId: 999_999 }), 'onayAkisiId');
       fieldError(await call(admin, 'PATCH', `/api/kullanicilar/${owner.id}`, { onayAkisiId: 'satis' }), 'onayAkisiId');
-      expect((await call(admin, 'GET', `/api/kullanicilar/${a.id}`)).body.onaycilik).toEqual([{ akis: { id: satis, ad: 'Satış' }, sira: 1, altLimit: 0, ustLimit: null }]);
+      expect((await call(admin, 'GET', `/api/kullanicilar/${a.id}`)).body.onaycilik).toEqual([
+        { akis: { id: satis, ad: 'Satış', strateji: 'zincir' }, sira: 1, limit: null, altLimit: 0, ustLimit: null },
+      ]);
 
       const list = await call(admin, 'GET', '/api/onay-akislari');
       expect(list.body.map((f: { ad: string; kullaniciSayisi: number }) => [f.ad, f.kullaniciSayisi])).toEqual([
@@ -280,7 +319,7 @@ describe('expense, approval and administration API', () => {
 
   describe('forms', () => {
     it('answers 201 with Location and the detail the contract describes', async () => {
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       const res = await call(owner, 'POST', '/api/masraflar', { ...formBody({ satici: 'Örnek Lokanta', aciklama: 'Müşteri ziyareti' }), gonder: true });
       expect(res.status).toBe(201);
       expect(res.headers.get('location')).toBe(`/api/masraflar/${res.body.id}`);
@@ -341,7 +380,7 @@ describe('expense, approval and administration API', () => {
     });
 
     it('requires a reason of at least 3 characters to reject', async () => {
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       const f = await create(owner);
       fieldError(await act(a, f.id, 'reddet', {}), 'aciklama');
       fieldError(await act(a, f.id, 'reddet', { aciklama: '  ab ' }), 'aciklama');
@@ -351,7 +390,7 @@ describe('expense, approval and administration API', () => {
     });
 
     it('answers each refusal with its status and code', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       const f = await create(owner);
       const draft = await create(owner, {}, false);
 
@@ -384,7 +423,7 @@ describe('expense, approval and administration API', () => {
     });
 
     it('hands a step over through the API and moves the pending count with it', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       const f = await create(owner);
       const step = f.onaylar[0].id;
       const passive = await makeUser(db, { aktif: false });
@@ -408,7 +447,7 @@ describe('expense, approval and administration API', () => {
 
   describe('races through the API', () => {
     beforeEach(async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
     });
 
     it('accepts one of two simultaneous approvals', async () => {
@@ -455,7 +494,7 @@ describe('expense, approval and administration API', () => {
 
   describe('visibility', () => {
     it('shows employees their own forms and the ones they approve; accounting and administrators see all', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id)]);
+      await setFlow(db, chainOf(a.id, b.id));
       const f = await create(owner);
       const draft = await create(owner, { baslik: 'Taslak' }, false);
       const theirs = await create(outsider, { baslik: 'Başkasının' });
@@ -493,7 +532,7 @@ describe('expense, approval and administration API', () => {
     });
 
     it('fills the approval inbox and the summary', async () => {
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       const first = await create(owner, { tutar: 100 });
       const second = await create(owner, { tutar: 250 });
       const inbox = await call(a, 'GET', '/api/onaylar');
@@ -513,7 +552,10 @@ describe('expense, approval and administration API', () => {
     });
 
     it('previews the approvers for anyone, with only sirada and atlandi steps', async () => {
-      await setFlow(db, [unlimited(a.id), unlimited(b.id, 5000.01)]);
+      await setFlow(db, [
+        { onayciId: a.id, limit: 5000 },
+        { onayciId: b.id, limit: null },
+      ]);
       const preview = await call(owner, 'POST', '/api/onay-akisi/onizle', { tutar: 20000 });
       expect(preview.status).toBe(200);
       expect(preview.body).toEqual({
@@ -526,10 +568,17 @@ describe('expense, approval and administration API', () => {
         ],
         uyari: null,
       });
+      // Their own expense goes one approver up, and above the top approver to an administrator.
       const own = await call(a, 'POST', '/api/onay-akisi/onizle', { tutar: 100 });
       expect(own.body.adimlar).toEqual([
         { sira: 1, onayci: { id: a.id, adSoyad: 'Onaycı A' }, durum: 'atlandi', yedek: false },
-        { sira: 2, onayci: { id: admin.id, adSoyad: 'Yönetici' }, durum: 'sirada', yedek: true },
+        { sira: 2, onayci: { id: b.id, adSoyad: 'Onaycı B' }, durum: 'sirada', yedek: false },
+      ]);
+      const top = await call(b, 'POST', '/api/onay-akisi/onizle', { tutar: 20000 });
+      expect(top.body.adimlar).toEqual([
+        { sira: 1, onayci: { id: a.id, adSoyad: 'Onaycı A' }, durum: 'sirada', yedek: false },
+        { sira: 2, onayci: { id: b.id, adSoyad: 'Onaycı B' }, durum: 'atlandi', yedek: false },
+        { sira: 3, onayci: { id: admin.id, adSoyad: 'Yönetici' }, durum: 'sirada', yedek: true },
       ]);
 
       const invoice = await upload(owner, 'pdf', { genelToplam: 6000 });
@@ -540,7 +589,7 @@ describe('expense, approval and administration API', () => {
       fieldError(await call(owner, 'POST', '/api/onay-akisi/onizle', { tutar: 0 }), 'tutar');
       fieldError(await call(owner, 'POST', '/api/onay-akisi/onizle', { tutar: 10, paraBirimi: 'EUR' }), 'kur');
 
-      await setFlow(db, [unlimited(admin.id)]);
+      await setFlow(db, chainOf(admin.id));
       const nobody = await call(admin, 'POST', '/api/onay-akisi/onizle', { tutar: 100 });
       expect(nobody.status).toBe(200);
       expect(nobody.body).toEqual({ onayTutari: 100, paraBirimi: 'TRY', akis: expect.objectContaining({ ad: 'Genel' }), adimlar: [], uyari: expect.any(String) });
@@ -550,7 +599,7 @@ describe('expense, approval and administration API', () => {
     });
 
     it("previews the user's own flow; only an administrator may name another flow", async () => {
-      const satis = await makeFlow(db, 'Satış', [unlimited(b.id)]);
+      const satis = await makeFlow(db, 'Satış', chainOf(b.id));
       await assignFlow(db, owner.id, satis);
       const own = await call(owner, 'POST', '/api/onay-akisi/onizle', { tutar: 100 });
       expect(own.body).toMatchObject({ akis: { id: satis, ad: 'Satış', varsayilan: false }, adimlar: [{ onayci: { id: b.id } }] });
@@ -560,12 +609,31 @@ describe('expense, approval and administration API', () => {
       expectError(await call(admin, 'POST', '/api/onay-akisi/onizle', { tutar: 100, akisId: 999_999 }), 404, 'bulunamadi');
       fieldError(await call(admin, 'POST', '/api/onay-akisi/onizle', { tutar: 100, akisId: 0 }), 'akisId');
     });
+
+    it('previews a named flow by its own strategy', async () => {
+      const steps = [
+        { onayciId: a.id, limit: 5000 },
+        { onayciId: b.id, limit: null },
+      ];
+      const zincir = await makeFlow(db, 'Zincir', steps, 'zincir');
+      const tek = await makeFlow(db, 'Tek', steps, 'tek');
+      const approvers = async (akisId: number, tutar: number): Promise<number[]> => {
+        const res = await call(admin, 'POST', '/api/onay-akisi/onizle', { tutar, akisId });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(res.body.akis.id).toBe(akisId);
+        return res.body.adimlar.map((s: { onayci: { id: number } }) => s.onayci.id);
+      };
+      expect(await approvers(zincir, 5000)).toEqual([a.id]);
+      expect(await approvers(zincir, 5000.01)).toEqual([a.id, b.id]);
+      expect(await approvers(tek, 5000)).toEqual([a.id]);
+      expect(await approvers(tek, 5000.01)).toEqual([b.id]);
+    });
   });
 
   describe('CSV export', () => {
     it('is for accounting and administrators only', async () => {
       expectError(await call(owner, 'GET', '/api/masraflar/disa-aktar'), 403, 'yetki_yok');
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       expectError(await call(a, 'GET', '/api/masraflar/disa-aktar'), 403, 'yetki_yok');
       fieldError(await call(accounting, 'GET', '/api/masraflar/disa-aktar?baslangic=2025-13-01'), 'baslangic');
       fieldError(await call(accounting, 'GET', '/api/masraflar/disa-aktar?durum=hepsi'), 'durum');
@@ -594,7 +662,7 @@ describe('expense, approval and administration API', () => {
     });
 
     it('filters by state and expense date', async () => {
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       const jan = await create(owner, { masrafTarihi: '2025-01-10' }, false);
       const feb = await create(owner, { masrafTarihi: '2025-02-10' });
       const ids = async (query: string): Promise<number[]> => {
@@ -658,10 +726,14 @@ describe('expense, approval and administration API', () => {
     });
 
     it("opens a form's invoice to its approvers, routed by the invoice total, and to nobody else", async () => {
-      await setFlow(db, [
-        { onayciId: a.id, altLimit: 0, ustLimit: 5000 },
-        { onayciId: b.id, altLimit: 5000.01, ustLimit: null },
-      ]);
+      await setFlow(
+        db,
+        [
+          { onayciId: a.id, limit: 5000 },
+          { onayciId: b.id, limit: null },
+        ],
+        'tek',
+      );
       const invoice = await upload(owner, 'pdf', { genelToplam: 6000 });
       const f = await create(owner, { tutar: 4000, faturaIdler: [invoice.id] });
       expect(f).toMatchObject({ onayTutari: 6000, tutarFarki: { fatura: 6000, beyan: 4000 }, siradakiOnayci: { id: b.id } });
@@ -706,7 +778,7 @@ describe('expense, approval and administration API', () => {
     });
 
     it('attaches only own uploads, once per live form; a cancelled form frees the invoice', async () => {
-      await setFlow(db, [unlimited(a.id)]);
+      await setFlow(db, chainOf(a.id));
       const invoice = await upload(owner, 'pdf');
       fieldError(await call(outsider, 'POST', '/api/masraflar', formBody({ faturaIdler: [invoice.id] })), 'faturaIdler');
 
@@ -735,11 +807,62 @@ describe('expense, approval and administration API', () => {
       expectError(await call(outsider, 'GET', `/api/masraflar/${second.id}`), 404, 'bulunamadi');
     });
 
+    it('asks for the base-currency equivalent of an invoice in another currency', async () => {
+      await setFlow(
+        db,
+        [
+          { onayciId: a.id, limit: 5000 },
+          { onayciId: b.id, limit: null },
+        ],
+        'tek',
+      );
+      const usd = await upload(owner, 'pdf', { genelToplam: 200, paraBirimi: 'USD' });
+      fieldError(await call(owner, 'POST', '/api/masraflar', formBody({ faturaIdler: [usd.id], yerelKarsiliklar: { [usd.id]: 0 } })), `yerelKarsiliklar.${usd.id}`);
+      fieldError(await call(owner, 'POST', '/api/masraflar', formBody({ faturaIdler: [usd.id], yerelKarsiliklar: { abc: 10 } })), 'yerelKarsiliklar.abc');
+      fieldError(await call(owner, 'POST', '/api/masraflar', formBody({ faturaIdler: [usd.id], yerelKarsiliklar: [6500] })), 'yerelKarsiliklar');
+
+      const refused = await call(owner, 'POST', '/api/masraflar', { ...formBody({ tutar: 100, faturaIdler: [usd.id] }), gonder: true });
+      expectError(refused, 409, 'karsilik_eksik');
+      expect(refused.body.hata.alanlar).toEqual({ [`yerelKarsiliklar.${usd.id}`]: 'Fatura USD cinsinden; onaya göndermek için TRY karşılığını girin.' });
+
+      const preview = await call(owner, 'POST', '/api/onay-akisi/onizle', { tutar: 100, faturaIdler: [usd.id], yerelKarsiliklar: { [usd.id]: 6500 } });
+      expect(preview.body.onayTutari).toBe(6500);
+      const f = await create(owner, { tutar: 100, faturaIdler: [usd.id], yerelKarsiliklar: { [usd.id]: 6500 } });
+      expect(f).toMatchObject({ onayTutari: 6500, siradakiOnayci: { id: b.id }, tutarFarki: { fatura: 6500, beyan: 100 } });
+      expect(f.faturalar).toEqual([expect.objectContaining({ id: usd.id, paraBirimi: 'USD', karsilikGerekli: true, yerelKarsilik: 6500 })]);
+    });
+
+    it('opens an invoice to whoever approves its form now, and closes it when it leaves the form', async () => {
+      await setFlow(db, chainOf(a.id));
+      const kept = await upload(owner, 'pdf');
+      const dropped = await upload(owner, 'png');
+      const f = await create(owner, { faturaIdler: [kept.id, dropped.id] });
+      const sees = async (who: Kullanici, id: string): Promise<number> => (await call(who, 'GET', `/api/invoices/${id}`)).status;
+      expect([await sees(a, kept.id), await sees(a, dropped.id)]).toEqual([200, 200]);
+
+      // A reassigned approver loses the invoices with the form; the new one gets them.
+      expect((await act(admin, f.id, 'devret', { onayId: f.onaylar[0].id, yeniOnayciId: b.id })).status).toBe(200);
+      expect([await sees(a, kept.id), await sees(b, kept.id), await sees(b, dropped.id)]).toEqual([404, 200, 200]);
+
+      // An invoice taken off the form is no longer the approver's to open.
+      await act(owner, f.id, 'geri-cek');
+      expect((await call(owner, 'PATCH', `/api/masraflar/${f.id}`, { faturaIdler: [kept.id] })).status).toBe(200);
+      expect([await sees(b, kept.id), await sees(b, dropped.id), await sees(owner, dropped.id)]).toEqual([200, 404, 200]);
+
+      // A cancelled form still shows its invoice to the people who handled it.
+      expect((await act(owner, f.id, 'iptal')).body.durum).toBe('iptal');
+      expect([await sees(b, kept.id), await sees(owner, kept.id), await sees(outsider, kept.id)]).toEqual([200, 200, 404]);
+    });
+
     it('takes several invoices on one form, opens each to the approvers and routes by their sum', async () => {
-      await setFlow(db, [
-        { onayciId: a.id, altLimit: 0, ustLimit: 5000 },
-        { onayciId: b.id, altLimit: 5000.01, ustLimit: null },
-      ]);
+      await setFlow(
+        db,
+        [
+          { onayciId: a.id, limit: 5000 },
+          { onayciId: b.id, limit: null },
+        ],
+        'tek',
+      );
       const hotel = await upload(owner, 'pdf', { genelToplam: 3000 });
       const taxi = await upload(owner, 'png', { genelToplam: 2500 });
       const f = await create(owner, { tutar: 4000, faturaIdler: [hotel.id, taxi.id] });

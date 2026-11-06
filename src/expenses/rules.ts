@@ -65,45 +65,79 @@ export const MAX_INVOICES = 20;
 export interface InvoiceTotal {
   readonly genelToplam: number | null;
   readonly paraBirimi: string | null;
+  /** Base-currency equivalent the sender entered, for an invoice in a third currency. */
+  readonly yerelKarsilik?: number | null | undefined;
+}
+
+export interface FormMoney {
+  readonly tutar: number;
+  readonly paraBirimi: string;
+  readonly kur: number | null;
 }
 
 /**
- * The sum of the invoice grand totals that can be compared with the form: invoices in the form's
- * currency (or whose currency was not read) with a positive total. Null when no invoice qualifies.
+ * Whether the sender must enter the invoice's value in the base currency: its currency was read and
+ * is neither the form's (converted with the form rate) nor the base currency (counted as it is).
  */
-export function comparableInvoiceTotal(paraBirimi: string, invoices: readonly InvoiceTotal[]): number | null {
-  let cents = 0;
+export function needsEquivalent(formCurrency: string, base: string, invoice: Pick<InvoiceTotal, 'paraBirimi'>): boolean {
+  return invoice.paraBirimi !== null && invoice.paraBirimi !== formCurrency && invoice.paraBirimi !== base;
+}
+
+const positive = (v: number | null | undefined): v is number => v !== null && v !== undefined && Number.isFinite(v) && v > 0;
+
+/**
+ * The invoices' total in cents, split by where it comes from: `form` in the form's currency (invoices in
+ * that currency or whose currency was not read), `local` in the base currency (base-currency invoices
+ * and entered equivalents). Null when no invoice can count.
+ */
+function invoiceCents(form: FormMoney, base: string, invoices: readonly InvoiceTotal[]): { form: number; local: number } | null {
+  let formCents = 0;
+  let localCents = 0;
   let counted = false;
   for (const invoice of invoices) {
-    const total = invoice.genelToplam;
-    if (total === null || !Number.isFinite(total) || total <= 0) continue;
-    if (invoice.paraBirimi !== null && invoice.paraBirimi !== paraBirimi) continue;
-    cents += Math.round(total * 100);
+    if (needsEquivalent(form.paraBirimi, base, invoice)) {
+      if (!positive(invoice.yerelKarsilik)) continue;
+      localCents += Math.round(invoice.yerelKarsilik * 100);
+    } else {
+      if (!positive(invoice.genelToplam)) continue;
+      if (invoice.paraBirimi === null || invoice.paraBirimi === form.paraBirimi) formCents += Math.round(invoice.genelToplam * 100);
+      else localCents += Math.round(invoice.genelToplam * 100);
+    }
     counted = true;
   }
-  return counted ? cents / 100 : null;
+  return counted ? { form: formCents, local: localCents } : null;
+}
+
+/** The invoices' total in the base currency, or null when no invoice can count. */
+export function invoicesLocalTotal(form: FormMoney, base: string, invoices: readonly InvoiceTotal[]): number | null {
+  const cents = invoiceCents(form, base, invoices);
+  return cents === null ? null : round2(localAmount(cents.form / 100, form.kur) + cents.local / 100);
 }
 
 /**
- * The amount approvers are picked by: the larger of the declared amount and the invoices' total,
- * so a form cannot slip under a higher approval tier by declaring less than its invoices say.
+ * The amount approvers are picked by: the larger of the declared amount and the invoices' total, both
+ * in the base currency, so a form cannot slip under a higher approval tier by declaring less than its
+ * invoices say. Invoices in a third currency count with the equivalent the sender entered.
  */
-export function approvalAmount(
-  form: { readonly tutar: number; readonly paraBirimi: string; readonly kur: number | null },
-  invoices: readonly InvoiceTotal[],
-): number {
+export function approvalAmount(form: FormMoney, base: string, invoices: readonly InvoiceTotal[]): number {
   const declared = localAmount(form.tutar, form.kur);
-  const total = comparableInvoiceTotal(form.paraBirimi, invoices);
+  const total = invoicesLocalTotal(form, base, invoices);
   if (total === null) return declared;
-  return Math.min(MAX_AMOUNT, Math.max(declared, localAmount(total, form.kur)));
+  return Math.min(MAX_AMOUNT, Math.max(declared, total));
 }
 
-/** Set when the declared amount differs from the invoices' total, so approvers see it. */
+/**
+ * Set when the declared amount differs from the invoices' total, so approvers see it. Both are in the
+ * form's currency; base-currency amounts are converted back with the form rate.
+ */
 export function amountMismatch(
-  form: { readonly tutar: number; readonly paraBirimi: string },
+  form: FormMoney,
+  base: string,
   invoices: readonly InvoiceTotal[],
 ): { readonly fatura: number; readonly beyan: number } | null {
-  const total = comparableInvoiceTotal(form.paraBirimi, invoices);
-  if (total === null || round2(total) === round2(form.tutar)) return null;
-  return { fatura: round2(total), beyan: round2(form.tutar) };
+  const cents = invoiceCents(form, base, invoices);
+  if (cents === null) return null;
+  const total = round2(cents.form / 100 + cents.local / 100 / (form.kur ?? 1));
+  if (total === round2(form.tutar)) return null;
+  return { fatura: total, beyan: round2(form.tutar) };
 }

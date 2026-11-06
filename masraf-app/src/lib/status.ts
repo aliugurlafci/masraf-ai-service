@@ -1,4 +1,4 @@
-import type { AdimDurum, GecmisIslem, MasrafDurum, Rol } from '@/api/types';
+import type { AdimDurum, GecmisIslem, MasrafDurum, Rol, Strateji } from '@/api/types';
 
 export const STATUS_LABELS: Readonly<Record<MasrafDurum, string>> = {
   taslak: 'Taslak',
@@ -33,6 +33,11 @@ export const HISTORY_LABELS: Readonly<Record<GecmisIslem, string>> = {
   iptal_edildi: 'İptal edildi',
   odendi: 'Ödendi olarak işaretlendi',
   devredildi: 'Onay devredildi',
+};
+
+export const STRATEGY_LABELS: Readonly<Record<Strateji, string>> = {
+  zincir: 'Zincirleme onay',
+  tek: 'Tek onaycı',
 };
 
 export const ROLE_LABELS: Readonly<Record<Rol, string>> = {

@@ -104,6 +104,18 @@ export async function migrate(db: Db, migrations?: readonly Migration[]): Promis
          uygulanma DATETIME2(3) NOT NULL CONSTRAINT df_sema_surumleri_uygulanma DEFAULT SYSUTCDATETIME()
        )`,
   );
+  // A database built from migration files that are gone (merged or renamed) would skip a new file
+  // that reuses one of their numbers, so it is refused instead of being taken as up to date.
+  const files = new Map(all.map((m) => [m.version, m.name]));
+  const unknown = (await query<{ surum: number; ad: string }>(db, 'SELECT surum, ad FROM dbo.sema_surumleri ORDER BY surum')).filter(
+    (r) => files.get(r.surum) !== r.ad,
+  );
+  if (unknown.length > 0) {
+    throw new DatabaseError(
+      `Veritabanı artık bulunmayan şema dosyalarıyla kurulmuş (${unknown.map((r) => r.ad).join(', ')}). ` +
+        'Bu veritabanını silin ya da MSSQL_DATABASE ile başka bir ad verin; sunucu şemayı baştan kurar.',
+    );
+  }
   const applied: string[] = [];
   for (const m of all) {
     const done = await transaction(db, async (tx) => {

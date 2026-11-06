@@ -97,7 +97,8 @@ function TabItem({ label, icons, focused, badge, onPress, onLongPress }: TabItem
     transform: [{ scaleX: 0.6 + progress.get() * 0.4 }],
   }));
   const icon = useAnimatedStyle(() => ({ transform: [{ translateY: -progress.get() * 1.5 }, { scale: 1 + progress.get() * 0.06 }] }));
-  const color = focused ? colors.primary : colors.textMuted;
+  // primaryText, not primary: the label is small text on the bar and must reach 4.5:1 in the dark theme too.
+  const color = focused ? colors.primaryText : colors.textMuted;
   const hasBadge = badge !== undefined && badge !== '' && badge !== 0;
   return (
     <Pressable
@@ -115,7 +116,7 @@ function TabItem({ label, icons, focused, badge, onPress, onLongPress }: TabItem
         </Animated.View>
         {hasBadge ? (
           <View style={[styles.badge, { backgroundColor: colors.danger, borderColor: colors.tabBar }]}>
-            <Text variant="caption" color="#FFFFFF" maxFontSizeMultiplier={1.2} style={styles.badgeText}>
+            <Text variant="caption" color={colors.onAccent} maxFontSizeMultiplier={1.2} style={styles.badgeText}>
               {typeof badge === 'number' && badge > 99 ? '99+' : String(badge)}
             </Text>
           </View>

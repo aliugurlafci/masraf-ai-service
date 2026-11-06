@@ -7,6 +7,7 @@ import Animated from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useOzet } from '@/api/queries';
+import type { OnayciYeri } from '@/api/types';
 import { useAuth } from '@/auth/AuthProvider';
 import { Button, type IconName } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -16,8 +17,8 @@ import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { Text } from '@/components/ui/Text';
 import { config } from '@/config';
 import { useMotion } from '@/hooks/useMotion';
-import { formatDateTime, formatRange, initials } from '@/lib/format';
-import { ROLE_LABELS } from '@/lib/status';
+import { formatBand, formatDateTime, formatMoney, initials } from '@/lib/format';
+import { ROLE_LABELS, STRATEGY_LABELS } from '@/lib/status';
 import { radius, spacing, useTheme, type ThemePreference } from '@/theme';
 
 export default function ProfileScreen() {
@@ -60,7 +61,8 @@ export default function ProfileScreen() {
               <Text variant="heading" numberOfLines={2}>
                 {user.adSoyad}
               </Text>
-              <Text variant="small" tone="muted" numberOfLines={1}>
+              {/* Middle ellipsis keeps the domain of a long address visible. */}
+              <Text variant="small" tone="muted" numberOfLines={1} ellipsizeMode="middle">
                 {user.eposta}
               </Text>
               <View style={styles.tags}>
@@ -79,7 +81,9 @@ export default function ProfileScreen() {
                   <Ionicons name="git-merge-outline" size={20} color={colors.primary} />
                 </View>
                 <View style={styles.flex}>
-                  <Text variant="bodyStrong">Masraflarınız: {user.onayAkisi.ad}</Text>
+                  <Text variant="bodyStrong" numberOfLines={2}>
+                    Masraflarınız: {user.onayAkisi.ad}
+                  </Text>
                   <Text variant="small" tone="muted">
                     {user.onayAkisiId === null ? 'Şirketin varsayılan onay akışı' : 'Size atanmış onay akışı'}
                   </Text>
@@ -87,19 +91,7 @@ export default function ProfileScreen() {
               </Card>
             ) : null}
             {user.onaycilik.map((yer) => (
-              <Card key={yer.akis.id} style={styles.row}>
-                <View style={[styles.rowIcon, { backgroundColor: colors.successSoft }]}>
-                  <Ionicons name="git-network-outline" size={20} color={colors.success} />
-                </View>
-                <View style={styles.flex}>
-                  <Text variant="bodyStrong">
-                    {yer.akis.ad} akışında {yer.sira}. onaycısınız
-                  </Text>
-                  <Text variant="small" tone="muted">
-                    Tutar aralığı: {formatRange(yer.altLimit, yer.ustLimit, currency)}
-                  </Text>
-                </View>
-              </Card>
+              <ApproverCard key={yer.akis.id} yer={yer} currency={currency} />
             ))}
           </Animated.View>
         ) : null}
@@ -146,12 +138,72 @@ export default function ProfileScreen() {
   );
 }
 
+/** Where the user approves in one flow: the flow's strategy, their approval limit and what reaches them. */
+function ApproverCard({ yer, currency }: { readonly yer: OnayciYeri; readonly currency: string }) {
+  const { colors } = useTheme();
+  const limit = yer.limit === null ? 'Sınırsız' : formatMoney(yer.limit, currency);
+  const limitNote =
+    yer.limit === null
+      ? 'Her tutarda son onay sizde.'
+      : yer.akis.strateji === 'zincir'
+        ? 'Bu tutara kadar son onay sizde; daha büyük tutarlar sizden sonra üst onaycıya geçer.'
+        : 'Bu tutara kadar son onay sizde; daha büyük tutarlar doğrudan üst onaycıya gider.';
+  const band = formatBand(yer.altLimit, yer.ustLimit, currency);
+  return (
+    <Card style={styles.approver}>
+      <View style={styles.row}>
+        <View style={[styles.rowIcon, { backgroundColor: colors.successSoft }]}>
+          <Ionicons name="git-network-outline" size={20} color={colors.success} />
+        </View>
+        <View style={styles.flex}>
+          {/* The flow name may be long; the order and strategy stay on their own line so they are never cut. */}
+          <Text variant="bodyStrong" numberOfLines={2}>
+            {yer.akis.ad}
+          </Text>
+          <Text variant="small" tone="muted">
+            {yer.sira}. onaycısınız · {STRATEGY_LABELS[yer.akis.strateji]}
+          </Text>
+        </View>
+      </View>
+      <View style={[styles.limits, { borderTopColor: colors.border }]}>
+        <LimitLine icon="shield-checkmark-outline" label="Onay limiti" value={limit} note={limitNote} />
+        <LimitLine icon="file-tray-full-outline" label="Size gelen masraflar" value={band} />
+      </View>
+    </Card>
+  );
+}
+
+function LimitLine({ icon, label, value, note }: { readonly icon: IconName; readonly label: string; readonly value: string; readonly note?: string }) {
+  const { colors } = useTheme();
+  return (
+    <View style={styles.limitLine} accessible accessibilityLabel={[`${label}: ${value}`, note].filter((p) => p !== undefined).join('. ')}>
+      <Ionicons name={icon} size={18} color={colors.textMuted} style={styles.limitIcon} />
+      <View style={styles.flex}>
+        <View style={styles.limitHead}>
+          <Text variant="small" tone="muted" style={styles.limitLabel}>
+            {label}
+          </Text>
+          <Text variant="label" style={[styles.limitValue, styles.tabular]}>
+            {value}
+          </Text>
+        </View>
+        {note !== undefined ? (
+          <Text variant="caption" tone="faint">
+            {note}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function Tag({ icon, label }: { readonly icon: IconName; readonly label: string }) {
   const { colors } = useTheme();
   return (
     <View style={[styles.tag, { backgroundColor: colors.primarySoft }]}>
-      <Ionicons name={icon} size={13} color={colors.primary} />
-      <Text variant="caption" tone="primary">
+      <Ionicons name={icon} size={13} color={colors.primaryText} />
+      {/* A long department name is cut inside the pill instead of running out of the card. */}
+      <Text variant="caption" tone="primary" numberOfLines={1} style={styles.tagText}>
         {label}
       </Text>
     </View>
@@ -192,9 +244,18 @@ const styles = StyleSheet.create({
   identity: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
   avatar: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs + 2, marginTop: spacing.sm },
-  tag: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill },
+  tag: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill, maxWidth: '100%' },
+  tagText: { flexShrink: 1 },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   flows: { gap: spacing.sm },
+  approver: { gap: spacing.md },
+  limits: { gap: spacing.md, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth },
+  limitLine: { flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start' },
+  limitIcon: { marginTop: 1 },
+  limitHead: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', columnGap: spacing.sm },
+  limitLabel: { flexShrink: 1 },
+  limitValue: { flexShrink: 1, textAlign: 'right' },
+  tabular: { fontVariant: ['tabular-nums'] },
   rowIcon: { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
   section: { gap: spacing.sm },
   sectionTitle: { marginLeft: spacing.xs, letterSpacing: 0.8 },

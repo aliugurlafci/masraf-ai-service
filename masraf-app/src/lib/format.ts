@@ -87,6 +87,14 @@ export function formatDate(value: string | null | undefined): string {
   return `${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
 }
 
+const WEEKDAYS = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+
+/** "Salı" for an ISO date; empty when it cannot be read. */
+export function formatWeekday(value: string): string {
+  const date = parseIsoDate(value);
+  return date === null ? '' : (WEEKDAYS[date.getDay()] ?? '');
+}
+
 /** "5 Kas 2026 14:32" for an ISO timestamp, in the device's time zone. */
 export function formatDateTime(value: string | null | undefined): string {
   if (value === null || value === undefined) return '—';
@@ -141,8 +149,13 @@ export function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] ?? name;
 }
 
-/** Limit range of an approver: "0,00 – sınırsız". */
-export function formatRange(alt: number, ust: number | null, currency: string): string {
-  const upper = ust === null ? 'sınırsız' : formatMoney(ust, currency);
-  return `${formatMoney(alt, currency)} – ${upper}`;
+/**
+ * The amounts that reach an approver, both ends inclusive: "Tüm tutarlar", "₺5.000,00 ve altı",
+ * "₺5.000,01 ve üzeri" or "₺5.000,01 – ₺50.000,00". Worded without suffixes, which would need
+ * Turkish vowel harmony on a formatted number.
+ */
+export function formatBand(alt: number, ust: number | null, currency: string): string {
+  if (ust === null) return alt <= 0 ? 'Tüm tutarlar' : `${formatMoney(alt, currency)} ve üzeri`;
+  if (alt <= 0) return `${formatMoney(ust, currency)} ve altı`;
+  return `${formatMoney(alt, currency)} – ${formatMoney(ust, currency)}`;
 }

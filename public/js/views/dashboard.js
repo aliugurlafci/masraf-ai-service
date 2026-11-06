@@ -47,7 +47,7 @@ function distribution(benim) {
       ),
     );
   }
-  if (total === 0) bar.append(el('span', { className: 'dist-seg empty', style: 'flex-grow:1' }));
+  if (total === 0) bar.append(el('span', { className: 'dist-seg is-empty', style: 'flex-grow:1' }));
   return el('section', { className: 'card', 'aria-labelledby': 'dist-title' }, el('h2', { className: 'card-title', id: 'dist-title', text: 'Masraflarımın durumu' }), bar, legend);
 }
 

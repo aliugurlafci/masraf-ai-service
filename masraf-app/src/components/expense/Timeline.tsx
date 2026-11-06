@@ -15,7 +15,7 @@ import type { AdimDurum, FormOnay, GecmisKaydi } from '@/api/types';
 import type { IconName } from '@/components/ui/Button';
 import { Text } from '@/components/ui/Text';
 import { useMotion } from '@/hooks/useMotion';
-import { formatDateTime, formatRange } from '@/lib/format';
+import { formatBand, formatDateTime } from '@/lib/format';
 import { HISTORY_LABELS, STEP_LABELS } from '@/lib/status';
 import { radius, spacing, useTheme, type Palette } from '@/theme';
 
@@ -84,7 +84,7 @@ function StepRow({ step, last, currency }: { readonly step: FormOnay; readonly l
           {step.kararTarihi !== null ? ` · ${formatDateTime(step.kararTarihi)}` : ''}
         </Text>
         <Text variant="caption" tone="faint">
-          {step.sira}. sıra · {formatRange(step.altLimit, step.ustLimit, currency)}
+          {step.sira}. sıra · Tutar aralığı: {formatBand(step.altLimit, step.ustLimit, currency)}
         </Text>
         {step.aciklama !== null && step.aciklama !== '' ? (
           <View style={[styles.note, { backgroundColor: colors.surfaceAlt }]}>

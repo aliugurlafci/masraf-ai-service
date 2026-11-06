@@ -20,7 +20,7 @@ import { useMotion } from '@/hooks/useMotion';
 import { firstName, formatMoney, initials, moneyAffixes, monthTitle } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
 import { STATUS_LABELS } from '@/lib/status';
-import { radius, spacing, statusColors, typography, useTheme } from '@/theme';
+import { amountLargeFor, radius, spacing, statusColors, typography, useTheme } from '@/theme';
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -109,7 +109,7 @@ function HomeContent({ ozet }: { readonly ozet: Ozet }) {
             decimals={2}
             prefix={affixes.prefix}
             suffix={affixes.suffix}
-            style={[typography.amountLarge, { color: colors.onHero }]}
+            style={[amountLargeFor(formatMoney(ozet.benim.buAyToplam, currency)), { color: colors.onHero }]}
             accessibilityLabel={`Bu ay gönderilen toplam ${formatMoney(ozet.benim.buAyToplam, currency)}`}
           />
           <View style={styles.heroBottom}>
@@ -150,7 +150,7 @@ function HomeContent({ ozet }: { readonly ozet: Ozet }) {
             style={[styles.pending, { backgroundColor: colors.warningSoft, borderColor: colors.warning }]}
           >
             <View style={[styles.pendingIcon, { backgroundColor: colors.warning }]}>
-              <Ionicons name="hourglass-outline" size={20} color="#FFFFFF" />
+              <Ionicons name="hourglass-outline" size={20} color={colors.onAccent} />
             </View>
             <View style={styles.flex}>
               <Text variant="bodyStrong">{ozet.bekleyenOnay} masraf onayınızı bekliyor</Text>

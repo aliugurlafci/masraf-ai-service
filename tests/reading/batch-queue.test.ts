@@ -132,7 +132,7 @@ describe('batch queue', () => {
 
   it('forgets the oldest finished batches but never an unfinished one', async () => {
     const pending = held();
-    const queue = createBatchQueue(createInvoiceReader(extract, storage, 1), { esZamanli: 1, keep: 2 });
+    const queue = createBatchQueue(createInvoiceReader(extract, storage, 1), { esZamanli: 1, keep: 2, graceMs: 0 });
     const running = await queue.add([input(1)], false);
     const done = await Promise.all([1, 2, 3].map(() => queue.add([{ name: 'x.txt', hata: { kod: 'x', mesaj: 'y' } }], false)));
 
@@ -143,6 +143,20 @@ describe('batch queue', () => {
     await vi.waitFor(() => expect(pending).toHaveLength(1));
     pending.shift()?.();
     await vi.waitFor(() => expect(queue.get(running.id)?.bitti).toBe(true));
+  });
+
+  it('keeps a finished batch beyond the limit until its grace period is over', async () => {
+    let clock = Date.parse('2026-11-06T10:00:00Z');
+    const queue = createBatchQueue(createInvoiceReader(extract, storage, 1), { esZamanli: 1, keep: 1, graceMs: 60_000, now: () => new Date(clock) });
+    const refused = () => queue.add([{ name: 'x.txt', hata: { kod: 'x', mesaj: 'y' } }], false);
+    const first = await refused();
+    const second = await refused();
+    // Both finished at once: the older one is beyond the limit but not yet past its grace period.
+    expect(queue.get(first.id)).not.toBeNull();
+    clock += 60_000;
+    await refused();
+    expect(queue.get(first.id)).toBeNull();
+    expect(queue.get(second.id)).toBeNull();
   });
 
   it('returns null for an unknown batch', () => {

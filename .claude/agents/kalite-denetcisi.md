@@ -10,7 +10,7 @@ Başlamadan önce oku: `CLAUDE.md` ve `docs/onay-sistemi.md`.
 
 Kontrol listesi:
 
-1. **Doğruluk:** Onay akışı kuralları (kapsama, sıralı onay, kendi masrafını atlama, yedek onaycı, onay tutarı = beyan ile fatura toplamından büyüğü), form durum geçişleri, eş zamanlı karar, çift beyan koruması.
+1. **Doğruluk:** Onay akışı kuralları (strateji: zincirleme/tek onaycı, artan onay limitleri ve sınırsız son onaycı, sıralı onay, kendi masrafının bir üst onaycıya geçmesi, yedek onaycı, onay tutarı = beyan ile fatura toplamından büyüğü), form durum geçişleri, eş zamanlı karar, çift beyan koruması.
 2. **Yetki:** Her uç doğru rolü ve sahipliği kontrol ediyor mu? Bir `calisan` başkasının formunu, faturasını, dosyasını ya da kuyruğunu görebiliyor mu? `izinler` alanı sunucudaki kurallarla tutarlı mı?
 3. **Güvenlik çerçevesi:** Sunucu yalnızca `127.0.0.1`. Host/Origin koruması duruyor. Claude çağrısında yalnızca `Read` aracı, boş geçici `CLAUDE_CONFIG_DIR`, izinli ortam değişkenleri. SQL parametreli. Şifreler scrypt, token'lar yalnızca özetiyle saklanıyor. Panelde kullanıcı verisi `textContent` ile yazılıyor.
 4. **Ayarlar:** Her ayar `.env.example` içinde ve `src/config.ts` şemasında. Kodda sabit gizli bilgi yok.
