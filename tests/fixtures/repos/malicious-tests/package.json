@@ -1,9 +1,0 @@
-{
-  "name": "orc-malicious-tests",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "test": "node --test --test-reporter=junit --test-reporter-destination=junit.xml"
-  }
-}
