@@ -22,16 +22,20 @@ import { radius, spacing, useTheme } from '@/theme';
 
 const DOC_W = 76;
 const DOC_H = 96;
+const COMPACT_W = 52;
+const COMPACT_H = 66;
 
 export interface ReadingCardProps {
   readonly file: PickedFile;
   readonly phase: 'uploading' | 'sirada' | 'okunuyor';
   readonly startedAt: number;
   readonly onCancel: () => void;
+  /** Smaller card for a list of several invoices: no long explanation, no "fill the form meanwhile" note. */
+  readonly compact?: boolean;
 }
 
 /** "Reading the invoice" state: a scan line sweeps over the document while Claude reads it. */
-export function ReadingCard({ file, phase, startedAt, onCancel }: ReadingCardProps) {
+export function ReadingCard({ file, phase, startedAt, onCancel, compact = false }: ReadingCardProps) {
   const { colors } = useTheme();
   const reduced = useReducedMotion();
   const scan = useSharedValue(0);
@@ -58,7 +62,9 @@ export function ReadingCard({ file, phase, startedAt, onCancel }: ReadingCardPro
     };
   }, [reduced, scan, bar]);
 
-  const scanStyle = useAnimatedStyle(() => ({ transform: [{ translateY: scan.get() * (DOC_H - 14) }] }));
+  const docW = compact ? COMPACT_W : DOC_W;
+  const docH = compact ? COMPACT_H : DOC_H;
+  const scanStyle = useAnimatedStyle(() => ({ transform: [{ translateY: scan.get() * (docH - 14) }] }));
   const barStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -120 + bar.get() * 360 }] }));
 
   const title = phase === 'uploading' ? 'Dosya gönderiliyor' : phase === 'sirada' ? 'Sırada bekliyor' : 'Fatura okunuyor';
@@ -73,41 +79,57 @@ export function ReadingCard({ file, phase, startedAt, onCancel }: ReadingCardPro
   const elapsedText = minutes > 0 ? `${minutes} dk ${seconds} sn` : `${seconds} sn`;
 
   return (
-    <View
-      style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.primary }]}
-      accessible
-      accessibilityRole="progressbar"
-      accessibilityLabel={`${title}, ${elapsedText}`}
-      accessibilityLiveRegion="polite"
-    >
-      <View style={styles.row}>
-        <View style={[styles.doc, { backgroundColor: colors.primarySoft, borderColor: colors.border }]}>
-          {isPdf(file.mimeType) ? (
-            <Ionicons name="document-text" size={40} color={colors.primary} />
-          ) : (
-            <Image source={{ uri: file.uri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={150} />
-          )}
-          {!reduced ? (
-            <Animated.View style={[styles.scan, scanStyle]}>
-              <LinearGradient colors={['transparent', `${colors.primary}AA`, 'transparent']} style={StyleSheet.absoluteFill} />
-              <View style={[styles.scanLine, { backgroundColor: colors.primary }]} />
-            </Animated.View>
-          ) : null}
-        </View>
-        <View style={styles.text}>
-          <View style={styles.titleRow}>
-            <Text variant="heading">{title}</Text>
-            <Text variant="caption" tone="muted" style={styles.elapsed}>
-              {elapsedText}
+    <View style={[styles.card, compact && styles.cardCompact, { backgroundColor: colors.surface, borderColor: colors.primary }]}>
+      <View style={[styles.row, compact && styles.rowCompact]}>
+        {/* Only the status is one accessible element, so the cancel button stays reachable. The label leaves
+            out the running seconds so screen readers do not announce every tick. */}
+        <View
+          style={[styles.row, styles.flex, compact && styles.rowCompact]}
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel={`${title}: ${file.name}`}
+          accessibilityLiveRegion="polite"
+        >
+          <View style={[styles.doc, { width: docW, height: docH, backgroundColor: colors.primarySoft, borderColor: colors.border }]}>
+            {isPdf(file.mimeType) ? (
+              <Ionicons name="document-text" size={compact ? 28 : 40} color={colors.primary} />
+            ) : (
+              <Image source={{ uri: file.uri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={150} />
+            )}
+            {!reduced ? (
+              <Animated.View style={[styles.scan, scanStyle]}>
+                <LinearGradient colors={['transparent', `${colors.primary}AA`, 'transparent']} style={StyleSheet.absoluteFill} />
+                <View style={[styles.scanLine, { backgroundColor: colors.primary }]} />
+              </Animated.View>
+            ) : null}
+          </View>
+          <View style={styles.text}>
+            <View style={styles.titleRow}>
+              <Text variant={compact ? 'bodyStrong' : 'heading'}>{title}</Text>
+              <Text variant="caption" tone="muted" style={styles.elapsed}>
+                {elapsedText}
+              </Text>
+            </View>
+            {!compact ? (
+              <Text variant="small" tone="muted">
+                {detail}
+              </Text>
+            ) : null}
+            <Text variant="caption" tone="faint" numberOfLines={1}>
+              {file.name}
             </Text>
           </View>
-          <Text variant="small" tone="muted">
-            {detail}
-          </Text>
-          <Text variant="caption" tone="faint" numberOfLines={1}>
-            {file.name}
-          </Text>
         </View>
+        {compact ? (
+          <Button
+            title="Vazgeç"
+            size="sm"
+            variant="ghost"
+            onPress={onCancel}
+            accessibilityLabel={`Vazgeç: ${file.name}`}
+            accessibilityHint="Bu dosyanın okunmasını bekleme, listeden çıkar"
+          />
+        ) : null}
       </View>
       <View style={[styles.track, { backgroundColor: colors.primarySoft }]}>
         {reduced ? (
@@ -116,23 +138,25 @@ export function ReadingCard({ file, phase, startedAt, onCancel }: ReadingCardPro
           <Animated.View style={[styles.bar, { backgroundColor: colors.primary }, barStyle]} />
         )}
       </View>
-      <View style={styles.footer}>
-        <Ionicons name="create-outline" size={16} color={colors.textMuted} />
-        <Text variant="small" tone="muted" style={styles.flex}>
-          Bu sırada kategori ve açıklamayı doldurabilirsiniz.
-        </Text>
-        <Button title="Vazgeç" size="sm" variant="ghost" onPress={onCancel} accessibilityHint="Okumayı bekleme, formu elle doldur" />
-      </View>
+      {!compact ? (
+        <View style={styles.footer}>
+          <Ionicons name="create-outline" size={16} color={colors.textMuted} />
+          <Text variant="small" tone="muted" style={styles.flex}>
+            Bu sırada kategori ve açıklamayı doldurabilirsiniz.
+          </Text>
+          <Button title="Vazgeç" size="sm" variant="ghost" onPress={onCancel} accessibilityHint="Okumayı bekleme, formu elle doldur" />
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   card: { borderRadius: radius.xl, borderWidth: 1.5, padding: spacing.lg, gap: spacing.md },
+  cardCompact: { padding: spacing.md, gap: spacing.sm },
   row: { flexDirection: 'row', gap: spacing.lg, alignItems: 'center' },
+  rowCompact: { gap: spacing.md },
   doc: {
-    width: DOC_W,
-    height: DOC_H,
     borderRadius: radius.md,
     borderWidth: 1,
     overflow: 'hidden',

@@ -36,49 +36,60 @@ function askForSettings(title: string, message: string): void {
   ]);
 }
 
-/** Takes a photo of a receipt. Returns null when the user cancels or denies the camera. */
-export async function pickFromCamera(): Promise<PickedFile | null> {
+/** Takes a photo of a receipt. Returns an empty list when the user cancels or denies the camera. */
+export async function pickFromCamera(): Promise<PickedFile[]> {
   const permission = await ImagePicker.requestCameraPermissionsAsync();
   if (!permission.granted) {
     askForSettings('Kamera izni gerekli', 'Fişinizi fotoğraflamak için ayarlardan kamera iznini açın.');
-    return null;
+    return [];
   }
   const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.7, exif: false });
-  return assetToFile(result);
+  return assetsToFiles(result);
 }
 
-/** Picks a receipt photo from the gallery (system photo picker; no permission needed). */
-export async function pickFromLibrary(): Promise<PickedFile | null> {
-  const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, exif: false });
-  return assetToFile(result);
+/** Picks up to `max` receipt photos from the gallery (system photo picker; no permission needed). */
+export async function pickFromLibrary(max: number): Promise<PickedFile[]> {
+  const many = max > 1;
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    quality: 0.8,
+    exif: false,
+    allowsMultipleSelection: many,
+    ...(many ? { selectionLimit: max, orderedSelection: true } : {}),
+  });
+  return assetsToFiles(result);
 }
 
-function assetToFile(result: ImagePicker.ImagePickerResult): PickedFile | null {
-  if (result.canceled) return null;
-  const asset = result.assets[0];
-  if (asset === undefined) return null;
-  const mimeType = asset.mimeType ?? guessMime(asset.uri, 'image/jpeg');
-  return { uri: asset.uri, name: fileNameFor(asset.fileName, mimeType), mimeType };
+function assetsToFiles(result: ImagePicker.ImagePickerResult): PickedFile[] {
+  if (result.canceled) return [];
+  return result.assets.map((asset) => {
+    const mimeType = asset.mimeType ?? guessMime(asset.uri, 'image/jpeg');
+    return { uri: asset.uri, name: fileNameFor(asset.fileName, mimeType), mimeType };
+  });
 }
 
-/** Picks a PDF (or an image file) from the device's files. */
-export async function pickDocument(): Promise<PickedFile | null> {
+/**
+ * Picks PDFs (or image files) from the device's files. The system picker cannot cap the count, so the
+ * caller trims the list to the room left on the form.
+ */
+export async function pickDocuments(max: number): Promise<PickedFile[]> {
   const result = await DocumentPicker.getDocumentAsync({
     type: ['application/pdf', 'image/*'],
     copyToCacheDirectory: true,
-    multiple: false,
+    multiple: max > 1,
   });
-  if (result.canceled) return null;
-  const asset = result.assets[0];
-  if (asset === undefined) return null;
-  const mimeType = asset.mimeType ?? guessMime(asset.name, 'application/pdf');
-  return { uri: asset.uri, name: fileNameFor(asset.name, mimeType), mimeType };
+  if (result.canceled) return [];
+  return result.assets.map((asset) => {
+    const mimeType = asset.mimeType ?? guessMime(asset.name, 'application/pdf');
+    return { uri: asset.uri, name: fileNameFor(asset.name, mimeType), mimeType };
+  });
 }
 
-export function pickInvoice(source: InvoiceSource): Promise<PickedFile | null> {
+/** Picks invoice files from a source; `max` is how many more the form can take (camera always gives one). */
+export function pickInvoices(source: InvoiceSource, max: number): Promise<PickedFile[]> {
   if (source === 'kamera') return pickFromCamera();
-  if (source === 'galeri') return pickFromLibrary();
-  return pickDocument();
+  if (source === 'galeri') return pickFromLibrary(max);
+  return pickDocuments(max);
 }
 
 export const isPdf = (mime: string | null | undefined): boolean => mime === 'application/pdf';

@@ -4536,22 +4536,129 @@ body.dragging .welcome .sheet-glyph .scan {
   font-size: 13px;
 }
 
-.inv-reading {
-  display: grid;
-  justify-items: start;
-  gap: 12px;
+/* One card per invoice. The cards are numbered in list order, which is the order they are saved in. */
+
+.inv-panel.multi {
+  position: static;
 }
 
-.inv-reading-top {
+.inv-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.inv-alert {
+  outline: none;
+}
+
+.inv-alert:not(:empty) {
+  margin-bottom: 14px;
+}
+
+.inv-list,
+.inv-items {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: inv;
+}
+
+.inv-list {
+  gap: 10px;
+}
+
+.inv-card {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  counter-increment: inv;
+  transition: border-color 0.2s;
+}
+
+.inv-card.enter {
+  animation: row-in 0.32s var(--ease-out);
+}
+
+.inv-card[data-state='reading'] {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.inv-card[data-state='error'],
+.inv-card.has-error {
+  border-color: color-mix(in srgb, var(--err) 55%, var(--line));
+}
+
+.inv-card.has-error {
+  background: color-mix(in srgb, var(--err-soft) 45%, var(--surface-2));
+}
+
+.inv-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.inv-card.flash {
+  animation: inv-flash 1.4s var(--ease-out);
+}
+
+@keyframes inv-flash {
+  0%,
+  30% {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+}
+
+.inv-card-top {
   display: flex;
   align-items: center;
-  gap: 14px;
-  width: 100%;
+  gap: 12px;
+  min-width: 0;
 }
 
-.inv-reading-text {
+.inv-card-text {
   flex: 1;
   min-width: 0;
+}
+
+.inv-n {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.inv-n::before {
+  content: counter(inv);
+}
+
+.inv-card[data-state='done'] .inv-n,
+.inv-card[data-state='linked'] .inv-n {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.inv-card[data-state='error'] .inv-n,
+.inv-card.has-error .inv-n {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.inv-card .sheet-glyph {
+  flex: none;
 }
 
 .inv-file {
@@ -4561,46 +4668,106 @@ body.dragging .welcome .sheet-glyph .scan {
 }
 
 .inv-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 2px 0 0;
   color: var(--ink-2);
-  font-size: 14px;
+  font-size: 13.5px;
+}
+
+.inv-status svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--tone, currentColor);
+}
+
+.inv-card[data-state='error'] .inv-status {
+  color: var(--err);
+  font-weight: 600;
 }
 
 .inv-clock {
+  flex: none;
   color: var(--accent);
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.inv-done,
-.inv-error {
-  display: grid;
-  gap: 14px;
+/* Four short facts per invoice: two columns even on a phone, so a list of cards stays short. */
+.inv-card .kv.compact,
+.inv-item .kv.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.inv-ok {
+.inv-card .alert {
+  padding: 10px 12px;
+  font-size: 13.5px;
+}
+
+.inv-card-notes:empty,
+.inv-card-err:empty {
+  display: none;
+}
+
+.inv-card-note {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 6px;
   margin: 0;
-  font-weight: 700;
+  color: var(--ink-2);
+  font-size: 13px;
 }
 
-.inv-ok svg {
-  color: var(--ok);
+.inv-card-note svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--wait);
 }
 
-.inv-done .preview {
-  margin-top: 0;
+.inv-preview > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 650;
+  list-style: none;
+  cursor: pointer;
 }
 
-.inv-done .preview-frame {
+.inv-preview > summary::-webkit-details-marker {
+  display: none;
+}
+
+.inv-preview > summary svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.2s var(--ease-out);
+}
+
+.inv-preview[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.inv-preview .preview {
+  margin-top: 8px;
+}
+
+.inv-card .preview-frame,
+.inv-item .preview-frame {
   height: 420px;
 }
 
-.inv-done .preview-img {
+.inv-card .preview-img,
+.inv-item .preview-img {
   max-height: 420px;
 }
 
@@ -4610,6 +4777,63 @@ body.dragging .welcome .sheet-glyph .scan {
   gap: 8px;
 }
 
+.inv-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 2px dashed var(--line-strong);
+  border-radius: 12px;
+  transition:
+    border-color 0.2s,
+    background-color 0.2s;
+}
+
+body.dragging .inv-add {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.inv-add-text {
+  flex: 1 1 180px;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.inv-sum {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.inv-sum-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.inv-sum-line strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.inv-sum-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
 .inv-note {
   display: grid;
   gap: 10px;
@@ -4617,6 +4841,46 @@ body.dragging .welcome .sheet-glyph .scan {
 
 .inv-note:not(:empty) {
   margin-top: 14px;
+}
+
+.form-hint.warn svg {
+  color: var(--wait);
+}
+
+/* The same invoices on the expense detail. */
+
+.inv-item {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  counter-increment: inv;
+}
+
+.inv-item:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.inv-item-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.inv-item-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.inv-item .inv-n {
+  border-color: var(--ok);
+  color: var(--ok);
 }
 
 .cat-grid {

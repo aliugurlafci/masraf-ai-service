@@ -145,8 +145,9 @@ export const setDefaultFlow = (id) => send('POST', `/api/onay-akislari/${seg(id)
 /** 204; users assigned to the flow fall back to the default one. 409 varsayilan_akis for the default. */
 export const deleteFlow = (id) => send('DELETE', `/api/onay-akislari/${seg(id)}`);
 /**
- * { tutar, paraBirimi?, kur?, faturaId?, akisId? } → who would approve it if the signed-in user sent
- * it. akisId (yonetici only) tries a saved flow other than the user's own.
+ * { tutar, paraBirimi?, kur?, faturaIdler?, akisId? } → who would approve it if the signed-in user
+ * sent it. faturaIdler (at most 20) lets the invoices' total raise the approval amount; akisId
+ * (yonetici only) tries a saved flow other than the user's own.
  */
 export const previewFlow = (data, opts) => send('POST', '/api/onay-akisi/onizle', data, opts);
 
@@ -161,7 +162,9 @@ export const updateCategory = (id, data) => send('PATCH', `/api/kategoriler/${se
 /** { kapsam: 'benim'|'tumu', durum: 'onayda,taslak', q, sayfa, adet } */
 export const listExpenses = (params, opts) => get(`/api/masraflar${qs(params)}`, opts);
 export const getExpense = (id, opts) => get(`/api/masraflar/${seg(id)}`, opts);
+/** { baslik, kategoriId, masrafTarihi, tutar, paraBirimi?, kur?, satici?, aciklama?, faturaIdler?, gonder? } → 201 MasrafDetay. */
 export const createExpense = (data) => send('POST', '/api/masraflar', data);
+/** Only the fields that change; faturaIdler, when sent, replaces the whole invoice list (order included). */
 export const updateExpense = (id, data) => send('PATCH', `/api/masraflar/${seg(id)}`, data);
 
 /** action: gonder | geri-cek | iptal | onayla | reddet | odendi | devret */

@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { errorMessage } from '@/api/client';
 import { approveMasraf, rejectMasraf, runMasrafAction, type MasrafIslemi } from '@/api/endpoints';
 import { useMasraf, useMasrafChanged, useOzet } from '@/api/queries';
-import type { MasrafDetay } from '@/api/types';
+import type { MasrafDetay, MasrafFatura } from '@/api/types';
 import { CategoryIcon } from '@/components/expense/CategoryIcon';
 import { InvoiceThumb } from '@/components/expense/InvoiceThumb';
 import { StatusBadge } from '@/components/expense/StatusBadge';
@@ -25,10 +25,14 @@ import { useToast } from '@/components/ui/Toast';
 import { useMotion } from '@/hooks/useMotion';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
+import { invoiceTotal, isOtherCurrency } from '@/lib/invoices';
 import { isPdf } from '@/lib/pickers';
 import { radius, spacing, statusColors, useTheme } from '@/theme';
 
 type ActionKey = 'duzenle' | 'gonder' | 'geriCek' | 'iptal' | 'onayla' | 'reddet' | 'odendi';
+
+/** Width of one invoice in the strip of a form with several invoices. */
+const TILE_W = 144;
 
 export default function ExpenseDetailScreen() {
   const { colors } = useTheme();
@@ -148,8 +152,14 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
   }
 
   const showLocal = detail.paraBirimi.toUpperCase() !== localCurrency.toUpperCase();
-  const fatura = detail.fatura;
-  const canZoom = fatura !== null && fatura.dosyaVar && !isPdf(fatura.mime);
+  const faturalar = detail.faturalar;
+  const fatura = faturalar.length === 1 ? (faturalar[0] ?? null) : null;
+  const canZoom = fatura !== null && canOpen(fatura);
+  const fatOther = fatura !== null && isOtherCurrency(fatura, detail.paraBirimi);
+  // Which invoices make up tutarFarki.fatura (contract rule 6); only used to word the notice.
+  const counted = invoiceTotal(faturalar, detail.paraBirimi);
+  const otherCount = faturalar.filter((f) => isOtherCurrency(f, detail.paraBirimi)).length;
+  const mismatch = detail.tutarFarki;
 
   return (
     <View style={[styles.flex, { backgroundColor: colors.bg }]}>
@@ -187,15 +197,21 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
           ) : null}
         </Animated.View>
 
-        {detail.tutarFarki !== null ? (
+        {mismatch !== null ? (
           <Animated.View entering={motion.enter(1)}>
             <Banner
               tone="warning"
               icon="alert-circle-outline"
-              message={`Beyan edilen tutar (${formatMoney(detail.tutarFarki.beyan, localCurrency)}) fatura toplamından (${formatMoney(
-                detail.tutarFarki.fatura,
-                localCurrency,
-              )}) farklı. Onay tutarı: ${formatMoney(detail.onayTutari, localCurrency)}.`}
+              message={[
+                // Both amounts are in the form's own currency; the approval amount is in the local one.
+                `Beyan edilen tutar (${formatMoney(mismatch.beyan, detail.paraBirimi)}) ${
+                  (counted?.count ?? 0) > 1 ? 'faturaların genel toplamından' : 'fatura toplamından'
+                } (${formatMoney(mismatch.fatura, detail.paraBirimi)}) farklı.`,
+                otherCount > 0 ? `Farklı para birimindeki ${otherCount} fatura bu toplama girmez.` : null,
+                `Onay tutarı: ${formatMoney(detail.onayTutari, localCurrency)}.`,
+              ]
+                .filter((part) => part !== null)
+                .join(' ')}
             />
           </Animated.View>
         ) : null}
@@ -221,8 +237,28 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
         ) : null}
 
         <Animated.View entering={motion.enter(4)} style={styles.section}>
-          <SectionTitle>Fatura</SectionTitle>
-          {fatura === null ? (
+          <SectionTitle>{faturalar.length > 1 ? `Faturalar (${faturalar.length})` : 'Fatura'}</SectionTitle>
+          {faturalar.length > 1 ? (
+            <>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.stripBleed}
+                contentContainerStyle={styles.strip}
+                accessibilityLabel="Faturalar"
+              >
+                {faturalar.map((f, i) => (
+                  <InvoiceTile key={f.id} fatura={f} index={i} count={faturalar.length} currency={detail.paraBirimi} />
+                ))}
+              </ScrollView>
+              {counted !== null ? (
+                <Text variant="small" tone="muted" style={styles.sectionTitle}>
+                  {counted.count === faturalar.length ? 'Genel toplam' : `${counted.count} faturanın genel toplamı`}:{' '}
+                  {formatMoney(counted.total, detail.paraBirimi)}
+                </Text>
+              ) : null}
+            </>
+          ) : fatura === null ? (
             <Card style={styles.invoiceRow}>
               <View style={[styles.factIcon, { backgroundColor: colors.surfaceAlt }]}>
                 <Ionicons name="document-outline" size={18} color={colors.textMuted} />
@@ -257,6 +293,11 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
                 </Text>
                 {fatura.genelToplam !== null ? (
                   <Text variant="amount">{formatMoney(fatura.genelToplam, fatura.paraBirimi ?? detail.paraBirimi)}</Text>
+                ) : null}
+                {fatOther ? (
+                  <Text variant="caption" tone="warning">
+                    Para birimi formdan farklı; onay tutarı hesabına girmez.
+                  </Text>
                 ) : null}
                 {!fatura.dosyaVar ? (
                   <Text variant="caption" tone="warning">
@@ -300,7 +341,7 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
             variant="ghost"
             loading={busy === 'iptal'}
             onPress={() =>
-              confirm('Masrafı iptal et', 'İptal edilen masraf yeniden gönderilemez. Bağlı fatura başka bir masrafta kullanılabilir hale gelir.', 'İptal et', true, () =>
+              confirm('Masrafı iptal et', `İptal edilen masraf yeniden gönderilemez.${releaseNote(faturalar.length)}`, 'İptal et', true, () =>
                 simple('iptal', 'iptal', 'Masraf iptal edildi.'),
               )
             }
@@ -360,6 +401,91 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
         />
       </Sheet>
     </View>
+  );
+}
+
+/** Only photos with a stored file open in the full-screen viewer (there is no PDF viewer). */
+const canOpen = (f: MasrafFatura): boolean => f.dosyaVar && !isPdf(f.mime);
+
+function releaseNote(count: number): string {
+  if (count === 0) return '';
+  return count === 1 ? ' Bağlı fatura başka bir masrafta kullanılabilir hale gelir.' : ' Bağlı faturalar başka masraflarda kullanılabilir hale gelir.';
+}
+
+/** One invoice in the horizontal strip of a form with several invoices. */
+function InvoiceTile({
+  fatura,
+  index,
+  count,
+  currency,
+}: {
+  readonly fatura: MasrafFatura;
+  readonly index: number;
+  readonly count: number;
+  /** The form's currency; an invoice in another one stays out of the total. */
+  readonly currency: string;
+}) {
+  const { colors } = useTheme();
+  const motion = useMotion();
+  const zoom = canOpen(fatura);
+  const other = isOtherCurrency(fatura, currency);
+  const heading = fatura.saticiUnvan ?? (isPdf(fatura.mime) ? 'PDF fatura' : (fatura.dosyaAdi ?? 'Fatura'));
+  const total = fatura.genelToplam !== null ? formatMoney(fatura.genelToplam, fatura.paraBirimi ?? currency) : null;
+  const date = fatura.faturaTarihi !== null ? formatDate(fatura.faturaTarihi) : null;
+  const note = !fatura.dosyaVar ? 'Dosya bulunamadı' : other ? 'Toplama girmez' : null;
+  const label = [
+    `Fatura ${index + 1} / ${count}`,
+    heading,
+    total,
+    date,
+    other ? 'para birimi formdan farklı, toplama girmez' : null,
+    !fatura.dosyaVar ? 'orijinal dosya bulunamadı' : null,
+  ]
+    .filter((part) => part !== null)
+    .join(', ');
+  return (
+    <Animated.View entering={motion.enter(index)}>
+      <PressableScale
+        disabled={!zoom}
+        accessibilityRole={zoom ? 'imagebutton' : undefined}
+        accessibilityLabel={label}
+        accessibilityHint={zoom ? 'Fatura görselini tam ekran açar' : undefined}
+        onPress={() => router.push({ pathname: '/fatura/[id]', params: { id: fatura.id } })}
+        scaleTo={0.96}
+        style={[styles.tile, { backgroundColor: colors.surface, borderColor: colors.border }]}
+      >
+        <View>
+          <InvoiceThumb
+            source={{ kind: 'remote', faturaId: fatura.id, mime: fatura.mime, hasFile: fatura.dosyaVar }}
+            width={TILE_W - spacing.sm * 2}
+            height={132}
+          />
+          {zoom ? (
+            <View style={[styles.tileZoom, { backgroundColor: colors.surface }]}>
+              <Ionicons name="expand-outline" size={14} color={colors.primary} />
+            </View>
+          ) : null}
+        </View>
+        <Text variant="label" numberOfLines={1} style={styles.tileText}>
+          {heading}
+        </Text>
+        {total !== null ? (
+          <Text variant="bodyStrong" numberOfLines={1} style={styles.tabular}>
+            {total}
+          </Text>
+        ) : null}
+        {date !== null ? (
+          <Text variant="caption" tone="muted" numberOfLines={1}>
+            {date}
+          </Text>
+        ) : null}
+        {note !== null ? (
+          <Text variant="caption" tone="warning" numberOfLines={1}>
+            {note}
+          </Text>
+        ) : null}
+      </PressableScale>
+    </Animated.View>
   );
 }
 
@@ -425,6 +551,22 @@ const styles = StyleSheet.create({
   invoiceRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   invoiceCard: { flexDirection: 'row', gap: spacing.lg, padding: spacing.lg, borderRadius: radius.xl, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center' },
   zoomHint: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: spacing.xs },
+  // The strip runs to the screen edges while its first and last tiles line up with the content.
+  stripBleed: { marginHorizontal: -spacing.xl },
+  strip: { paddingHorizontal: spacing.xl, gap: spacing.md },
+  tile: { width: TILE_W, padding: spacing.sm, gap: 2, borderRadius: radius.xl, borderWidth: StyleSheet.hairlineWidth },
+  tileText: { marginTop: spacing.xs },
+  tileZoom: {
+    position: 'absolute',
+    right: spacing.xs,
+    bottom: spacing.xs,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabular: { fontVariant: ['tabular-nums'] },
   actions: { paddingHorizontal: spacing.xl, paddingTop: spacing.md, gap: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth },
   actionRow: { flexDirection: 'row', gap: spacing.sm },
 });

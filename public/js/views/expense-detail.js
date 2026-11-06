@@ -1,5 +1,5 @@
-// Masraf detayı (GET /api/masraflar/:id): fields, the invoice and its file, the approval steps of
-// the latest round, the history, and the actions this user may take. Buttons come only from the
+// Masraf detayı (GET /api/masraflar/:id): fields, the invoices and their files, the approval steps
+// of the latest round, the history, and the actions this user may take. Buttons come only from the
 // server's `izinler`; the panel never works out the rules itself.
 
 import * as api from '../api.js';
@@ -34,6 +34,34 @@ function eventText(v) {
 function kv(label, value, { wide = false } = {}) {
   if (value === null || value === undefined || value === '') return null;
   return el('div', { className: wide ? 'kv-wide' : null }, el('dt', { text: label }), typeof value === 'string' ? el('dd', { text: value }) : el('dd', {}, value));
+}
+
+const invoicesOf = (d) => (Array.isArray(d?.faturalar) ? d.faturalar : []);
+
+/** Who the saved form would go to if sent now (POST /api/onay-akisi/onizle). */
+function previewBody(d) {
+  const body = { tutar: d.tutar, paraBirimi: d.paraBirimi };
+  if (d.kur !== null && d.kur !== undefined) body.kur = d.kur;
+  const ids = Array.isArray(d.faturaIdler) ? d.faturaIdler : invoicesOf(d).map((f) => f.id);
+  if (ids.length > 0) body.faturaIdler = ids;
+  return body;
+}
+
+/**
+ * Display only, mirroring comparableInvoiceTotal in src/expenses/rules.ts: an invoice adds to the
+ * amount when its grand total was read and its currency is the form's (or was not read).
+ */
+function countsToward(f, cur) {
+  const t = f?.genelToplam;
+  if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0) return false;
+  return f.paraBirimi === null || f.paraBirimi === undefined || f.paraBirimi === cur;
+}
+
+function invoiceNote(f, cur) {
+  let text = null;
+  if (typeof f.genelToplam !== 'number' || !(f.genelToplam > 0)) text = 'Genel toplam okunamadı; onay tutarına katılmaz.';
+  else if (!countsToward(f, cur)) text = `Fatura ${f.paraBirimi} cinsinden; masraf ${cur} olduğu için onay tutarına katılmaz.`;
+  return text ? el('p', { className: 'inv-card-note' }, icon(ICONS.info), el('span', { text })) : null;
 }
 
 export const expenseDetailView = {
@@ -71,10 +99,7 @@ export const expenseDetailView = {
 
     async function doSend(d) {
       const chainSlot = el('div', { className: 'chain-slot', 'aria-live': 'polite' }, el('p', { className: 'muted', text: 'Onaycılar hesaplanıyor…' }));
-      const body = { tutar: d.tutar, paraBirimi: d.paraBirimi };
-      if (d.kur !== null && d.kur !== undefined) body.kur = d.kur;
-      if (d.faturaId) body.faturaId = d.faturaId;
-      api.previewFlow(body).then((p) => {
+      api.previewFlow(previewBody(d)).then((p) => {
         if (!chainSlot.isConnected) return;
         if (p.ok) chainSlot.replaceChildren(el('p', { className: 'dlg-text', text: chainLead(p.body, 'masraf şu onaycılara sırayla gidecek:') }), approverChain(p.body));
         else if (!p.unauthorized) chainSlot.replaceChildren(el('p', { className: 'muted', text: p.error.mesaj }));
@@ -102,7 +127,12 @@ export const expenseDetailView = {
         },
         iptal: {
           title: 'Masrafı iptal et',
-          message: 'İptal edilen masraf geri alınamaz. Bağlı fatura başka bir masrafta kullanılabilir hale gelir.',
+          message: [
+            'İptal edilen masraf geri alınamaz.',
+            invoicesOf(d).length > 1 ? 'Bağlı faturalar başka bir masrafta kullanılabilir hale gelir.' : invoicesOf(d).length === 1 ? 'Bağlı fatura başka bir masrafta kullanılabilir hale gelir.' : null,
+          ]
+            .filter(Boolean)
+            .join(' '),
           confirmLabel: 'İptal et',
           confirmIcon: ICONS.ban,
           kind: 'danger',
@@ -236,33 +266,92 @@ export const expenseDetailView = {
       );
     }
 
+    function invoiceFacts(f, compact) {
+      return el(
+        'dl',
+        { className: compact ? 'kv compact' : 'kv' },
+        kv('Fatura no', f.faturaNo ?? 'Okunamadı'),
+        kv('Fatura tarihi', fmtDateLong(f.faturaTarihi)),
+        kv('Satıcı', f.saticiUnvan),
+        kv('Genel toplam', fmtCurrency(f.genelToplam, f.paraBirimi)),
+      );
+    }
+
+    const filePreview = (f) => invoicePreview({ url: api.invoiceFileUrl(f.id), mime: f.mime, name: f.dosyaAdi });
+
+    /** In a list the file loads only when its preview is opened. */
+    function lazyPreview(f, name) {
+      const slot = el('div', { className: 'inv-preview-body' });
+      const details = el('details', { className: 'inv-preview' }, el('summary', {}, icon(ICONS.chevronDown), el('span', { text: 'Önizleme' }), el('span', { className: 'visually-hidden', text: `: ${name}` })), slot);
+      details.addEventListener('toggle', () => {
+        if (details.open && !slot.firstChild) slot.append(filePreview(f));
+      });
+      return details;
+    }
+
+    function invoiceSum(d, list) {
+      const counted = list.filter((f) => countsToward(f, d.paraBirimi));
+      const left = list.length - counted.length;
+      const cents = counted.reduce((acc, f) => acc + Math.round(f.genelToplam * 100), 0);
+      return el(
+        'div',
+        { className: 'inv-sum' },
+        el(
+          'p',
+          { className: 'inv-sum-line' },
+          el('span', { text: counted.length > 0 ? `Faturaların toplamı · ${counted.length} fatura` : `${d.paraBirimi} cinsinden toplanacak fatura yok` }),
+          el('strong', { text: counted.length > 0 ? fmtCurrency(cents / 100, d.paraBirimi) : '—' }),
+        ),
+        left > 0 ? el('p', { className: 'inv-sum-note', text: `${left} fatura onay tutarına katılmıyor; nedeni altında yazıyor.` }) : null,
+      );
+    }
+
     function invoiceCard(d) {
-      const f = d.fatura;
-      const headNodes = [el('h2', { className: 'card-title', id: 'inv-title', text: 'Fatura' })];
-      if (!f) {
+      const list = invoicesOf(d);
+      const title = el('h2', { className: 'card-title', id: 'inv-title', text: list.length > 1 ? 'Faturalar' : 'Fatura' });
+      if (list.length === 0) {
         return el(
           'section',
           { className: 'card', 'aria-labelledby': 'inv-title' },
-          ...headNodes,
+          title,
           el('p', { className: 'muted', text: 'Bu masrafa fatura eklenmemiş.' }),
           d.izinler?.duzenle ? btn('Fatura ekle', { icon: ICONS.upload, href: `#/masraflar/${d.id}/duzenle` }) : null,
         );
       }
+      if (list.length === 1) {
+        const f = list[0];
+        return el(
+          'section',
+          { className: 'card', 'aria-labelledby': 'inv-title' },
+          el('div', { className: 'card-head' }, title, el('a', { className: 'card-link', href: `#/okuma/${encodeURIComponent(f.id)}`, text: 'Okunan faturayı aç' })),
+          invoiceFacts(f, false),
+          invoiceNote(f, d.paraBirimi),
+          f.dosyaVar ? filePreview(f) : el('p', { className: 'muted', text: 'Bu faturanın orijinal dosyası saklanmamış.' }),
+        );
+      }
+      const items = list.map((f, i) => {
+        const name = f.dosyaAdi || (f.faturaNo ? `Fatura ${f.faturaNo}` : `${i + 1}. fatura`);
+        return el(
+          'li',
+          { className: 'inv-item' },
+          el(
+            'div',
+            { className: 'inv-item-head' },
+            el('span', { className: 'inv-n', 'aria-hidden': 'true' }),
+            el('p', { className: 'inv-item-title', text: name }),
+            el('a', { className: 'card-link', href: `#/okuma/${encodeURIComponent(f.id)}`, text: 'Okunan faturayı aç', 'aria-label': `Okunan faturayı aç: ${name}` }),
+          ),
+          invoiceFacts(f, true),
+          invoiceNote(f, d.paraBirimi),
+          f.dosyaVar ? lazyPreview(f, name) : el('p', { className: 'muted small', text: 'Bu faturanın orijinal dosyası saklanmamış.' }),
+        );
+      });
       return el(
         'section',
         { className: 'card', 'aria-labelledby': 'inv-title' },
-        el('div', { className: 'card-head' }, ...headNodes, el('a', { className: 'card-link', href: `#/okuma/${encodeURIComponent(f.id)}`, text: 'Okunan faturayı aç' })),
-        el(
-          'dl',
-          { className: 'kv' },
-          kv('Fatura no', f.faturaNo ?? 'Okunamadı'),
-          kv('Fatura tarihi', fmtDateLong(f.faturaTarihi)),
-          kv('Satıcı', f.saticiUnvan),
-          kv('Genel toplam', fmtCurrency(f.genelToplam, f.paraBirimi)),
-        ),
-        f.dosyaVar
-          ? invoicePreview({ url: api.invoiceFileUrl(f.id), mime: f.mime, name: f.dosyaAdi })
-          : el('p', { className: 'muted', text: 'Bu faturanın orijinal dosyası saklanmamış.' }),
+        el('div', { className: 'card-head' }, title, el('span', { className: 'tag', text: `${list.length} fatura` })),
+        el('ol', { className: 'inv-items', role: 'list' }, ...items),
+        invoiceSum(d, list),
       );
     }
 
@@ -277,10 +366,7 @@ export const expenseDetailView = {
         if (d.izinler?.gonder) {
           const slot = el('div', { className: 'chain-slot', 'aria-live': 'polite' }, el('p', { className: 'muted', text: 'Onaycılar hesaplanıyor…' }));
           card.append(slot);
-          const body = { tutar: d.tutar, paraBirimi: d.paraBirimi };
-          if (d.kur !== null && d.kur !== undefined) body.kur = d.kur;
-          if (d.faturaId) body.faturaId = d.faturaId;
-          api.previewFlow(body, { signal }).then((p) => {
+          api.previewFlow(previewBody(d), { signal }).then((p) => {
             if (!slot.isConnected || !p.ok) {
               if (slot.isConnected) slot.replaceChildren(el('p', { className: 'muted', text: 'Henüz onaya gönderilmedi.' }));
               return;
@@ -354,10 +440,12 @@ export const expenseDetailView = {
         const step = (d.onaylar ?? []).find((s) => s.durum === 'reddedildi');
         if (step) rejection = alertBox('err', `${step.onayci?.adSoyad ?? 'Onaycı'} masrafı reddetti`, [step.aciklama ? `Neden: ${step.aciklama}` : null]);
       }
+      const many = invoicesOf(d).length > 1;
       const diff = d.tutarFarki
-        ? alertBox('warn', 'Beyan edilen tutar faturadan farklı', [
-            // Both figures are in the form's own currency (contract: tutarFarki).
-            `Faturanın genel toplamı ${fmtCurrency(d.tutarFarki.fatura, d.paraBirimi ?? base)}, beyan edilen tutar ${fmtCurrency(d.tutarFarki.beyan, d.paraBirimi ?? base)}. Onay tutarı ikisinden büyük olan ${fmtCurrency(Math.max(d.tutarFarki.fatura, d.tutarFarki.beyan), d.paraBirimi ?? base)} üzerinden belirlendi.`,
+        ? alertBox('warn', many ? 'Beyan edilen tutar faturalardan farklı' : 'Beyan edilen tutar faturadan farklı', [
+            // Both figures are in the form's own currency (contract: tutarFarki); `fatura` is the
+            // total of the invoices that count toward it.
+            `${many ? 'Faturaların' : 'Faturanın'} genel toplamı ${fmtCurrency(d.tutarFarki.fatura, d.paraBirimi ?? base)}, beyan edilen tutar ${fmtCurrency(d.tutarFarki.beyan, d.paraBirimi ?? base)}. Onay tutarı ikisinden büyük olan ${fmtCurrency(Math.max(d.tutarFarki.fatura, d.tutarFarki.beyan), d.paraBirimi ?? base)} üzerinden belirlendi.`,
           ])
         : null;
 
