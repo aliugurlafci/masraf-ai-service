@@ -1,0 +1,931 @@
+/*
+ * Fatura Okuyucu panel.
+ * Visual idea: the result is printed on Turkish "sürekli form" paper (tractor-feed
+ * holes, green-bar rows, double rule under the grand total). Everything around the
+ * sheet stays quiet.
+ */
+:root {
+  --desk: #e6e9ec;
+  --text: #1e2533;
+  --text-soft: #586172;
+  --line: #c9cfd6;
+  --selected: #dde1f5;
+
+  --paper: #fcfdfb;
+  --ink: #1e2533;
+  --ink-soft: #5e6676;
+  --paper-rule: #d3d9d3;
+  --band: #e4f0e5;
+
+  --stamp: #3440a6;
+  --on-stamp: #ffffff;
+  --ok: #2d6a43;
+  --warn: #835600;
+  --warn-bg: #fff3d1;
+  --error: #a8251c;
+
+  --font: 'Bahnschrift', 'DIN Alternate', 'Barlow', 'Segoe UI', sans-serif;
+  --mono: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --desk: #1b2027;
+    --text: #e3e7ec;
+    --text-soft: #9aa3b0;
+    --line: #343b46;
+    --selected: #2a3150;
+
+    /* Paper stays paper: dimmed, never inverted. */
+    --paper: #dadfd9;
+    --ink: #1a202b;
+    --ink-soft: #4b5462;
+    --paper-rule: #bcc4bc;
+    --band: #c8dcc9;
+
+    --stamp: #a3abf5;
+    --on-stamp: #141833;
+    --ok: #1f5234;
+    --warn: #6b4600;
+    --warn-bg: #f3e2b4;
+    --error: #8f1f17;
+
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--desk);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--stamp);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- Frame ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'brand main'
+    'history main';
+  height: 100vh;
+}
+
+.brand {
+  grid-area: brand;
+  padding: 22px 20px 18px;
+  border-right: 1px solid var(--line);
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  font-stretch: 87.5%;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+.brand p {
+  margin: 6px 0 16px;
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+.history {
+  grid-area: history;
+  overflow-y: auto;
+  padding: 4px 12px 24px;
+  border-right: 1px solid var(--line);
+}
+
+main {
+  grid-area: main;
+  overflow-y: auto;
+  padding: 18px clamp(16px, 4vw, 48px) 56px;
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--text-soft);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn[hidden] {
+  display: none;
+}
+
+.btn-primary {
+  width: 100%;
+  border-color: var(--stamp);
+  background: var(--stamp);
+  color: var(--on-stamp);
+  font-size: 15px;
+  min-height: 42px;
+}
+
+.btn-primary:hover:not(:disabled) {
+  border-color: var(--stamp);
+  filter: brightness(1.08);
+}
+
+/* Buttons that sit on the paper. */
+.sheet .btn {
+  border-color: var(--paper-rule);
+  color: var(--ink);
+}
+
+.sheet .btn-primary {
+  width: auto;
+  border-color: #3440a6;
+  background: #3440a6;
+  color: #fff;
+}
+
+/* ---------- History ---------- */
+
+.history h2 {
+  margin: 8px 8px 4px;
+  font-size: 16px;
+  font-weight: 700;
+  font-stretch: 87.5%;
+}
+
+.history .day {
+  margin: 14px 8px 4px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-soft);
+}
+
+.history ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  width: 100%;
+  padding: 9px 8px 9px 10px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 0 4px 4px 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-item:hover {
+  background: color-mix(in srgb, var(--selected) 55%, transparent);
+}
+
+.history-item[aria-current='true'] {
+  border-left-color: var(--stamp);
+  background: var(--selected);
+}
+
+.history-item .who {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.history-item .no,
+.history-item .sum {
+  font-size: 13px;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.history-item .no {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history .empty {
+  margin: 4px 8px;
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+/* ---------- Toolbar ---------- */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  max-width: 920px;
+  margin: 0 auto 14px;
+}
+
+.tabs {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.tab {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tab[aria-selected='true'] {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.tab[hidden] {
+  display: none;
+}
+
+.tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.status {
+  flex: 1 1 200px;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- Sheet (sürekli form) ---------- */
+
+.sheet {
+  --margin: 40px;
+  --hole: 5px;
+  position: relative;
+  max-width: 920px;
+  min-height: 520px;
+  margin: 0 auto;
+  padding: 34px calc(var(--margin) + 26px) 40px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent),
+    0 22px 36px -30px rgb(20 30 50 / 0.45);
+}
+
+/* Tractor-feed margins: the holes show the desk through the paper. */
+.sheet::before,
+.sheet::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--margin);
+  background-image: radial-gradient(
+    circle at 50% 12px,
+    var(--desk) var(--hole),
+    transparent calc(var(--hole) + 0.5px)
+  );
+  background-size: 100% 24px;
+  pointer-events: none;
+}
+
+.sheet::before {
+  left: 0;
+  border-right: 1px dashed var(--paper-rule);
+}
+
+.sheet::after {
+  right: 0;
+  border-left: 1px dashed var(--paper-rule);
+}
+
+/*
+ * Blank form: green bars between the perforations. Text on the blank form sits on
+ * a 24px grid (two lines per bar), so a line never straddles a bar edge.
+ */
+.sheet[data-state='empty'],
+.sheet[data-state='reading'] {
+  padding-top: 0;
+  padding-bottom: 0;
+  background-image: linear-gradient(to bottom, transparent 0 48px, var(--band) 48px 96px);
+  background-repeat: repeat-y;
+  background-size: calc(100% - 2 * var(--margin)) 96px;
+  background-position: var(--margin) 0;
+}
+
+.sheet[data-state='reading'] {
+  animation: feed 2.4s linear infinite;
+}
+
+/* Paper feeding through the printer while Claude reads. */
+@keyframes feed {
+  from {
+    background-position: var(--margin) 0;
+  }
+  to {
+    background-position: var(--margin) -96px;
+  }
+}
+
+.sheet.dropping {
+  outline: 2px dashed var(--stamp);
+  outline-offset: 6px;
+}
+
+/* ---------- Sheet: empty / reading / error ---------- */
+
+.notice {
+  max-width: 52ch;
+  padding: 96px 0;
+}
+
+.notice h2 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 700;
+  font-stretch: 87.5%;
+  line-height: 48px;
+  letter-spacing: -0.01em;
+}
+
+/* No paragraph margins: on the blank form the bars themselves separate paragraphs. */
+.notice p {
+  margin: 0;
+  line-height: 24px;
+  color: var(--ink-soft);
+}
+
+.notice .buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-top: 48px;
+}
+
+.notice .elapsed {
+  margin: 0;
+  font-size: 44px;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  line-height: 72px;
+}
+
+/* The error notice is printed on plain paper, so it can use normal spacing. */
+.notice.error {
+  padding: 34px 0 0;
+}
+
+.notice.error h2 {
+  margin-bottom: 8px;
+  line-height: 1.15;
+}
+
+.notice.error p {
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.notice.error .buttons {
+  margin-top: 20px;
+}
+
+.notice.error h2 {
+  color: var(--error);
+}
+
+.notice .code {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+/* ---------- Sheet: printed invoice ---------- */
+
+.doc-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px 32px;
+  padding-bottom: 18px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.label {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.doc-no {
+  margin: 0;
+  font-size: clamp(24px, 3.4vw, 34px);
+  font-weight: 700;
+  font-stretch: 87.5%;
+  letter-spacing: 0.01em;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.doc-no.unknown {
+  font-size: 20px;
+  font-weight: 400;
+  font-style: italic;
+  font-stretch: 100%;
+  color: var(--ink-soft);
+}
+
+.doc-meta {
+  display: flex;
+  gap: 28px;
+  margin: 0;
+}
+
+.doc-meta div {
+  text-align: right;
+}
+
+.doc-meta dd {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.parties {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 40px;
+  padding: 20px 0 22px;
+}
+
+.party .name {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.party .tax {
+  margin: 0;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.missing {
+  color: var(--ink-soft);
+  font-weight: 400;
+  font-style: italic;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 -8px;
+}
+
+table.lines {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.lines th {
+  padding: 8px;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.lines td {
+  padding: 9px 8px;
+  vertical-align: top;
+}
+
+.lines tbody tr:nth-child(odd) {
+  background: var(--band);
+}
+
+.lines .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.lines td.desc {
+  width: 42%;
+}
+
+.lines .no-lines td {
+  padding: 18px 8px;
+  color: var(--ink-soft);
+  background: transparent;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  gap: 24px 40px;
+  align-items: start;
+  margin-top: 22px;
+}
+
+.totals {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.totals div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 5px 0;
+}
+
+.totals dt {
+  color: var(--ink-soft);
+}
+
+.totals dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* Accounting convention: single rule above the grand total, double rule below. */
+.totals .grand {
+  margin-top: 6px;
+  padding: 8px 0 6px;
+  border-top: 1px solid var(--ink);
+  border-bottom: 4px double var(--ink);
+  font-size: 21px;
+}
+
+.totals .grand dt {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.totals .grand dd {
+  font-weight: 700;
+}
+
+.checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+.checks li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.checks svg {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.checks .ok {
+  color: var(--ok);
+}
+
+.checks .warn {
+  color: var(--warn);
+}
+
+.checks .warn span {
+  color: var(--ink);
+}
+
+.checks .warn {
+  margin: 2px 0;
+  padding: 6px 8px;
+  background: var(--warn-bg);
+  border-radius: 4px;
+}
+
+/* One orchestrated moment: the invoice prints line by line. */
+@media (prefers-reduced-motion: no-preference) {
+  .print {
+    animation: print 0.28s steps(6, end) both;
+    animation-delay: calc(var(--i, 0) * 45ms);
+  }
+}
+
+@keyframes print {
+  from {
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    clip-path: inset(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet[data-state='reading'] {
+    animation: none;
+  }
+}
+
+/* ---------- Measurements (on the desk, not on the paper) ---------- */
+
+.metrics {
+  max-width: 920px;
+  margin: 22px auto 0;
+}
+
+.metrics[hidden] {
+  display: none;
+}
+
+.metrics h2 {
+  margin: 0 0 2px;
+  font-size: 16px;
+  font-weight: 700;
+  font-stretch: 87.5%;
+}
+
+.metrics .source {
+  margin: 0 0 12px;
+  max-width: 75ch;
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+.metrics dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.metrics dl div {
+  padding: 10px 16px 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.metrics dt {
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.metrics dd {
+  margin: 2px 0 0;
+  font-size: 19px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.metrics h3 {
+  margin: 18px 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.metrics ol.steps {
+  margin: 0;
+  padding: 0 0 0 1.4em;
+  max-width: 75ch;
+  font-size: 14px;
+  color: var(--text-soft);
+}
+
+.metrics ol.steps li {
+  padding: 3px 0;
+}
+
+.metrics ol.steps li.used {
+  color: var(--text);
+}
+
+.metrics .step-model {
+  display: block;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.metrics .note {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* ---------- JSON and original file ---------- */
+
+.json {
+  margin: 0;
+  padding-top: 6px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  tab-size: 2;
+}
+
+.json .k {
+  color: #3440a6;
+}
+
+.json .s {
+  color: #2d6a43;
+}
+
+.json .n {
+  color: #7a3e9d;
+}
+
+.json .z {
+  color: var(--ink-soft);
+}
+
+.original {
+  display: block;
+  width: 100%;
+  height: 75vh;
+  border: 1px solid var(--paper-rule);
+  background: #fff;
+}
+
+img.original {
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+}
+
+/* ---------- Drag overlay ---------- */
+
+.drop-hint {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--desk) 70%, transparent);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.drop-hint p {
+  margin: 0;
+  padding: 16px 22px;
+  border: 2px dashed var(--stamp);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.drop-hint[hidden] {
+  display: none;
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 860px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    grid-template-areas:
+      'brand'
+      'main'
+      'history';
+    height: auto;
+  }
+
+  .brand,
+  .history {
+    border-right: 0;
+  }
+
+  .brand {
+    padding: 16px 16px 12px;
+  }
+
+  .history {
+    overflow: visible;
+    padding: 8px 8px 32px;
+    border-top: 1px solid var(--line);
+  }
+
+  main {
+    overflow: visible;
+    padding: 4px 16px 28px;
+  }
+
+  .sheet {
+    --margin: 22px;
+    --hole: 3.5px;
+    min-height: 420px;
+    padding: 24px calc(var(--margin) + 14px) 28px;
+  }
+
+  .parties,
+  .summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .metrics dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notice {
+    padding: 48px 0;
+  }
+
+  .notice h2 {
+    margin-bottom: 24px;
+    font-size: 22px;
+    line-height: 24px;
+  }
+
+  .doc-meta div {
+    text-align: left;
+  }
+}

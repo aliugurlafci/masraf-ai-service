@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fatura Okuyucu</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="brand">
+        <h1>Fatura Okuyucu</h1>
+        <p>PDF ya da resim faturayı okur, bilgilerini ve kalemlerini JSON olarak verir.</p>
+        <button id="upload" class="btn btn-primary" type="button">Fatura yükle</button>
+        <input id="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,image/gif" hidden />
+      </header>
+
+      <main>
+        <div class="toolbar">
+          <div class="tabs" role="tablist" aria-label="Görünüm">
+            <button class="tab" role="tab" id="tab-fatura" aria-controls="sheet" aria-selected="true" data-view="fatura">
+              Fatura
+            </button>
+            <button class="tab" role="tab" id="tab-json" aria-controls="sheet" aria-selected="false" tabindex="-1" data-view="json">
+              JSON
+            </button>
+            <button
+              class="tab"
+              role="tab"
+              id="tab-orijinal"
+              aria-controls="sheet"
+              aria-selected="false"
+              tabindex="-1"
+              data-view="orijinal"
+              hidden
+            >
+              Orijinal dosya
+            </button>
+          </div>
+          <p id="status" class="status" role="status" aria-live="polite"></p>
+          <div class="actions">
+            <button id="reread" class="btn" type="button" hidden>Yeniden oku</button>
+            <button id="copy" class="btn" type="button" disabled>JSON'u kopyala</button>
+            <button id="download" class="btn" type="button" disabled>JSON'u indir</button>
+          </div>
+        </div>
+
+        <article id="sheet" class="sheet" role="tabpanel" aria-labelledby="tab-fatura" data-state="empty"></article>
+
+        <section id="metrics" class="metrics" aria-labelledby="metrics-title" hidden></section>
+      </main>
+
+      <nav class="history" aria-labelledby="history-title">
+        <h2 id="history-title">Geçmiş</h2>
+        <div id="history"></div>
+      </nav>
+    </div>
+
+    <div id="drop-hint" class="drop-hint" hidden><p>Dosyayı bırakın, okumaya başlasın</p></div>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

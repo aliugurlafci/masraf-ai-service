@@ -1,25 +1,13 @@
 node_modules/
-dist/
 coverage/
-test-results/
-.vite/
 *.log
-
 .env
-!tests/.env.test.example
 
+# Okunan faturaların JSON kayıtları (yerel veri)
+data/
+
+# Claude abonelik token'ı: yalnızca README izlenir
 secrets/*
-!secrets/.gitkeep
 !secrets/README.md
 
-workspaces/*
-!workspaces/.gitkeep
-
-projects/*
-!projects/.gitkeep
-!projects/README.md
-
 .codebase-memory/
-
-# test reports (npm run test:report)
-reports/
