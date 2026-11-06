@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
-import type { DetectedFile } from './file-type.ts';
-import { InvoiceSchema, invoiceJsonSchema, type Invoice } from './invoice-schema.ts';
+import type { DetectedFile } from '../invoice/file-type.ts';
+import { InvoiceSchema, invoiceJsonSchema, type Invoice } from '../invoice/schema.ts';
 import type { ClaudeOlcum } from './olcum.ts';
 
 export type ExtractionErrorCode = 'claude_auth' | 'claude_limit' | 'claude_failed' | 'claude_timeout' | 'invalid_output';
@@ -58,7 +58,12 @@ export interface Extraction {
   readonly olcum: ClaudeOlcum;
 }
 
-export type ExtractInvoice = (file: InvoiceFile) => Promise<Extraction>;
+export interface ExtractHooks {
+  /** Called when a model starts on the file; a cascade calls it once per model it tries. */
+  readonly onModel?: (model: string) => void;
+}
+
+export type ExtractInvoice = (file: InvoiceFile, hooks?: ExtractHooks) => Promise<Extraction>;
 
 const MAX_STDOUT_BYTES = 5 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
@@ -275,13 +280,16 @@ export function createSemaphore(limit: number): <T>(task: () => Promise<T>) => P
   let active = 0;
   const waiting: Array<() => void> = [];
   return async <T>(task: () => Promise<T>): Promise<T> => {
-    if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
-    active += 1;
+    if (active < limit) active += 1;
+    else await new Promise<void>((resolve) => waiting.push(resolve)); // the slot is handed over; active stays
     try {
       return await task();
     } finally {
-      active -= 1;
-      waiting.shift()?.();
+      const next = waiting.shift();
+      // The slot goes straight to the next task, so no newcomer can slip in between. The hand-over
+      // waits for the next turn of the event loop: whoever awaited this task hears that it ended first.
+      if (next) setImmediate(next);
+      else active -= 1;
     }
   };
 }
@@ -332,8 +340,9 @@ export function createClaudeExtractor(opts: ExtractorOptions): ExtractInvoice {
   const limit = createSemaphore(opts.maxConcurrent);
   const redact = (text: string): string => text.split(opts.oauthToken).join('[gizli]');
 
-  return (file) =>
+  return (file, hooks) =>
     limit(async () => {
+      hooks?.onModel?.(opts.model);
       const work = await mkdtemp(join(tmpdir(), 'fatura-'));
       try {
         const home = join(work, 'home');

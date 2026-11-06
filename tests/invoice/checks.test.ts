@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { findProblems } from '../src/invoice-checks.ts';
-import type { Invoice } from '../src/invoice-schema.ts';
-import { sampleInvoice } from './helpers.ts';
+import { findProblems } from '../../src/invoice/checks.ts';
+import type { Invoice } from '../../src/invoice/schema.ts';
+import { sampleInvoice } from '../helpers.ts';
 
 /** A read whose numbers all add up: 2 × 500 = 1000, 1000 + 200 = 1200. */
 const consistent = (): Invoice => sampleInvoice({ araToplam: 1000, kdvToplam: 200, genelToplam: 1200 });

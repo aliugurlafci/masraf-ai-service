@@ -2,24 +2,29 @@
   "name": "masraf-ai-service",
   "version": "1.0.0",
   "private": true,
-  "description": "Fatura dosyasını (PDF/resim) yerel Claude Code aboneliğiyle okuyup fatura ve kalemlerini JSON olarak döndüren yerel servis",
+  "description": "Masraf yönetimi: faturayı yerel Claude Code aboneliğiyle okur, masraf formlarını tutar aralığına göre onaycılara yönlendirir; veriler Docker'daki SQL Server'da",
   "type": "module",
   "engines": {
     "node": ">=24.18.0"
   },
   "scripts": {
-    "start": "node src/server.ts",
-    "dev": "node --watch src/server.ts",
-    "karsilastir": "node src/compare-models.ts",
+    "start": "node --env-file-if-exists=.env src/server.ts",
+    "dev": "node --env-file-if-exists=.env --watch src/server.ts",
+    "karsilastir": "node --env-file-if-exists=.env src/tools/compare-models.ts",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs --tail 100 mssql",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "express": "5.3.0",
+    "mssql": "12.7.14",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/express": "5.0.6",
+    "@types/mssql": "12.3.0",
     "@types/node": "24.19.2",
     "typescript": "6.0.3",
     "vitest": "5.0.5"

@@ -1,23 +1,52 @@
-# Fatura Okuyucu
+# Masraf
 
-PDF veya resim olarak verilen faturayı kendi Claude aboneliğinizle okur ve sonucu sade bir JSON olarak döndürür. JSON'da yalnızca fatura bilgileri ve fatura kalemleri bulunur. Servis yalnızca sizin makinenizde (`127.0.0.1`) çalışır.
+Şirket içi masraf yönetimi. Çalışan fişini ya da faturasını yükler, fatura kendi Claude aboneliğinizle okunur ve masraf formu dolar. Form, tutarına göre onay akışındaki onaycılara sırayla gider; onaylanan masraflar muhasebe tarafından ödendi olarak işaretlenir. Bütün veriler Docker'da çalışan SQL Server'da tutulur. Servis varsayılan olarak yalnızca sizin makinenizde (`127.0.0.1`) çalışır; telefondan kullanmak için aynı Wi-Fi'ye açılabilir (`AG_ERISIMI`).
 
-Dosyayı iki yoldan gönderebilirsiniz:
+- **Web paneli** (`http://127.0.0.1:4000`): masraflar, onay kutusu, fatura okuma ve canlı izleme; yöneticiler için kullanıcılar, onay akışı, kategoriler ve denetim kaydı.
+- **Mobil uygulama** (`masraf-app/`, React Native Expo): fişi fotoğraflayıp masraf oluşturma, onaylama. Kurulumu `masraf-app/README.md` dosyasındadır.
+- **API**: panelin ve mobil uygulamanın kullandığı uçların hepsi. Onay sisteminin kuralları ve API sözleşmesi `docs/onay-sistemi.md` dosyasındadır.
 
-- **Panel:** `http://127.0.0.1:4000` adresine dosyayı sürükleyip bırakın.
-- **API:** `POST /api/invoices` ucuna gönderin.
+## Onay sistemi kısaca
 
-Her sonuç `data/invoices/<YYYY-MM-DD>/<id>.json` dosyasına kaydedilir. Panelin "Geçmiş" listesi bu kayıtları gösterir.
+- Yönetici "Onay akışı" sayfasında birden çok adlandırılmış onay akışı (onay stratejisi) tanımlayabilir: örneğin "Satış", "Yönetim". Biri varsayılandır. Her kullanıcı "Kullanıcılar" sayfasından bir akışa atanır; atanmamış kullanıcılar varsayılan akışı kullanır.
+- Her akışta onaycılar sırayla tanımlanır. Her onaycının bir tutar aralığı vardır (alt limit, üst limit; üst limit boşsa sınırsız). Her akışta en az bir onaycı olmak zorundadır ve aralıklar 0'dan sınırsıza kadar her tutarı kapsamalıdır; boşluk varsa akış kaydedilmez. Aynı kişi farklı akışlarda farklı aralıklarla yer alabilir.
+- Gönderilen form, gönderenin akışında tutarı aralığına giren bütün onaycılara akıştaki sırayla gider. Önce 1. onaycı karar verir, onaylarsa sıradaki. Aralıklar çakışmıyorsa (0–5.000, 5.000,01–50.000, …) tek onaycı karar verir; çakışıyorsa (0–∞, 5.000,01–∞, …) büyük tutarlar birden çok onaydan geçer.
+- Bir masrafa birden çok fatura eklenebilir (en çok 20; örneğin bir seyahatin otel, taksi ve yemek fişleri). Bir fatura iptal edilmemiş yalnızca bir masrafta kullanılabilir.
+- Yönlendirmede kullanılan tutar, beyan edilen tutar ile bağlı faturaların genel toplamlarının toplamından büyük olanıdır (yabancı para biriminde kurla çevrilir; formdan farklı para birimindeki faturalar toplama girmez).
+- Gönderenin kendisi onaycıysa kendi adımı atlanır. Eşleşen tek onaycı kendisiyse form bir yöneticiye gider.
+- Reddedilen form sahibine döner; düzeltilip yeniden gönderilebilir. Yönetici bekleyen bir onayı başka bir kullanıcıya devredebilir.
+
+Roller: `calisan` (kendi masrafları ve onaycısı olduğu formlar), `muhasebe` (bütün masrafları görür, ödendi işaretler, dışa aktarır), `yonetici` (her şey; kullanıcılar, onay akışları, kategoriler). Onaycı olmak bir rol değildir: bir akışa eklenen herkes onaycıdır.
 
 ## Gereksinimler
 
 - Node.js 24.18 veya üstü
+- Docker Desktop (SQL Server 2022 konteyneri için)
 - Claude Code CLI (`claude --version` çalışmalı)
 - Claude Pro veya Max aboneliği (API anahtarı gerekmez)
 
 ## Kurulum
 
-1. Abonelik token'ı alın:
+1. Ayar dosyasını oluşturun:
+
+   ```
+   copy env.example .env
+   ```
+
+   `.env` içinde en az şunları doldurun:
+
+   - `MSSQL_PASSWORD`: SQL Server `sa` şifresi. En az 8 karakter; büyük harf, küçük harf, rakam ve sembolden en az üçü.
+   - `ILK_YONETICI_EPOSTA`, `ILK_YONETICI_SIFRE`: ilk açılışta oluşturulacak yönetici. Şifre en az 8 karakter, en az bir harf ve bir rakam.
+
+2. Veritabanını başlatın:
+
+   ```
+   npm run db:up
+   ```
+
+   SQL Server konteyneri `127.0.0.1:1433` üzerinde açılır, veriler `mssql-data` Docker biriminde kalır. Sunucu ilk açılışta `MSSQL_DATABASE` veritabanını ve tabloları kendisi oluşturur. Durdurmak için `npm run db:down` (veriler silinmez).
+
+3. Abonelik token'ı alın:
 
    ```
    claude setup-token
@@ -25,33 +54,45 @@ Her sonuç `data/invoices/<YYYY-MM-DD>/<id>.json` dosyasına kaydedilir. Panelin
 
    Çıkan `sk-ant-oat01-…` değerini `secrets/claude_oauth_token.txt` dosyasına tek satır olarak kaydedin. Bu dosya git'e girmez. Token'ı kimseyle paylaşmayın.
 
-2. Bağımlılıkları kurun ve servisi başlatın:
+4. Bağımlılıkları kurun ve servisi başlatın:
 
    ```
    npm install
    npm start
    ```
 
-3. Tarayıcıda `http://127.0.0.1:4000` adresini açın.
+   İlk açılışta konsolda "İlk yönetici oluşturuldu" yazar. Bundan sonra `.env` içindeki `ILK_YONETICI_SIFRE` değerini silebilirsiniz.
+
+5. Tarayıcıda `http://127.0.0.1:4000` adresini açın ve ilk yöneticiyle giriş yapın. "Onay akışı" sayfasından onaycıları ve tutar aralıklarını tanımlayın (gerekirse ekip başına ayrı akışlar ekleyin), "Kullanıcılar" sayfasından çalışanları ekleyip akışlarına atayın. Yeni kullanıcılar ilk girişte şifrelerini değiştirir.
 
 ## API
 
-Bir fatura okumak bir dakika kadar sürebilir. Aynı anda en fazla 2 fatura okunur; diğerleri sırada bekler.
+`/health` ve `POST /api/oturum` dışındaki bütün uçlar oturum ister. Panel çerezle çalışır; API istemcileri ve mobil uygulama token alır:
 
-Postman kullanıyorsanız kök dizindeki `fatura-okuyucu.postman_collection.json` dosyasını içe aktarın (Import). Koleksiyonda aşağıdaki isteklerin hepsi ve örnek yanıtları var. "Fatura oku" isteklerinde dosyayı Postman'da seçmeniz yeterli.
+```
+curl.exe -H "Content-Type: application/json" -d "{\"eposta\":\"ali@firma.com\",\"sifre\":\"…\",\"istemci\":\"api\"}" http://127.0.0.1:4000/api/oturum
+```
+
+Yanıttaki `token` değerini sonraki isteklerde `Authorization: Bearer <token>` başlığıyla gönderin. Oturum `OTURUM_SURESI_SAAT` kadar geçerlidir ve kullanıldıkça uzar. Aşağıdaki örneklerde PowerShell'de önce `$t = "<token>"` yazdığınız varsayılır.
+
+Masraf, onay, kullanıcı, onay akışı ve kategori uçlarının tamamı `docs/onay-sistemi.md` dosyasının 6. bölümündedir. Bu bölüm fatura okuma uçlarını anlatır.
+
+Bir fatura okumak bir dakika kadar sürebilir. Aynı anda en fazla 2 fatura okunur (`CLAUDE_MAX_CONCURRENT`); diğerleri sırada bekler. Bu sınır tekli ve çoklu gönderimler için ortaktır.
+
+Postman kullanıyorsanız kök dizindeki `fatura-okuyucu.postman_collection.json` dosyasını içe aktarın (Import). Koleksiyonun `eposta` ve `sifre` değişkenlerini doldurup önce "Giriş yap" isteğini çalıştırın; token koleksiyona kaydedilir ve diğer istekler onu kullanır. "Fatura oku" isteklerinde dosyayı Postman'da seçmeniz yeterli.
 
 ### Fatura gönderme
 
 Multipart form ile, dosya `file` alanında:
 
 ```
-curl.exe -F "file=@fatura.pdf" http://127.0.0.1:4000/api/invoices
+curl.exe -H "Authorization: Bearer $t" -F "file=@fatura.pdf" http://127.0.0.1:4000/api/invoices
 ```
 
 Ya da dosyanın kendisi istek gövdesinde:
 
 ```
-curl.exe --data-binary "@fatura.pdf" -H "Content-Type: application/pdf" -H "X-File-Name: fatura.pdf" http://127.0.0.1:4000/api/invoices
+curl.exe -H "Authorization: Bearer $t" --data-binary "@fatura.pdf" -H "Content-Type: application/pdf" -H "X-File-Name: fatura.pdf" http://127.0.0.1:4000/api/invoices
 ```
 
 - Windows PowerShell'de `curl` başka bir komutun takma adıdır; `curl.exe` yazın.
@@ -130,51 +171,153 @@ Alanların biçimi:
 - `kdvOrani` yüzde değeridir; %20 için `20` yazılır.
 - `paraBirimi` ISO 4217 kodudur (`TRY`, `USD`, `EUR`).
 
-### Kayıtlar
+### Çoklu gönderme (kuyruk)
+
+Birden fazla dosyayı tek istekte multipart form ile gönderin. Alan adı önemli değildir; formdaki her dosya alınır:
+
+```
+curl.exe -H "Authorization: Bearer $t" -F "files=@ekim.pdf" -F "files=@kasim.pdf" -F "files=@fis.jpg" http://127.0.0.1:4000/api/invoices/toplu
+```
+
+Sunucu Claude okumasını beklemeden yanıt verir. `Location` başlığı kuyruğun adresidir.
+
+- Daha önce okunmuş dosyalar yanıtta hemen `bitti` olarak, faturalarıyla (`sonuc`) birlikte gelir.
+- Dosyaların hepsi daha önce okunmuşsa (ya da reddedildiyse) durum `200`, `bitti: true` olur; başka istek gerekmez.
+- Claude'un okuması gereken dosya varsa durum `202` olur; bu dosyalar `sirada` ya da `okunuyor` görünür.
+
+```json
+{
+  "id": "20261106-110215-8c1f02ab",
+  "olusturulma": "2026-11-06T11:02:15.120Z",
+  "bitti": false,
+  "esZamanli": 2,
+  "sayac": { "toplam": 3, "sirada": 1, "okunuyor": 1, "bitti": 1, "hata": 0 },
+  "dosyalar": [
+    { "sira": 1, "dosyaAdi": "ekim.pdf", "durum": "bitti", "kayitId": "20261105-163012-0b9c44d1", "onbellek": true, "hata": null,
+      "sonuc": { "fatura": { "faturaNo": "ABC2026000000123", "…": "…" }, "kalemler": [ { "aciklama": "Danışmanlık", "…": "…" } ] } },
+    { "sira": 2, "dosyaAdi": "kasim.pdf", "durum": "okunuyor", "kayitId": null, "onbellek": false, "hata": null, "sonuc": null },
+    { "sira": 3, "dosyaAdi": "fis.jpg", "durum": "sirada", "kayitId": null, "onbellek": false, "hata": null, "sonuc": null }
+  ]
+}
+```
+
+İlerlemeyi `GET /api/invoices/toplu/<id>` ile izleyin. Aynı biçimde döner; birkaç saniyede bir sormak yeterlidir. Kuyruğu yalnızca oluşturan kullanıcı (ve muhasebe/yönetici) görebilir.
+
+- `durum`: `sirada` → `okunuyor` → `bitti` ya da `hata`. Dosyalar gönderildikleri sırayla okunur, aynı anda en fazla `esZamanli` tanesi.
+- `bitti: true` olduğunda bütün dosyalar okunmuş ya da hata almıştır.
+- `sonuc`: okunan dosyanın faturası (`fatura` ve `kalemler`). Ölçüm (`olcum`) dahil tam kayıt `GET /api/invoices/<kayitId>` ile alınır.
+- `onbellek: true`: dosya daha önce okunmuş, kayıtlı sonuç kullanıldı; Claude çalışmadı. Aynı dosya bir istekte iki kez varsa bir kez okunur, ikincisi `onbellek: true` olur. Yine de yeniden okutmak için `?yenile=1` ekleyin.
+- `hata`: `{kod, mesaj}`. Kodlar aşağıdaki hata tablosundakilerle aynıdır. Hatalı ya da büyük bir dosya yalnızca kendisini etkiler, diğerleri okunur.
+- Bir istekte en fazla 50 dosya ve toplam 200 MB gönderilebilir. Daha fazlası için birkaç istek gönderin.
+- Kuyruk sunucunun belleğinde tutulur. Sunucu yeniden başlarsa kuyruk adresi `404` döner; o ana kadar okunan faturalar kayıtlarda durur, okunmamış dosyaları yeniden gönderin.
+- `claude_limit` (abonelik limiti) hatası alan dosyalar kendiliğinden yeniden denenmez. Limit açılınca yeniden gönderin; okunmuş olanlar kayıttan döner.
+
+### Canlı izleme
+
+Sunucu açıldığından beri gelen her dosya, tekli ya da çoklu, panelden ya da API'den, bir "etkinlik" olarak izlenir. Panelin sol sütunu bunu gösterir: okuma hatları (şu an Claude'un okuduğu dosyalar ve modeli), sıradaki dosyalar ve akış. Aynı bilgiye API'den de ulaşılır:
 
 | İstek | Döndürdüğü |
 |---|---|
-| `GET /api/invoices` | Son 100 kaydın özeti, en yeni başta |
-| `GET /api/invoices/<id>` | Kayıtlı sonucun kendisi (yukarıdaki JSON; `olcum.kaynak` her zaman `kayit`) |
-| `GET /health` | `{"durum":"ok"}` |
+| `GET /api/izleme` | Anlık durum: `istatistik` ve en yeni başta `etkinlikler` |
+| `GET /api/izleme/akis` | Server-Sent Events akışı: önce `durum` (anlık durumun tamamı), sonra her değişiklikte `etkinlik` |
+
+```json
+{
+  "istatistik": { "baslangic": "2026-11-06T09:00:00.000Z", "esZamanli": 2, "sirada": 1, "okunuyor": 2, "bitti": 14, "kayittan": 5, "hata": 1, "apiEsdegeriUsd": 0.4123 },
+  "etkinlikler": [
+    { "id": "3f9c1a7be210", "dosyaAdi": "kasim.pdf", "boyut": 48211, "kaynak": "api", "etiket": null,
+      "kuyrukId": "20261106-110215-8c1f02ab", "sira": 2, "durum": "okunuyor", "model": "opus", "modeller": ["haiku", "opus"],
+      "onbellek": false, "kayitId": null, "hata": null, "ozet": null, "apiEsdegeriUsd": null,
+      "alinma": "2026-11-06T11:02:15.120Z", "baslama": "2026-11-06T11:02:16.004Z", "bitis": null }
+  ]
+}
+```
+
+- `durum`: `sirada` → `okunuyor` → `bitti` ya da `hata`. Reddedilen dosyalar (desteklenmeyen tür, büyük dosya) doğrudan `hata` olarak görünür.
+- `model`: okuyan model; kademeli okumada önce `haiku`, kontroller tutmazsa `opus`. Bittiğinde sonucu kullanılan modelin tam adı yazar. `modeller` bu dosyayı okuyan bütün modellerdir.
+- `ozet`: bitmiş okumanın fatura no, tarih, satıcı, genel toplam, para birimi ve kalem sayısı. Faturanın tamamı `GET /api/invoices/<kayitId>` ile alınır.
+- `kaynak`: `panel` ya da `api`. Panel isteklerine `X-Panel-Etiket` başlığı ekler; bu başlığı taşımayan her istek `api` sayılır.
+- `kullanici`: dosyayı gönderen (`{id, adSoyad}`). Çalışanlar yalnızca kendi etkinliklerini görür; muhasebe ve yönetici hepsini. `istatistik` sayaçları geneldir.
+- `istatistik` sayaçları sunucunun açılışından (`baslangic`) beri sayar. `apiEsdegeriUsd` Claude'un gerçekten çalıştığı okumaların API karşılığıdır; aboneliğe ek ücret yansımaz.
+- Etkinlikler bellekte tutulur: süren okumaların hepsi ve bitenlerin son 300'ü. Sunucu yeniden başlayınca sıfırlanır, okunan faturalar veritabanında kalır.
+- Akış her 20 saniyede bir `: canli` yorum satırı gönderir. Bağlantı koparsa tarayıcı 3 saniye sonra yeniden bağlanır ve yeni bir `durum` alır.
+
+PowerShell'de akışı izlemek için: `curl.exe -N -H "Authorization: Bearer $t" http://127.0.0.1:4000/api/izleme/akis`
+
+### Kayıtlar
+
+Okunan her fatura, orijinal dosyasıyla birlikte veritabanına (`fatura_kayitlari`, `fatura_dosyalari`) kaydedilir. Aynı dosyayı kimin yüklediği de tutulur.
+
+| İstek | Döndürdüğü |
+|---|---|
+| `GET /api/invoices` | Son 100 kaydın özeti, en yeni başta. Çalışan yalnızca kendi yüklediklerini görür |
+| `GET /api/invoices/<id>` | Kayıtlı sonucun kendisi (yukarıdaki JSON; `olcum.kaynak` her zaman `kayit`). Yükleyen, faturayı kullanan formun sahibi ve onaycıları, muhasebe ve yönetici açabilir |
+| `GET /api/invoices/<id>/dosya` | Orijinal dosya (PDF ya da resim), doğru `Content-Type` ile |
+| `GET /health` | `{"durum":"ok"}` (oturum istemez) |
 
 ### Hatalar
 
-Hatalı isteklerde gövde `{"hata": {"kod": "...", "mesaj": "..."}}` biçimindedir.
+Hatalı isteklerde gövde `{"hata": {"kod": "...", "mesaj": "..."}}` biçimindedir. `mesaj` her zaman Türkçedir ve kullanıcıya gösterilebilir. Doğrulama hatalarında `alanlar` (alan başına mesaj), onay akışı hatalarında `sorunlar` (liste) de gelir.
 
 | HTTP | kod | Anlamı |
 |---|---|---|
-| 400 | `dosya_yok`, `gecersiz_form` | Dosya gönderilmedi veya form bozuk |
-| 403 | `izinsiz_host`, `izinsiz_kaynak` | İstek 127.0.0.1/localhost dışından ya da başka bir web sitesinden geldi |
-| 404 | `bulunamadi` | Kayıt yok |
+| 400 | `dosya_yok`, `gecersiz_form` | Dosya gönderilmedi veya form bozuk (çoklu gönderme yalnızca multipart kabul eder) |
+| 400 | `cok_fazla_dosya` | Çoklu gönderimde 50'den fazla dosya |
+| 400 | `gecersiz_istek`, `gecersiz_json` | Alanlar kurallara uymuyor ya da gövde JSON değil |
+| 400 | `gecersiz_akis` | Onay akışında boşluk, çakışan kullanıcı ya da hatalı limit var |
+| 401 | `oturum_gerekli`, `hatali_giris` | Oturum yok/süresi dolmuş ya da e-posta veya şifre yanlış |
+| 403 | `yetki_yok`, `hesap_pasif`, `sifre_degismeli` | Rol yetmiyor, hesap pasif ya da önce şifre değiştirilmeli |
+| 403 | `izinsiz_host`, `izinsiz_kaynak`, `izinsiz_ag` | İstek izinli adresler (127.0.0.1, localhost; yerel ağ erişimi açıksa bilgisayarın yerel ağ adresi) dışından, başka bir web sitesinden ya da yerel ağ dışından geldi |
+| 404 | `bulunamadi` | Kayıt, form, kullanıcı ya da kuyruk yok (ya da görme yetkiniz yok) |
+| 409 | `gecersiz_durum`, `onay_beklemiyor`, `onaylayan_yok`, `fatura_kullaniliyor`, `eposta_kullaniliyor`, `son_yonetici`, `onay_akisinda`, `bekleyen_onay_var`, `akis_adi_kullaniliyor`, `varsayilan_akis` | İşlem formun, kullanıcının ya da onay akışının şu anki durumuna uymuyor; ayrıntısı `mesaj` alanında |
 | 413 | `dosya_cok_buyuk` | Dosya boyut sınırını aşıyor |
+| 413 | `istek_cok_buyuk` | Çoklu gönderimde dosyaların toplamı 200 MB'ı aşıyor |
 | 415 | `desteklenmeyen_dosya` | PDF veya resim değil |
 | 422 | `invalid_output` | Claude'un yanıtı fatura şemasına uymadı |
 | 429 | `claude_limit` | Abonelik kullanım limiti doldu; bir süre sonra tekrar deneyin |
+| 429 | `cok_fazla_deneme` | Arka arkaya hatalı giriş; e-posta `GIRIS_KILIT_DAKIKA` süresince kilitli |
 | 502 | `claude_failed` | Claude çalıştırılamadı veya hata döndürdü |
 | 503 | `claude_auth` | Token geçersiz ya da süresi dolmuş; `claude setup-token` ile yenileyin |
 | 504 | `claude_timeout` | Claude zamanında yanıt vermedi |
 
 ## Ayarlar
 
-Tüm ayarlar isteğe bağlıdır ve ortam değişkeniyle verilir.
+Bütün ayarlar kök dizindeki `.env` dosyasındadır (şablon: `env.example`). `npm start`, `npm run dev` ve `npm run karsilastir` bu dosyayı kendiliğinden okur; `docker compose` (`npm run db:up`) da aynı dosyayı kullanır. Ortamda zaten tanımlı bir değişken `.env` içindekinden önce gelir. Değişiklikten sonra sunucuyu yeniden başlatın.
 
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
-| `PORT` | `4000` | Dinlenen port (her zaman yalnızca 127.0.0.1) |
+| `PORT` | `4000` | Dinlenen port |
+| `AG_ERISIMI` | `kapali` | `kapali`: yalnızca bu bilgisayar (127.0.0.1). `yerel`: aynı Wi-Fi'deki telefonlar da bağlanır; ayrıntı ve riskler "Güvenlik" bölümünde |
+| `IZINLI_HOSTLAR` | (yok) | Yerel ağ erişiminde, bilgisayarın IP adreslerine ek olarak kabul edilen adlar, virgülle (örn. `masraf-pc.local`) |
+| `MAX_FILE_MB` | `20` | En büyük fatura dosyası (1–32) |
+| `MSSQL_PASSWORD` | (zorunlu) | SQL Server `sa` şifresi. Docker bunu yalnızca veritabanı birimi ilk oluşturulurken kullanır |
+| `MSSQL_HOST`, `MSSQL_PORT` | `127.0.0.1`, `1433` | SQL Server adresi. Docker portu yalnızca 127.0.0.1'e açar |
+| `MSSQL_DATABASE` | `masraf` | Veritabanı adı; yoksa açılışta oluşturulur, tablolar kurulur |
+| `MSSQL_USER` | `sa` | Bağlanan kullanıcı |
+| `MSSQL_ENCRYPT`, `MSSQL_TRUST_SERVER_CERTIFICATE` | `true`, `true` | TLS ve yerel konteynerin kendi imzalı sertifikasına güven |
+| `MSSQL_POOL_MAX` | `10` | Bağlantı havuzu boyutu (1–100) |
+| `MSSQL_CONNECT_WAIT_SEC` | `60` | Açılışta veritabanını bekleme süresi (0–600) |
+| `MSSQL_IMAGE`, `MSSQL_PID` | `…/mssql/server:2022-latest`, `Developer` | Docker imajı ve SQL Server sürümü (yalnızca `docker compose`) |
+| `ILK_YONETICI_EPOSTA`, `ILK_YONETICI_SIFRE`, `ILK_YONETICI_AD` | (yok) | Veritabanında hiç kullanıcı yokken oluşturulan yönetici; akışın ilk onaycısı olur (0 – sınırsız) |
+| `OTURUM_SURESI_SAAT` | `168` | Oturum süresi; kullanıldıkça uzar (1–8760) |
+| `GIRIS_DENEME_SINIRI`, `GIRIS_KILIT_DAKIKA` | `10`, `15` | Bu kadar hatalı girişte e-posta bu kadar dakika kilitlenir |
+| `SIFRE_MIN_UZUNLUK` | `8` | En kısa şifre (8–128) |
+| `PARA_BIRIMI` | `TRY` | Onay aralıklarının ve raporların para birimi; başka para birimindeki masraflarda kur girilir |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI'nin yolu |
 | `CLAUDE_MODEL` | `haiku,opus` | Modeller, en ucuzdan başlayarak virgülle (en çok 4). Sonraki model yalnızca önceki okuma kontrollerden geçmezse çalışır (aşağıda "Kademeli okuma"). Tek model için örneğin `opus` |
 | `CLAUDE_EFFORT` | `low` | Claude'un düşünme düzeyi (`low`, `medium`, `high`, `xhigh`, `max`). `default` CLI'nin kendi ayarını kullanır. Karmaşık faturalarda yanlış okuma görürseniz `medium` deneyin |
 | `CLAUDE_TIMEOUT_SEC` | `180` | Bir fatura için en uzun bekleme (10–900) |
-| `CLAUDE_MAX_CONCURRENT` | `2` | Aynı anda okunan fatura sayısı (1–8) |
+| `CLAUDE_MAX_CONCURRENT` | `2` | Aynı anda okunan fatura sayısı (1–4). Kuyruktaki dosyalar bu sınırla okunur. Yükseltmek kuyruğu hızlandırır ama abonelik limiti daha çabuk dolar; `claude_limit` hatası görürseniz düşürün |
 | `CLAUDE_OAUTH_TOKEN_FILE` | `secrets/claude_oauth_token.txt` | Token dosyası |
 | `CLAUDE_CODE_OAUTH_TOKEN` | (yok) | Token'ı dosya yerine doğrudan verir |
-| `DATA_DIR` | `data/invoices` | Kayıt klasörü |
-| `MAX_FILE_MB` | `20` | En büyük dosya boyutu (1–32) |
 
 ## Güvenlik
 
-- Servis yalnızca `127.0.0.1` adresinde dinler. Başka bir `Host` başlığıyla ya da başka bir siteden (Origin) gelen istekleri reddeder. Böylece tarayıcıda açtığınız bir web sayfası servise fatura gönderemez.
+- Servis varsayılan olarak yalnızca `127.0.0.1` adresinde dinler. Başka bir `Host` başlığıyla ya da başka bir siteden (Origin) gelen istekleri reddeder. Böylece tarayıcıda açtığınız bir web sayfası servise fatura gönderemez. Android emülatörü ya da USB ile bağlı Android cihaz `adb reverse tcp:4000 tcp:4000` ile, iOS simülatörü doğrudan `127.0.0.1` ile bağlanır.
+- `AG_ERISIMI=yerel` ile servis aynı Wi-Fi'deki telefonlara açılır (iPhone ya da Wi-Fi'deki Android için tek yol; kurulumu `masraf-app/README.md` içinde). O zaman bütün IPv4 arabirimlerinde dinler, ama yalnızca özel ağ adreslerinden (192.168.x.x, 10.x.x.x, 172.16–31.x.x) ve bilgisayarın kendisinden gelen istekleri kabul eder; `Host` başlığı bilgisayarın kendi yerel ağ adresi, `localhost`, `127.0.0.1` ya da `IZINLI_HOSTLAR` içindeki bir ad olmalıdır. Bağlantı şifresiz HTTP'dir: aynı ağdaki biri oturum token'larını ve faturaları görebilir. Yalnızca güvendiğiniz ağlarda açın, misafir ve halka açık Wi-Fi'de kapalı tutun. Açıkken sunucu her açılışta uyarı yazar.
+- Şifreler scrypt ile tuzlanarak saklanır. Oturum token'larının yalnızca SHA-256 özeti veritabanında durur. Panel oturumu `HttpOnly; SameSite=Strict` çerezdedir, JavaScript okuyamaz.
+- Her yetki kontrolü sunucuda yapılır: çalışan başkasının masrafını ya da faturasını göremez, yalnızca sırası gelen onaycı karar verebilir. Kullanıcı, rol, onay akışı ve kategori değişiklikleri denetim kaydına yazılır.
+- SQL Server portu Docker'da yalnızca `127.0.0.1`'e açılır. Bütün sorgular parametrelidir.
 - Claude her fatura için yeni ve boş bir geçici klasörde çalışır. O klasörde yalnızca fatura dosyası bulunur; iş bitince klasör silinir.
 - Claude'un kullanabileceği tek araç `Read`'dir. Komut çalıştıramaz, dosya yazamaz, internette gezinemez.
 - Kendi `~/.claude` ayarlarınız, hook'larınız, eklentileriniz, MCP sunucularınız ve CLAUDE.md dosyalarınız bu çağrıda yüklenmez.
@@ -242,9 +385,15 @@ $env:CLAUDE_MODEL = "opus"; npm start
 ## Geliştirme
 
 ```
+npm run db:up      # SQL Server'ı başlatır (testler de ister)
 npm run dev        # dosya değişince yeniden başlar
-npm test           # sahte Claude CLI ile testler
+npm test           # sahte Claude CLI ve test veritabanlarıyla testler
 npm run typecheck
+npm run db:logs    # SQL Server günlüğü
 ```
 
-Testler gerçek Claude'u hiç çağırmaz; `tests/fixtures/fake-claude.mjs` onun yerine geçer.
+Testler gerçek Claude'u hiç çağırmaz; `tests/fixtures/fake-claude.mjs` onun yerine geçer. Veritabanı testleri `.env` içindeki SQL Server'a bağlanır ama kendi veritabanlarını kullanır (`<MSSQL_DATABASE>_test_<n>`, her test işçisi için bir tane); asıl veritabanınıza dokunmaz.
+
+Veritabanı şeması `src/db/migrations/` altındaki numaralı SQL dosyalarıdır. Sunucu açılışta uygulanmamış olanları sırayla uygular ve `sema_surumleri` tablosuna yazar. Şemayı değiştirmek için yeni bir dosya ekleyin (`002_….sql`); uygulanmış bir dosyayı değiştirmeyin.
+
+Panelin derleme adımı yoktur: `public/index.html`, `public/css/app.css` ve `public/js/` altındaki ES modülleri doğrudan sunulur.

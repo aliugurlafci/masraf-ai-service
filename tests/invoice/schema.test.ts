@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { InvoiceSchema, invoiceJsonSchema } from '../src/invoice-schema.ts';
-import { sampleInvoice } from './helpers.ts';
+import { InvoiceSchema, invoiceJsonSchema } from '../../src/invoice/schema.ts';
+import { sampleInvoice } from '../helpers.ts';
 
 describe('InvoiceSchema', () => {
   it('accepts a complete invoice', () => {

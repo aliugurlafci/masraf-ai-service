@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createCascadeExtractor } from '../src/cascade.ts';
-import { ExtractionError, type Extraction, type ExtractInvoice, type InvoiceFile } from '../src/claude-extractor.ts';
-import type { Invoice } from '../src/invoice-schema.ts';
-import { PDF_BYTES, sampleInvoice, sampleOlcum } from './helpers.ts';
+import { createCascadeExtractor } from '../../src/claude/cascade.ts';
+import { ExtractionError, type Extraction, type ExtractInvoice, type InvoiceFile } from '../../src/claude/extractor.ts';
+import type { Invoice } from '../../src/invoice/schema.ts';
+import { PDF_BYTES, sampleInvoice, sampleOlcum } from '../helpers.ts';
 
 const file: InvoiceFile = { buffer: PDF_BYTES, type: { mime: 'application/pdf', ext: 'pdf' } };
 
@@ -49,6 +49,19 @@ describe('cascade', () => {
       ['claude-haiku-5-5', ['Ara toplam ile KDV genel toplamı tutmuyor.'], false],
       ['claude-opus-5-5', [], true],
     ]);
+  });
+
+  it('reports each model as it starts, once, for the live monitor', async () => {
+    const onModel = vi.fn();
+    const haiku = step('haiku', async () => {
+      expect(onModel).toHaveBeenLastCalledWith('haiku');
+      return reads('claude-haiku-5-5', bad(), 3000, 0.0006);
+    });
+    const opus = step('opus', async () => reads('claude-opus-5-5', good(), 9000, 0.03));
+    await createCascadeExtractor([haiku, opus], 2)(file, { onModel });
+    expect(onModel.mock.calls).toEqual([['haiku'], ['opus']]);
+    // The steps get no hooks, so a model is never reported twice.
+    expect(haiku.extract).toHaveBeenCalledWith(file);
   });
 
   it("keeps the last model's read even when it has problems", async () => {

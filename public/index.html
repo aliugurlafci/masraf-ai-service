@@ -2,62 +2,175 @@
 <html lang="tr">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fatura Okuyucu</title>
-    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f1f3f6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d1016" media="(prefers-color-scheme: dark)" />
+    <title>Masraf</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='6' y='3' width='20' height='26' rx='3' fill='%233a43d6'/%3E%3Cpath d='M11 10h10M11 15h10M11 20h6' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <script>
+      // Apply a theme chosen in the user menu before the first paint (no flash).
+      try {
+        var t = localStorage.getItem('masraf-tema');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="modulepreload" href="js/main.js" />
+    <link rel="modulepreload" href="js/dom.js" />
+    <link rel="modulepreload" href="js/format.js" />
+    <link rel="modulepreload" href="js/api.js" />
+    <link rel="modulepreload" href="js/session.js" />
+    <link rel="modulepreload" href="js/router.js" />
+    <link rel="modulepreload" href="js/ui.js" />
+    <link rel="modulepreload" href="js/labels.js" />
+    <link rel="modulepreload" href="js/live.js" />
+    <link rel="modulepreload" href="js/monitor.js" />
+    <link rel="modulepreload" href="js/invoice.js" />
+    <link rel="modulepreload" href="js/views/okuma.js" />
   </head>
   <body>
-    <div class="app">
-      <header class="brand">
-        <h1>Fatura Okuyucu</h1>
-        <p>PDF ya da resim faturayı okur, bilgilerini ve kalemlerini JSON olarak verir.</p>
-        <button id="upload" class="btn btn-primary" type="button">Fatura yükle</button>
-        <input id="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,image/gif" hidden />
-      </header>
+    <a class="skip-link" id="skip" href="#main">İçeriğe geç</a>
 
-      <main>
-        <div class="toolbar">
-          <div class="tabs" role="tablist" aria-label="Görünüm">
-            <button class="tab" role="tab" id="tab-fatura" aria-controls="sheet" aria-selected="true" data-view="fatura">
-              Fatura
-            </button>
-            <button class="tab" role="tab" id="tab-json" aria-controls="sheet" aria-selected="false" tabindex="-1" data-view="json">
-              JSON
-            </button>
-            <button
-              class="tab"
-              role="tab"
-              id="tab-orijinal"
-              aria-controls="sheet"
-              aria-selected="false"
-              tabindex="-1"
-              data-view="orijinal"
-              hidden
-            >
-              Orijinal dosya
-            </button>
-          </div>
-          <p id="status" class="status" role="status" aria-live="polite"></p>
-          <div class="actions">
-            <button id="reread" class="btn" type="button" hidden>Yeniden oku</button>
-            <button id="copy" class="btn" type="button" disabled>JSON'u kopyala</button>
-            <button id="download" class="btn" type="button" disabled>JSON'u indir</button>
-          </div>
-        </div>
-
-        <article id="sheet" class="sheet" role="tabpanel" aria-labelledby="tab-fatura" data-state="empty"></article>
-
-        <section id="metrics" class="metrics" aria-labelledby="metrics-title" hidden></section>
-      </main>
-
-      <nav class="history" aria-labelledby="history-title">
-        <h2 id="history-title">Geçmiş</h2>
-        <div id="history"></div>
-      </nav>
+    <div class="boot" id="boot" role="status">
+      <span class="brand-mark large" aria-hidden="true"><span class="brand-scan"></span></span>
+      <span class="visually-hidden">Yükleniyor</span>
     </div>
 
-    <div id="drop-hint" class="drop-hint" hidden><p>Dosyayı bırakın, okumaya başlasın</p></div>
+    <div class="auth" id="auth" hidden></div>
 
-    <script src="app.js" type="module"></script>
+    <div class="shell" id="shell" hidden>
+      <div class="sidebar" id="sidebar">
+        <div class="sidebar-head">
+          <a class="brand" href="#/" aria-label="Masraf, gösterge">
+            <span class="brand-mark" aria-hidden="true"><span class="brand-scan"></span></span>
+            <span class="brand-name">Masraf</span>
+          </a>
+          <button class="icon-btn nav-close" id="nav-close" type="button" aria-label="Menüyü kapat">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5 5 15" /></svg>
+          </button>
+        </div>
+        <nav class="nav" id="nav" aria-label="Ana menü"></nav>
+      </div>
+      <div class="nav-scrim" id="nav-scrim" hidden></div>
+
+      <header class="topbar">
+        <button class="icon-btn nav-toggle" id="nav-toggle" type="button" aria-label="Menüyü aç" aria-controls="sidebar" aria-expanded="false">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13" /></svg>
+        </button>
+        <a class="brand topbar-brand" href="#/" aria-label="Masraf, gösterge">
+          <span class="brand-mark" aria-hidden="true"><span class="brand-scan"></span></span>
+          <span class="brand-name">Masraf</span>
+        </a>
+        <a class="reading-pill" id="reading-pill" href="#/okuma" hidden>
+          <span class="reading-dot" aria-hidden="true"></span><span id="reading-pill-text"></span>
+        </a>
+        <span class="topbar-gap"></span>
+        <a class="btn btn-primary topbar-new" id="topbar-new" href="#/masraflar/yeni">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+          <span>Yeni masraf</span>
+        </a>
+        <div class="user-menu">
+          <button class="user-btn" id="user-btn" type="button" aria-controls="user-menu">
+            <span class="avatar" id="user-avatar" aria-hidden="true"></span>
+            <span class="user-names">
+              <span class="user-name" id="user-name"></span>
+              <span class="user-role" id="user-role"></span>
+            </span>
+            <svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 7.5l5 5 5-5" /></svg>
+          </button>
+          <div class="menu" id="user-menu" role="menu" aria-labelledby="user-btn" hidden></div>
+        </div>
+      </header>
+
+      <main class="content" id="main" tabindex="-1">
+        <div class="view" id="view"></div>
+
+        <section class="okuma" id="okuma" aria-labelledby="okuma-title" hidden>
+          <header class="okuma-bar">
+            <h1 id="okuma-title" tabindex="-1">Fatura okuma</h1>
+            <p class="conn" id="conn" data-state="connecting" role="status">
+              <span class="conn-dot" aria-hidden="true"></span><span class="conn-text">Bağlanıyor</span>
+            </p>
+            <dl class="stats" id="stats" aria-label="Sunucu açıldığından beri"></dl>
+            <button class="btn btn-primary upload-btn" id="upload" type="button">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 13V3M5.5 7.5 10 3l4.5 4.5M4 13v3h12v-3" /></svg>
+              <span>Fatura yükle</span>
+            </button>
+            <input id="file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+          </header>
+
+          <div class="monitor" role="region" aria-label="Canlı izleme">
+            <section class="lanes-section" aria-labelledby="lanes-title">
+              <div class="section-head">
+                <h2 id="lanes-title">Okuma hatları</h2>
+                <p class="section-meta" id="lanes-meta"></p>
+              </div>
+              <ol class="lanes" id="lanes"></ol>
+              <p class="waiting" id="waiting" hidden></p>
+            </section>
+
+            <section class="feed-section" aria-labelledby="feed-title">
+              <div class="section-head">
+                <h2 id="feed-title">Akış</h2>
+                <div class="filters" id="filters" role="group" aria-label="Akışı süz">
+                  <button type="button" data-filter="tumu" aria-pressed="true">Tümü</button>
+                  <button type="button" data-filter="suren" aria-pressed="false">Sürenler</button>
+                  <button type="button" data-filter="hata" aria-pressed="false">Hatalar</button>
+                </div>
+              </div>
+              <ul class="feed" id="feed"></ul>
+              <p class="feed-empty" id="feed-empty" hidden></p>
+              <div class="history" id="history"></div>
+            </section>
+          </div>
+
+          <div class="detail" id="detail" role="region" aria-label="Fatura ayrıntısı">
+            <div class="detail-bar">
+              <button class="icon-btn back-btn" id="back" type="button" aria-label="Akışa dön">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5 7 10l5.5 5.5" /></svg>
+              </button>
+              <div class="tabs" id="tabs" role="tablist" aria-label="Görünüm">
+                <button class="tab" role="tab" id="tab-fatura" aria-controls="detail-body" aria-selected="true" data-view="fatura">Fatura</button>
+                <button class="tab" role="tab" id="tab-json" aria-controls="detail-body" aria-selected="false" tabindex="-1" data-view="json">JSON</button>
+                <button class="tab" role="tab" id="tab-orijinal" aria-controls="detail-body" aria-selected="false" tabindex="-1" data-view="orijinal" hidden>Orijinal</button>
+              </div>
+              <div class="actions">
+                <button class="btn btn-primary" id="to-expense" type="button" hidden>
+                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3h10v14l-1.7-1.2L11.7 17 10 15.8 8.3 17l-1.6-1.2L5 17zM8 7h4M8 10.5h4" /></svg>
+                  <span>Bu faturayla masraf oluştur</span>
+                </button>
+                <button class="btn" id="reread" type="button" hidden>
+                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 9.5A5.5 5.5 0 1 1 13.9 6M15.5 3.5V6.5H12.5" /></svg>
+                  <span>Yeniden oku</span>
+                </button>
+                <button class="btn" id="copy" type="button" disabled>
+                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 7h9v9H7zM4 13V4h9" /></svg>
+                  <span>Kopyala</span>
+                </button>
+                <button class="btn" id="download" type="button" disabled>
+                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M5.5 8.5 10 13l4.5-4.5M4 16h12" /></svg>
+                  <span>İndir</span>
+                </button>
+              </div>
+            </div>
+            <article class="detail-body" id="detail-body" role="tabpanel" aria-labelledby="tab-fatura" tabindex="-1"></article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="drop" id="drop" hidden>
+      <div class="drop-card">
+        <span class="sheet-glyph large" aria-hidden="true"><span class="scan"></span></span>
+        <p id="drop-text">Bırakın, okumaya başlasın</p>
+      </div>
+    </div>
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+    <script type="module" src="js/main.js"></script>
   </body>
 </html>

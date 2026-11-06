@@ -11,9 +11,9 @@ import {
   parseClaudeOutput,
   readClaudeUsage,
   type ExtractorOptions,
-} from '../src/claude-extractor.ts';
-import { invoiceJsonSchema } from '../src/invoice-schema.ts';
-import { FAKE_CLAUDE, FAKE_TOKEN, PDF_BYTES, sampleInvoice } from './helpers.ts';
+} from '../../src/claude/extractor.ts';
+import { invoiceJsonSchema } from '../../src/invoice/schema.ts';
+import { FAKE_CLAUDE, FAKE_TOKEN, PDF_BYTES, sampleInvoice } from '../helpers.ts';
 
 const PDF = { buffer: PDF_BYTES, type: { mime: 'application/pdf', ext: 'pdf' } } as const;
 

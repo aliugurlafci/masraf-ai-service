@@ -1,5 +1,5 @@
-import { createSemaphore, ExtractionError, type Extraction, type ExtractInvoice } from './claude-extractor.ts';
-import { findProblems } from './invoice-checks.ts';
+import { createSemaphore, ExtractionError, type Extraction, type ExtractInvoice } from './extractor.ts';
+import { findProblems } from '../invoice/checks.ts';
 import type { ClaudeOlcum, OkumaAdimi } from './olcum.ts';
 
 export interface CascadeStep {
@@ -61,7 +61,7 @@ export function createCascadeExtractor(steps: readonly CascadeStep[], maxConcurr
   // Limits whole invoices, so a cascade never runs more CLI processes than invoices allowed at once.
   const limit = createSemaphore(maxConcurrent);
 
-  return (file) =>
+  return (file, hooks) =>
     limit(async () => {
       const runs: OkumaAdimi[] = [];
       let kept: Extraction | null = null;
@@ -71,6 +71,8 @@ export function createCascadeExtractor(steps: readonly CascadeStep[], maxConcurr
         const started = Date.now();
         let read: Extraction;
         try {
+          // The steps get no hooks: the cascade itself reports each model, once.
+          hooks?.onModel?.(step.model);
           read = await step.extract(file);
         } catch (err) {
           if (kept === null && (i === steps.length - 1 || stopsCascade(err))) throw err;

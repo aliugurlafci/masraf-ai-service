@@ -1,8 +1,8 @@
 {
   "info": {
     "_postman_id": "6f2c1d0e-4b7a-4c39-9f0e-2a8d5b1c7e41",
-    "name": "Fatura Okuyucu",
-    "description": "Yerel fatura okuma servisinin API örnekleri. Servisi `npm start` ile başlatın; varsayılan adres `http://127.0.0.1:4000`.\n\n- Servis yalnızca bu bilgisayardan gelen istekleri kabul eder (`127.0.0.1` veya `localhost`).\n- Bir fatura okumak bir dakika kadar sürebilir; sunucu en fazla `CLAUDE_TIMEOUT_SEC` (varsayılan 180 sn) bekler. Postman'da Settings > General > Request timeout değeri 0 (sınırsız) ya da 240000 ms'den büyük olmalıdır.\n- Başarılı okumada yanıt yalnızca `{fatura, kalemler}` içerir. Hatalarda gövde `{\"hata\": {\"kod\", \"mesaj\"}}` biçimindedir.\n- \"Fatura oku\" istekleri başarılı olunca kayıt kimliği `faturaId` koleksiyon değişkenine yazılır; \"Kaydı getir\" isteği bunu kullanır.\n- Aynı dosya ikinci kez gönderilirse Claude çalıştırılmaz; kayıtlı sonuç hemen döner (HTTP 200, `X-Fatura-Onbellek: 1`). Yeni okuma 201 döner. Yeniden okumak için `?yenile=1` ekleyin.\n- Yanıtlarda `olcum` alanı vardır: `kaynak` (claude | kayit), `istekSuresiMs` ve faturayı üreten Claude okumasının ölçümü `okuma` (süre, tur, token, model, düşünme düzeyi, API karşılığı). Ölçümden önce kaydedilmiş faturalarda `okuma` null olur.",
+    "name": "Masraf",
+    "description": "Masraf servisinin uçları. Önce koleksiyon değişkenlerinde `eposta` ve `sifre` değerlerini doldurup \"Giriş yap\" isteğini çalıştırın; token `token` değişkenine kaydedilir ve diğer istekler onu Bearer olarak gönderir. Bütün kurallar: docs/onay-sistemi.md",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -14,6 +14,41 @@
     {
       "key": "faturaId",
       "value": "",
+      "type": "string"
+    },
+    {
+      "key": "kuyrukId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "eposta",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "sifre",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "masrafId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "kullaniciId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "akisId",
+      "value": "1",
       "type": "string"
     }
   ],
@@ -32,7 +67,10 @@
             "health"
           ]
         },
-        "description": "Servisin çalıştığını doğrular."
+        "description": "Servisin çalıştığını doğrular.",
+        "auth": {
+          "type": "noauth"
+        }
       },
       "event": [
         {
@@ -78,325 +116,1802 @@
       ]
     },
     {
-      "name": "Fatura oku (form-data)",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "formdata",
-          "formdata": [
-            {
-              "key": "file",
-              "type": "file",
-              "src": "",
-              "description": "PDF, PNG, JPEG, WEBP veya GIF fatura dosyası (en fazla 20 MB). Postman'da \"Select files\" ile seçin."
-            }
-          ]
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/invoices",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "api",
-            "invoices"
-          ],
-          "query": [
-            {
-              "key": "yenile",
-              "value": "1",
-              "disabled": true,
-              "description": "Etkinleştirirseniz dosya daha önce okunmuş olsa bile Claude ile yeniden okunur."
-            }
-          ]
-        },
-        "description": "Fatura dosyasını `multipart/form-data` olarak, `file` alanında gönderir. Panel de bu yolu kullanır.\n\nDosya türü, dosya adına göre değil içeriğine göre belirlenir. Başarılı yanıtta `X-Fatura-Id` başlığı kayıt kimliğini, `Location` başlığı kaydın adresini verir.\n\nAynı dosya daha önce okunduysa yanıt 200 ve `X-Fatura-Onbellek: 1` başlığıyla, Claude çalıştırılmadan döner. Yeniden okutmak için Params sekmesindeki `yenile` parametresini etkinleştirin."
-      },
-      "event": [
+      "name": "Oturum",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Fatura okundu', () => {",
-              "  pm.expect(pm.response.code, \"201 yeni okuma, 200 kayıtlı sonuç\").to.be.oneOf([200, 201]);",
-              "  const body = pm.response.json();",
-              "  pm.expect(body).to.have.all.keys('fatura', 'kalemler', 'olcum');",
-              "  pm.expect(body.kalemler).to.be.an('array');",
-              "});",
-              "const id = pm.response.headers.get('X-Fatura-Id');",
-              "if (id) pm.collectionVariables.set('faturaId', id);"
-            ]
-          }
-        }
-      ],
-      "response": [
-        {
-          "name": "Okundu",
-          "originalRequest": {
+          "name": "Giriş yap",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('giriş başarılı', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  pm.collectionVariables.set('token', pm.response.json().token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
             "method": "POST",
-            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "file",
-                  "type": "file",
-                  "src": ""
+              "mode": "raw",
+              "raw": "{\n  \"eposta\": \"{{eposta}}\",\n  \"sifre\": \"{{sifre}}\",\n  \"istemci\": \"api\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
                 }
-              ]
+              }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/invoices",
+              "raw": "{{baseUrl}}/api/oturum",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "invoices"
+                "oturum"
               ]
-            }
+            },
+            "description": "Token alır ve `token` koleksiyon değişkenine kaydeder. `istemci: \"panel\"` yalnızca çerez döndürür; API için `api` ya da `mobil` kullanın."
           },
-          "status": "Created",
-          "code": 201,
-          "_postman_previewlanguage": "json",
-          "header": [
-            {
-              "key": "Content-Type",
-              "value": "application/json; charset=utf-8"
-            },
-            {
-              "key": "Location",
-              "value": "/api/invoices/20261106-090807-3fa94c1d"
-            },
-            {
-              "key": "X-Fatura-Id",
-              "value": "20261106-090807-3fa94c1d"
-            }
-          ],
-          "body": "{\n  \"fatura\": {\n    \"faturaNo\": \"ABC2026000000123\",\n    \"faturaTarihi\": \"2026-11-05\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"saticiVergiNo\": \"1234567890\",\n    \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n    \"aliciVergiNo\": \"9876543210\",\n    \"paraBirimi\": \"TRY\",\n    \"araToplam\": 1500,\n    \"kdvToplam\": 300,\n    \"genelToplam\": 1800\n  },\n  \"kalemler\": [\n    {\n      \"aciklama\": \"Danışmanlık\",\n      \"miktar\": 2,\n      \"birim\": \"saat\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 1000\n    },\n    {\n      \"aciklama\": \"Lisans\",\n      \"miktar\": 1,\n      \"birim\": \"adet\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 500\n    }\n  ],\n  \"olcum\": {\n    \"kaynak\": \"claude\",\n    \"istekSuresiMs\": 14350,\n    \"okuma\": {\n      \"sureMs\": 14200,\n      \"apiSureMs\": 12800,\n      \"tur\": 2,\n      \"girdiToken\": 12,\n      \"onbellektenToken\": 15800,\n      \"onbellegeToken\": 0,\n      \"ciktiToken\": 420,\n      \"apiEsdegeriUsd\": 0.0312,\n      \"model\": \"claude-sonnet-5-5\",\n      \"effort\": \"low\"\n    }\n  }\n}"
+          "response": []
         },
         {
-          "name": "Daha önce okunmuş (Claude çalıştırılmadı)",
-          "originalRequest": {
-            "method": "POST",
+          "name": "Ben",
+          "request": {
+            "method": "GET",
             "header": [],
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "file",
-                  "type": "file",
-                  "src": ""
-                }
-              ]
-            },
             "url": {
-              "raw": "{{baseUrl}}/api/invoices",
+              "raw": "{{baseUrl}}/api/ben",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "invoices"
+                "ben"
               ]
-            }
+            },
+            "description": "Giriş yapan kullanıcı ve onayımı bekleyen form sayısı."
           },
-          "status": "OK",
-          "code": 200,
-          "_postman_previewlanguage": "json",
-          "header": [
-            {
-              "key": "Content-Type",
-              "value": "application/json; charset=utf-8"
-            },
-            {
-              "key": "Location",
-              "value": "/api/invoices/20261106-090807-3fa94c1d"
-            },
-            {
-              "key": "X-Fatura-Id",
-              "value": "20261106-090807-3fa94c1d"
-            },
-            {
-              "key": "X-Fatura-Onbellek",
-              "value": "1"
-            }
-          ],
-          "body": "{\n  \"fatura\": {\n    \"faturaNo\": \"ABC2026000000123\",\n    \"faturaTarihi\": \"2026-11-05\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"saticiVergiNo\": \"1234567890\",\n    \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n    \"aliciVergiNo\": \"9876543210\",\n    \"paraBirimi\": \"TRY\",\n    \"araToplam\": 1500,\n    \"kdvToplam\": 300,\n    \"genelToplam\": 1800\n  },\n  \"kalemler\": [\n    {\n      \"aciklama\": \"Danışmanlık\",\n      \"miktar\": 2,\n      \"birim\": \"saat\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 1000\n    },\n    {\n      \"aciklama\": \"Lisans\",\n      \"miktar\": 1,\n      \"birim\": \"adet\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 500\n    }\n  ],\n  \"olcum\": {\n    \"kaynak\": \"kayit\",\n    \"istekSuresiMs\": 9,\n    \"okuma\": {\n      \"sureMs\": 14200,\n      \"apiSureMs\": 12800,\n      \"tur\": 2,\n      \"girdiToken\": 12,\n      \"onbellektenToken\": 15800,\n      \"onbellegeToken\": 0,\n      \"ciktiToken\": 420,\n      \"apiEsdegeriUsd\": 0.0312,\n      \"model\": \"claude-sonnet-5-5\",\n      \"effort\": \"low\"\n    }\n  }\n}"
+          "response": []
         },
         {
-          "name": "Desteklenmeyen dosya",
-          "originalRequest": {
-            "method": "POST",
-            "header": [],
+          "name": "Şifremi değiştir",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "file",
-                  "type": "file",
-                  "src": ""
+              "mode": "raw",
+              "raw": "{\n  \"mevcutSifre\": \"{{sifre}}\",\n  \"yeniSifre\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
                 }
-              ]
+              }
             },
             "url": {
-              "raw": "{{baseUrl}}/api/invoices",
+              "raw": "{{baseUrl}}/api/ben/sifre",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "invoices"
+                "ben",
+                "sifre"
               ]
             }
           },
-          "status": "Unsupported Media Type",
-          "code": 415,
-          "_postman_previewlanguage": "json",
-          "header": [
-            {
-              "key": "Content-Type",
-              "value": "application/json; charset=utf-8"
-            }
-          ],
-          "body": "{\n  \"hata\": {\n    \"kod\": \"desteklenmeyen_dosya\",\n    \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n  }\n}"
+          "response": []
         },
         {
-          "name": "Token geçersiz",
-          "originalRequest": {
-            "method": "POST",
+          "name": "Gösterge özeti",
+          "request": {
+            "method": "GET",
             "header": [],
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "file",
-                  "type": "file",
-                  "src": ""
-                }
-              ]
-            },
             "url": {
-              "raw": "{{baseUrl}}/api/invoices",
+              "raw": "{{baseUrl}}/api/ozet",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "invoices"
+                "ozet"
               ]
             }
           },
-          "status": "Service Unavailable",
-          "code": 503,
-          "_postman_previewlanguage": "json",
-          "header": [
+          "response": []
+        },
+        {
+          "name": "Çıkış",
+          "event": [
             {
-              "key": "Content-Type",
-              "value": "application/json; charset=utf-8"
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 204) pm.collectionVariables.set('token', '');"
+                ]
+              }
             }
           ],
-          "body": "{\n  \"hata\": {\n    \"kod\": \"claude_auth\",\n    \"mesaj\": \"Claude oturumu doğrulanamadı. Token süresi dolmuş veya iptal edilmiş olabilir: \\\"claude setup-token\\\" ile yenileyin.\"\n  }\n}"
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/oturum",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "oturum"
+              ]
+            }
+          },
+          "response": []
         }
       ]
     },
     {
-      "name": "Fatura oku (ham dosya)",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/pdf",
-            "description": "Bilgi amaçlıdır; tür dosya içeriğinden belirlenir. Resim için image/png, image/jpeg vb."
+      "name": "Masraf ve onay",
+      "item": [
+        {
+          "name": "Masrafları listele",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar?kapsam=benim&durum=&q=&sayfa=1&adet=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar"
+              ],
+              "query": [
+                {
+                  "key": "kapsam",
+                  "value": "benim"
+                },
+                {
+                  "key": "durum",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "sayfa",
+                  "value": "1"
+                },
+                {
+                  "key": "adet",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "`kapsam=tumu` yalnızca muhasebe ve yönetici içindir. `durum` virgülle birden çok değer alır: taslak, onayda, onaylandi, reddedildi, odendi, iptal."
           },
-          {
-            "key": "X-File-Name",
-            "value": "fatura.pdf",
-            "description": "İsteğe bağlı. Kayıtta görünecek dosya adı; Türkçe karakter varsa URL kodlamasıyla gönderin (ör. %C5%9Fubat.pdf)."
-          }
-        ],
-        "body": {
-          "mode": "file",
-          "file": {
-            "src": ""
-          }
+          "response": []
         },
-        "url": {
-          "raw": "{{baseUrl}}/api/invoices",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "api",
-            "invoices"
-          ],
-          "query": [
+        {
+          "name": "Masraf oluştur",
+          "event": [
             {
-              "key": "yenile",
-              "value": "1",
-              "disabled": true,
-              "description": "Etkinleştirirseniz dosya daha önce okunmuş olsa bile Claude ile yeniden okunur."
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('masrafId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"baslik\": \"Müşteri yemeği\",\n  \"kategoriId\": 1,\n  \"masrafTarihi\": \"2026-11-05\",\n  \"tutar\": 1800,\n  \"paraBirimi\": \"TRY\",\n  \"satici\": \"Örnek Lokanta\",\n  \"aciklama\": \"\",\n  \"faturaIdler\": [],\n  \"gonder\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar"
+              ]
+            },
+            "description": "`faturaIdler` sizin yüklediğiniz faturaların kimlikleridir (en çok 20, eklenme sırasıyla), örneğin `[\"{{faturaId}}\"]`. Bir fatura iptal edilmemiş yalnızca bir formda kullanılabilir (`409 fatura_kullaniliyor`). Düzenlemede (`PATCH`) gönderilen liste, formun faturalarının tamamı yerine geçer. `gonder: true` formu kaydedip hemen onaya gönderir."
+          },
+          "response": []
+        },
+        {
+          "name": "Masrafı getir",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Masrafı güncelle",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tutar\": 1750\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Onay önizleme",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tutar\": 20000,\n  \"paraBirimi\": \"TRY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/onay-akisi/onizle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onay-akisi",
+                "onizle"
+              ]
+            },
+            "description": "Bu tutarla form gönderseydim kendi onay akışımda hangi onaycılara giderdi. Yönetici gövdeye `akisId` ekleyerek kayıtlı başka bir akışı deneyebilir."
+          },
+          "response": []
+        },
+        {
+          "name": "Onaya gönder",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}/gonder",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}",
+                "gonder"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Geri çek",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}/geri-cek",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}",
+                "geri-cek"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "İptal et",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}/iptal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}",
+                "iptal"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Onay kutusu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/onaylar?durum=bekleyen",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onaylar"
+              ],
+              "query": [
+                {
+                  "key": "durum",
+                  "value": "bekleyen"
+                }
+              ]
+            },
+            "description": "`bekleyen`: kararımı bekleyenler; `karar`: karar verdiklerim."
+          },
+          "response": []
+        },
+        {
+          "name": "Onayla",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aciklama\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}/onayla",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}",
+                "onayla"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reddet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aciklama\": \"Fiş okunmuyor, yeniden yükleyin.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}/reddet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}",
+                "reddet"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Ödendi işaretle",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}/odendi",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}",
+                "odendi"
+              ]
+            },
+            "description": "Muhasebe ve yönetici."
+          },
+          "response": []
+        },
+        {
+          "name": "Onayı devret",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"onayId\": 0,\n  \"yeniOnayciId\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}/devret",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}",
+                "devret"
+              ]
+            },
+            "description": "Yönetici. `onayId`, masraf detayındaki `onaylar` listesinde bekleyen adımın kimliğidir."
+          },
+          "response": []
+        },
+        {
+          "name": "CSV dışa aktar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/disa-aktar?durum=onaylandi&baslangic=&bitis=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "disa-aktar"
+              ],
+              "query": [
+                {
+                  "key": "durum",
+                  "value": "onaylandi"
+                },
+                {
+                  "key": "baslangic",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "bitis",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Muhasebe ve yönetici. Excel uyumlu, `;` ayraçlı, UTF-8 BOM."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Yönetim",
+      "item": [
+        {
+          "name": "Kullanıcıları listele",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/kullanicilar?q=&aktif=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kullanicilar"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "aktif",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Kullanıcı oluştur",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('kullaniciId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eposta\": \"ayse@firma.com\",\n  \"adSoyad\": \"Ayşe Kaya\",\n  \"rol\": \"calisan\",\n  \"departman\": \"Satış\",\n  \"sifre\": \"Gecici1234\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/kullanicilar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kullanicilar"
+              ]
+            },
+            "description": "Yeni kullanıcı ilk girişte şifresini değiştirir. Rol: calisan, muhasebe, yonetici."
+          },
+          "response": []
+        },
+        {
+          "name": "Kullanıcıyı güncelle",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"departman\": \"Pazarlama\",\n  \"aktif\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/kullanicilar/{{kullaniciId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kullanicilar",
+                "{{kullaniciId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Şifre sıfırla",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"yeniSifre\": \"Yeni12345\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/kullanicilar/{{kullaniciId}}/sifre",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kullanicilar",
+                "{{kullaniciId}}",
+                "sifre"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Onay akışları",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/onay-akislari",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onay-akislari"
+              ]
+            },
+            "description": "Bütün akışlar; varsayılan önce, sonra ada göre. `kullaniciSayisi` masrafları şu an o akışa giden aktif kullanıcılardır."
+          },
+          "response": []
+        },
+        {
+          "name": "Onay akışı oluştur",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ad\": \"Satış\",\n  \"adimlar\": [\n    {\n      \"onayciId\": 1,\n      \"altLimit\": 0,\n      \"ustLimit\": null\n    },\n    {\n      \"onayciId\": 2,\n      \"altLimit\": 5000.01,\n      \"ustLimit\": null\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/onay-akislari",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onay-akislari"
+              ]
+            },
+            "description": "Dizi sırası onay sırasıdır. En az bir onaycı ve 0'dan sınırsıza kadar boşluksuz aralık gerekir; aksi halde 400 `gecersiz_akis` ve `sorunlar`. Ad benzersizdir (409 `akis_adi_kullaniliyor`)."
+          },
+          "response": []
+        },
+        {
+          "name": "Onay akışı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/onay-akislari/{{akisId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onay-akislari",
+                "{{akisId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Onay akışını kaydet",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ad\": \"Satış\",\n  \"adimlar\": [\n    {\n      \"onayciId\": 1,\n      \"altLimit\": 0,\n      \"ustLimit\": null\n    },\n    {\n      \"onayciId\": 2,\n      \"altLimit\": 5000.01,\n      \"ustLimit\": null\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/onay-akislari/{{akisId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onay-akislari",
+                "{{akisId}}"
+              ]
+            },
+            "description": "Akışın adı ve bütün adımları yenisiyle değişir. Süren formlar etkilenmez."
+          },
+          "response": []
+        },
+        {
+          "name": "Varsayılan akış yap",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/onay-akislari/{{akisId}}/varsayilan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onay-akislari",
+                "{{akisId}}",
+                "varsayilan"
+              ]
+            },
+            "description": "Atanmamış kullanıcılar bundan sonra bu akışı kullanır."
+          },
+          "response": []
+        },
+        {
+          "name": "Onay akışını sil",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/onay-akislari/{{akisId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "onay-akislari",
+                "{{akisId}}"
+              ]
+            },
+            "description": "Varsayılan akış silinemez (409 `varsayilan_akis`). Bu akışa atanmış kullanıcılar varsayılan akışa geçer."
+          },
+          "response": []
+        },
+        {
+          "name": "Kategoriler",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/kategoriler",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kategoriler"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Kategori ekle",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ad\": \"Kırtasiye\",\n  \"simge\": \"ofis\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/kategoriler",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kategoriler"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Denetim kaydı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/denetim?adet=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "denetim"
+              ],
+              "query": [
+                {
+                  "key": "adet",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Fatura okuma",
+      "item": [
+        {
+          "name": "Fatura oku (form-data)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "PDF, PNG, JPEG, WEBP veya GIF fatura dosyası (en fazla 20 MB). Postman'da \"Select files\" ile seçin."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/invoices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "invoices"
+              ],
+              "query": [
+                {
+                  "key": "yenile",
+                  "value": "1",
+                  "disabled": true,
+                  "description": "Etkinleştirirseniz dosya daha önce okunmuş olsa bile Claude ile yeniden okunur."
+                }
+              ]
+            },
+            "description": "Fatura dosyasını `multipart/form-data` olarak, `file` alanında gönderir. Panel de bu yolu kullanır.\n\nDosya türü, dosya adına göre değil içeriğine göre belirlenir. Başarılı yanıtta `X-Fatura-Id` başlığı kayıt kimliğini, `Location` başlığı kaydın adresini verir.\n\nAynı dosya daha önce okunduysa yanıt 200 ve `X-Fatura-Onbellek: 1` başlığıyla, Claude çalıştırılmadan döner. Yeniden okutmak için Params sekmesindeki `yenile` parametresini etkinleştirin."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Fatura okundu', () => {",
+                  "  pm.expect(pm.response.code, \"201 yeni okuma, 200 kayıtlı sonuç\").to.be.oneOf([200, 201]);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.all.keys('fatura', 'kalemler', 'olcum');",
+                  "  pm.expect(body.kalemler).to.be.an('array');",
+                  "});",
+                  "const id = pm.response.headers.get('X-Fatura-Id');",
+                  "if (id) pm.collectionVariables.set('faturaId', id);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Okundu (Haiku kontrollerden geçti)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "Location",
+                  "value": "/api/invoices/20261106-090807-3fa94c1d"
+                },
+                {
+                  "key": "X-Fatura-Id",
+                  "value": "20261106-090807-3fa94c1d"
+                }
+              ],
+              "body": "{\n  \"fatura\": {\n    \"faturaNo\": \"ABC2026000000123\",\n    \"faturaTarihi\": \"2026-11-05\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"saticiVergiNo\": \"1234567890\",\n    \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n    \"aliciVergiNo\": \"9876543210\",\n    \"paraBirimi\": \"TRY\",\n    \"araToplam\": 1500,\n    \"kdvToplam\": 300,\n    \"genelToplam\": 1800\n  },\n  \"kalemler\": [\n    {\n      \"aciklama\": \"Danışmanlık\",\n      \"miktar\": 2,\n      \"birim\": \"saat\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 1000\n    },\n    {\n      \"aciklama\": \"Lisans\",\n      \"miktar\": 1,\n      \"birim\": \"adet\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 500\n    }\n  ],\n  \"olcum\": {\n    \"kaynak\": \"claude\",\n    \"istekSuresiMs\": 6250,\n    \"okuma\": {\n      \"sureMs\": 6100,\n      \"apiSureMs\": 5200,\n      \"tur\": 2,\n      \"girdiToken\": 12,\n      \"onbellektenToken\": 15800,\n      \"onbellegeToken\": 0,\n      \"ciktiToken\": 410,\n      \"apiEsdegeriUsd\": 0.000364,\n      \"model\": \"claude-haiku-5-5\",\n      \"effort\": \"low\",\n      \"adimlar\": [\n        {\n          \"sureMs\": 6100,\n          \"apiSureMs\": 5200,\n          \"tur\": 2,\n          \"girdiToken\": 12,\n          \"onbellektenToken\": 15800,\n          \"onbellegeToken\": 0,\n          \"ciktiToken\": 410,\n          \"apiEsdegeriUsd\": 0.000364,\n          \"model\": \"claude-haiku-5-5\",\n          \"sorunlar\": [],\n          \"hata\": null,\n          \"kullanildi\": true\n        }\n      ]\n    }\n  }\n}"
+            },
+            {
+              "name": "Okundu (Haiku'nun okuması tutmadı, Opus okudu)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "Location",
+                  "value": "/api/invoices/20261106-091502-77ab03e1"
+                },
+                {
+                  "key": "X-Fatura-Id",
+                  "value": "20261106-091502-77ab03e1"
+                }
+              ],
+              "body": "{\n  \"fatura\": {\n    \"faturaNo\": \"ABC2026000000123\",\n    \"faturaTarihi\": \"2026-11-05\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"saticiVergiNo\": \"1234567890\",\n    \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n    \"aliciVergiNo\": \"9876543210\",\n    \"paraBirimi\": \"TRY\",\n    \"araToplam\": 1500,\n    \"kdvToplam\": 300,\n    \"genelToplam\": 1800\n  },\n  \"kalemler\": [\n    {\n      \"aciklama\": \"Danışmanlık\",\n      \"miktar\": 2,\n      \"birim\": \"saat\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 1000\n    },\n    {\n      \"aciklama\": \"Lisans\",\n      \"miktar\": 1,\n      \"birim\": \"adet\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 500\n    }\n  ],\n  \"olcum\": {\n    \"kaynak\": \"claude\",\n    \"istekSuresiMs\": 20050,\n    \"okuma\": {\n      \"sureMs\": 19900,\n      \"apiSureMs\": 17700,\n      \"tur\": 4,\n      \"girdiToken\": 24,\n      \"onbellektenToken\": 31600,\n      \"onbellegeToken\": 0,\n      \"ciktiToken\": 930,\n      \"apiEsdegeriUsd\": 0.017132,\n      \"model\": \"claude-opus-5-5\",\n      \"effort\": \"low\",\n      \"adimlar\": [\n        {\n          \"sureMs\": 6100,\n          \"apiSureMs\": 5200,\n          \"tur\": 2,\n          \"girdiToken\": 12,\n          \"onbellektenToken\": 15800,\n          \"onbellegeToken\": 0,\n          \"ciktiToken\": 410,\n          \"apiEsdegeriUsd\": 0.000364,\n          \"model\": \"claude-haiku-5-5\",\n          \"sorunlar\": [\n            \"Kalemlerin toplamı ara toplamı tutmuyor.\"\n          ],\n          \"hata\": null,\n          \"kullanildi\": false\n        },\n        {\n          \"sureMs\": 13800,\n          \"apiSureMs\": 12500,\n          \"tur\": 2,\n          \"girdiToken\": 12,\n          \"onbellektenToken\": 15800,\n          \"onbellegeToken\": 0,\n          \"ciktiToken\": 520,\n          \"apiEsdegeriUsd\": 0.016768,\n          \"model\": \"claude-opus-5-5\",\n          \"sorunlar\": [],\n          \"hata\": null,\n          \"kullanildi\": true\n        }\n      ]\n    }\n  }\n}"
+            },
+            {
+              "name": "Daha önce okunmuş (Claude çalıştırılmadı)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "Location",
+                  "value": "/api/invoices/20261106-090807-3fa94c1d"
+                },
+                {
+                  "key": "X-Fatura-Id",
+                  "value": "20261106-090807-3fa94c1d"
+                },
+                {
+                  "key": "X-Fatura-Onbellek",
+                  "value": "1"
+                }
+              ],
+              "body": "{\n  \"fatura\": {\n    \"faturaNo\": \"ABC2026000000123\",\n    \"faturaTarihi\": \"2026-11-05\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"saticiVergiNo\": \"1234567890\",\n    \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n    \"aliciVergiNo\": \"9876543210\",\n    \"paraBirimi\": \"TRY\",\n    \"araToplam\": 1500,\n    \"kdvToplam\": 300,\n    \"genelToplam\": 1800\n  },\n  \"kalemler\": [\n    {\n      \"aciklama\": \"Danışmanlık\",\n      \"miktar\": 2,\n      \"birim\": \"saat\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 1000\n    },\n    {\n      \"aciklama\": \"Lisans\",\n      \"miktar\": 1,\n      \"birim\": \"adet\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 500\n    }\n  ],\n  \"olcum\": {\n    \"kaynak\": \"kayit\",\n    \"istekSuresiMs\": 9,\n    \"okuma\": {\n      \"sureMs\": 6100,\n      \"apiSureMs\": 5200,\n      \"tur\": 2,\n      \"girdiToken\": 12,\n      \"onbellektenToken\": 15800,\n      \"onbellegeToken\": 0,\n      \"ciktiToken\": 410,\n      \"apiEsdegeriUsd\": 0.000364,\n      \"model\": \"claude-haiku-5-5\",\n      \"effort\": \"low\",\n      \"adimlar\": [\n        {\n          \"sureMs\": 6100,\n          \"apiSureMs\": 5200,\n          \"tur\": 2,\n          \"girdiToken\": 12,\n          \"onbellektenToken\": 15800,\n          \"onbellegeToken\": 0,\n          \"ciktiToken\": 410,\n          \"apiEsdegeriUsd\": 0.000364,\n          \"model\": \"claude-haiku-5-5\",\n          \"sorunlar\": [],\n          \"hata\": null,\n          \"kullanildi\": true\n        }\n      ]\n    }\n  }\n}"
+            },
+            {
+              "name": "Desteklenmeyen dosya",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices"
+                  ]
+                }
+              },
+              "status": "Unsupported Media Type",
+              "code": 415,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"desteklenmeyen_dosya\",\n    \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n  }\n}"
+            },
+            {
+              "name": "Token geçersiz",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices"
+                  ]
+                }
+              },
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"claude_auth\",\n    \"mesaj\": \"Claude oturumu doğrulanamadı. Token süresi dolmuş veya iptal edilmiş olabilir: \\\"claude setup-token\\\" ile yenileyin.\"\n  }\n}"
+            },
+            {
+              "name": "Abonelik limiti doldu",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices"
+                  ]
+                }
+              },
+              "status": "Too Many Requests",
+              "code": 429,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"claude_limit\",\n    \"mesaj\": \"Claude abonelik kullanım limitine ulaşıldı; bir süre sonra tekrar deneyin. (usage limit reached)\"\n  }\n}"
             }
           ]
         },
-        "description": "Dosyanın kendisini istek gövdesi olarak gönderir (Body > binary). Form kurmanın zor olduğu istemciler için.\n\nAynı dosya daha önce okunduysa yanıt 200 ve `X-Fatura-Onbellek: 1` başlığıyla, Claude çalıştırılmadan döner. Yeniden okutmak için Params sekmesindeki `yenile` parametresini etkinleştirin."
-      },
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Fatura okundu', () => {",
-              "  pm.expect(pm.response.code, \"201 yeni okuma, 200 kayıtlı sonuç\").to.be.oneOf([200, 201]);",
-              "  pm.expect(pm.response.json()).to.have.all.keys('fatura', 'kalemler', 'olcum');",
-              "});",
-              "const id = pm.response.headers.get('X-Fatura-Id');",
-              "if (id) pm.collectionVariables.set('faturaId', id);"
-            ]
-          }
-        }
-      ],
-      "response": []
-    },
-    {
-      "name": "Kayıtları listele",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/api/invoices",
-          "host": [
-            "{{baseUrl}}"
+          "name": "Fatura oku (ham dosya)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/pdf",
+                "description": "Bilgi amaçlıdır; tür dosya içeriğinden belirlenir. Resim için image/png, image/jpeg vb."
+              },
+              {
+                "key": "X-File-Name",
+                "value": "fatura.pdf",
+                "description": "İsteğe bağlı. Kayıtta görünecek dosya adı; Türkçe karakter varsa URL kodlamasıyla gönderin (ör. %C5%9Fubat.pdf)."
+              }
+            ],
+            "body": {
+              "mode": "file",
+              "file": {
+                "src": ""
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/invoices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "invoices"
+              ],
+              "query": [
+                {
+                  "key": "yenile",
+                  "value": "1",
+                  "disabled": true,
+                  "description": "Etkinleştirirseniz dosya daha önce okunmuş olsa bile Claude ile yeniden okunur."
+                }
+              ]
+            },
+            "description": "Dosyanın kendisini istek gövdesi olarak gönderir (Body > binary). Form kurmanın zor olduğu istemciler için.\n\nAynı dosya daha önce okunduysa yanıt 200 ve `X-Fatura-Onbellek: 1` başlığıyla, Claude çalıştırılmadan döner. Yeniden okutmak için Params sekmesindeki `yenile` parametresini etkinleştirin."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Fatura okundu', () => {",
+                  "  pm.expect(pm.response.code, \"201 yeni okuma, 200 kayıtlı sonuç\").to.be.oneOf([200, 201]);",
+                  "  pm.expect(pm.response.json()).to.have.all.keys('fatura', 'kalemler', 'olcum');",
+                  "});",
+                  "const id = pm.response.headers.get('X-Fatura-Id');",
+                  "if (id) pm.collectionVariables.set('faturaId', id);"
+                ]
+              }
+            }
           ],
-          "path": [
-            "api",
-            "invoices"
+          "response": []
+        },
+        {
+          "name": "Toplu fatura gönder",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": "",
+                  "description": "Fatura dosyaları. Satır ekleyerek ya da bir satırda birden fazla dosya seçerek gönderin (en fazla 50 dosya, toplam 200 MB)."
+                },
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": ""
+                },
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/invoices/toplu",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "toplu"
+              ],
+              "query": [
+                {
+                  "key": "yenile",
+                  "value": "1",
+                  "disabled": true,
+                  "description": "Etkinleştirirseniz daha önce okunmuş dosyalar da Claude ile yeniden okunur."
+                }
+              ]
+            },
+            "description": "Birden fazla faturayı tek istekte gönderir. Sunucu Claude okumasını beklemeden yanıt verir; dosyalar arka planda, gönderildikleri sırayla okunur.\n\n- Daha önce okunmuş dosyalar yanıtta hemen `bitti` olarak, faturalarıyla (`sonuc`: `fatura` ve `kalemler`) gelir.\n- Dosyaların hepsi daha önce okunmuşsa (ya da reddedildiyse) durum `200` ve `bitti: true` olur; başka istek gerekmez.\n- Claude'un okuması gereken dosya varsa durum `202` olur. İlerlemeyi \"Kuyruk durumu\" isteğiyle izleyin; bu isteğin testi kuyruk kimliğini `kuyrukId` değişkenine yazar.\n\nAynı anda kaç dosyanın okunacağını sunucudaki `CLAUDE_MAX_CONCURRENT` ayarı belirler (1–4, varsayılan 2). Yanıttaki `esZamanli` alanı bu değeri gösterir.\n\nAlan adı önemli değildir; formdaki her dosya alınır. Hatalı ya da büyük bir dosya yalnızca kendisini etkiler. Bir istekte en fazla 50 dosya ve toplam 200 MB gönderilebilir. Daha önce okunmuş dosyaları yeniden okutmak için Params sekmesindeki `yenile` parametresini etkinleştirin."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Kuyruğa alındı', () => {",
+                  "  pm.expect(pm.response.code, '202 okuma sürüyor, 200 hepsi hazır').to.be.oneOf([200, 202]);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.dosyalar).to.be.an('array').that.is.not.empty;",
+                  "  pm.collectionVariables.set('kuyrukId', body.id);",
+                  "  const okunan = body.dosyalar.find((d) => d.kayitId);",
+                  "  if (okunan) pm.collectionVariables.set('faturaId', okunan.kayitId);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Hepsi daha önce okunmuş",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "files",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/toplu",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "toplu"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "Location",
+                  "value": "/api/invoices/toplu/20261106-113040-4e0d9b12"
+                }
+              ],
+              "body": "{\n  \"id\": \"20261106-113040-4e0d9b12\",\n  \"olusturulma\": \"2026-11-06T11:30:40.402Z\",\n  \"bitti\": true,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 2,\n    \"sirada\": 0,\n    \"okunuyor\": 0,\n    \"bitti\": 2,\n    \"hata\": 0\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261106-110231-5d2e9a07\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    }\n  ]\n}"
+            },
+            {
+              "name": "Kuyruğa alındı (biri daha önce okunmuş)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "files",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/toplu",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "toplu"
+                  ]
+                }
+              },
+              "status": "Accepted",
+              "code": 202,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "Location",
+                  "value": "/api/invoices/toplu/20261106-110215-8c1f02ab"
+                }
+              ],
+              "body": "{\n  \"id\": \"20261106-110215-8c1f02ab\",\n  \"olusturulma\": \"2026-11-06T11:02:15.120Z\",\n  \"bitti\": false,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 3,\n    \"sirada\": 0,\n    \"okunuyor\": 1,\n    \"bitti\": 1,\n    \"hata\": 1\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"durum\": \"okunuyor\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"durum\": \"hata\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    }\n  ]\n}"
+            },
+            {
+              "name": "Çok fazla dosya",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "files",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/toplu",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "toplu"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"cok_fazla_dosya\",\n    \"mesaj\": \"Bir seferde en fazla 50 dosya gönderilebilir.\"\n  }\n}"
+            },
+            {
+              "name": "İstek çok büyük",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "files",
+                      "type": "file",
+                      "src": ""
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/toplu",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "toplu"
+                  ]
+                }
+              },
+              "status": "Payload Too Large",
+              "code": 413,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"istek_cok_buyuk\",\n    \"mesaj\": \"Çoklu yüklemede dosyaların toplamı en fazla 200 MB olabilir. Dosyaları birkaç parçada gönderin.\"\n  }\n}"
+            }
           ]
         },
-        "description": "Son 100 kaydın özetini döndürür, en yeni başta."
-      },
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Liste döndü', () => {",
-              "  pm.response.to.have.status(200);",
-              "  pm.expect(pm.response.json()).to.be.an('array');",
-              "});"
-            ]
-          }
-        }
-      ],
-      "response": [
+          "name": "Kuyruk durumu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/invoices/toplu/{{kuyrukId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "toplu",
+                "{{kuyrukId}}"
+              ]
+            },
+            "description": "Toplu gönderimin ilerlemesini verir. Birkaç saniyede bir sormak yeterlidir. `bitti: true` olunca bütün dosyalar okunmuş ya da hata almıştır.\n\nHer dosyanın `durum` alanı `sirada`, `okunuyor`, `bitti` ya da `hata` olur. Okunan dosyanın faturası `sonuc` alanındadır (`fatura` ve `kalemler`). Ölçüm dahil tam kayıt `GET /api/invoices/<kayitId>` ile alınır; bu isteğin testi ilk okunan dosyanın kimliğini `faturaId` değişkenine yazar, \"Kaydı getir\" ile açabilirsiniz. `onbellek: true`, dosyanın daha önce okunduğunu ve kayıtlı sonucun kullanıldığını gösterir.\n\n`claude_limit` hatası alan dosyalar kendiliğinden yeniden denenmez; limit açılınca yeniden gönderin.\n\nKuyruk sunucunun belleğinde tutulur; sunucu yeniden başlarsa `404` döner. Okunan faturalar kayıtlarda durur."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Kuyruk bulundu', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const okunan = (body.dosyalar || []).find((d) => d.kayitId);",
+                  "if (okunan) pm.collectionVariables.set('faturaId', okunan.kayitId);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Okunuyor",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/toplu/20261106-110215-8c1f02ab",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "toplu",
+                    "20261106-110215-8c1f02ab"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"id\": \"20261106-110215-8c1f02ab\",\n  \"olusturulma\": \"2026-11-06T11:02:15.120Z\",\n  \"bitti\": false,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 3,\n    \"sirada\": 0,\n    \"okunuyor\": 1,\n    \"bitti\": 1,\n    \"hata\": 1\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"durum\": \"okunuyor\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"durum\": \"hata\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    }\n  ]\n}"
+            },
+            {
+              "name": "Bitti",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/toplu/20261106-104502-a1c37f60",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "toplu",
+                    "20261106-104502-a1c37f60"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"id\": \"20261106-104502-a1c37f60\",\n  \"olusturulma\": \"2026-11-06T10:45:02.871Z\",\n  \"bitti\": true,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 4,\n    \"sirada\": 0,\n    \"okunuyor\": 0,\n    \"bitti\": 2,\n    \"hata\": 2\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261106-110231-5d2e9a07\",\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"aralik.pdf\",\n      \"durum\": \"hata\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"claude_limit\",\n        \"mesaj\": \"Claude abonelik kullanım limitine ulaşıldı; bir süre sonra tekrar deneyin. (usage limit reached)\"\n      },\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 4,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"durum\": \"hata\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    }\n  ]\n}"
+            },
+            {
+              "name": "Kuyruk yok",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/toplu/20261106-000000-deadbeef",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "toplu",
+                    "20261106-000000-deadbeef"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"bulunamadi\",\n    \"mesaj\": \"Kuyruk bulunamadı. Sunucu yeniden başladıysa kuyruk silinmiştir; okunan faturalar kayıtlarda durur.\"\n  }\n}"
+            }
+          ]
+        },
         {
-          "name": "Liste",
-          "originalRequest": {
+          "name": "İzleme durumu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/izleme",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "izleme"
+              ]
+            },
+            "description": "Canlı izlemenin anlık durumu: sunucu açıldığından beri gelen her dosya, panelden ya da API ile, tekli ya da toplu.\n\n- `istatistik`: o anki sırada ve okunuyor sayıları, açılıştan beri okunan, kayıttan dönen, hata alan dosyalar ve Claude okumalarının API karşılığı (USD).\n- `etkinlikler`: en yeni başta. `durum` sirada → okunuyor → bitti ya da hata. `model` o an okuyan model, `ozet` bitmiş faturanın özeti, `kayitId` tam kaydın kimliği.\n- `kaynak`: `panel` ya da `api`. Panel isteklerine `X-Panel-Etiket` başlığı ekler; bu başlık olmayan her istek `api` sayılır.\n- Süren okumaların hepsi ve bitenlerin son 300'ü bellekte tutulur. Sunucu yeniden başlayınca sıfırlanır."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Anlık durum döndü', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.istatistik).to.include.keys('esZamanli', 'sirada', 'okunuyor', 'bitti', 'hata');",
+                  "  pm.expect(body.etkinlikler).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Okuma sürüyor",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/izleme",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "izleme"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"istatistik\": {\n    \"baslangic\": \"2026-11-06T09:00:00.000Z\",\n    \"esZamanli\": 2,\n    \"sirada\": 1,\n    \"okunuyor\": 2,\n    \"bitti\": 14,\n    \"kayittan\": 5,\n    \"hata\": 1,\n    \"apiEsdegeriUsd\": 0.4123\n  },\n  \"etkinlikler\": [\n    {\n      \"id\": \"3f9c1a7be210\",\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"boyut\": 48211,\n      \"kaynak\": \"api\",\n      \"etiket\": null,\n      \"kuyrukId\": \"20261106-110215-8c1f02ab\",\n      \"sira\": 2,\n      \"durum\": \"okunuyor\",\n      \"model\": \"opus\",\n      \"modeller\": [\n        \"haiku\",\n        \"opus\"\n      ],\n      \"onbellek\": false,\n      \"kayitId\": null,\n      \"hata\": null,\n      \"ozet\": null,\n      \"apiEsdegeriUsd\": null,\n      \"alinma\": \"2026-11-06T11:02:15.120Z\",\n      \"baslama\": \"2026-11-06T11:02:16.004Z\",\n      \"bitis\": null\n    },\n    {\n      \"id\": \"8a41d07c55e9\",\n      \"dosyaAdi\": \"fis.jpg\",\n      \"boyut\": 391022,\n      \"kaynak\": \"api\",\n      \"etiket\": null,\n      \"kuyrukId\": \"20261106-110215-8c1f02ab\",\n      \"sira\": 3,\n      \"durum\": \"sirada\",\n      \"model\": null,\n      \"modeller\": [],\n      \"onbellek\": false,\n      \"kayitId\": null,\n      \"hata\": null,\n      \"ozet\": null,\n      \"apiEsdegeriUsd\": null,\n      \"alinma\": \"2026-11-06T11:02:15.121Z\",\n      \"baslama\": null,\n      \"bitis\": null\n    },\n    {\n      \"id\": \"c07be93a1f42\",\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"boyut\": 51870,\n      \"kaynak\": \"panel\",\n      \"etiket\": \"5b0e6f8e-2a1c-4d3e-9f10-7c2b8a4d6e01\",\n      \"kuyrukId\": null,\n      \"sira\": null,\n      \"durum\": \"bitti\",\n      \"model\": \"claude-haiku-5-5\",\n      \"modeller\": [\n        \"claude-haiku-5-5\"\n      ],\n      \"onbellek\": false,\n      \"kayitId\": \"20261106-105931-0b9c44d1\",\n      \"hata\": null,\n      \"ozet\": {\n        \"faturaNo\": \"ABC2026000000123\",\n        \"faturaTarihi\": \"2026-10-31\",\n        \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n        \"genelToplam\": 1800,\n        \"paraBirimi\": \"TRY\",\n        \"kalemSayisi\": 1\n      },\n      \"apiEsdegeriUsd\": 0.0006,\n      \"alinma\": \"2026-11-06T10:59:22.410Z\",\n      \"baslama\": \"2026-11-06T10:59:22.433Z\",\n      \"bitis\": \"2026-11-06T10:59:31.087Z\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "İzleme akışı (SSE)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/izleme/akis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "izleme",
+                "akis"
+              ]
+            },
+            "description": "Server-Sent Events akışı; bağlantı açık kalır. Panel bu akışla canlı izleyici olarak çalışır.\n\n- İlk olay `durum`: \"İzleme durumu\" isteğinin döndürdüğü anlık durumun tamamı.\n- Sonra her değişiklikte bir `etkinlik`: `{etkinlik, istatistik}`, yani değişen dosya ve güncel sayaçlar.\n- Boştayken 20 saniyede bir `: canli` yorum satırı gelir. Bağlantı koparsa `retry: 3000` gereği istemci 3 saniye sonra yeniden bağlanır ve yeni bir `durum` alır.\n- Postman olayları yanıt panelinde akış olarak gösterir; durdurmak için isteği iptal edin. Komut satırından: `curl.exe -N http://127.0.0.1:4000/api/izleme/akis`."
+          },
+          "response": [
+            {
+              "name": "Akış",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "text/event-stream"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/izleme/akis",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "izleme",
+                    "akis"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "text",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "text/event-stream; charset=utf-8"
+                },
+                {
+                  "key": "Cache-Control",
+                  "value": "no-cache, no-transform"
+                }
+              ],
+              "body": "retry: 3000\n\nevent: durum\ndata: {\"istatistik\":{\"baslangic\":\"2026-11-06T09:00:00.000Z\",\"esZamanli\":2,\"sirada\":1,\"okunuyor\":2,\"bitti\":14,\"kayittan\":5,\"hata\":1,\"apiEsdegeriUsd\":0.4123},\"etkinlikler\":[{\"id\":\"3f9c1a7be210\",\"dosyaAdi\":\"kasim.pdf\",\"boyut\":48211,\"kaynak\":\"api\",\"etiket\":null,\"kuyrukId\":\"20261106-110215-8c1f02ab\",\"sira\":2,\"durum\":\"okunuyor\",\"model\":\"opus\",\"modeller\":[\"haiku\",\"opus\"],\"onbellek\":false,\"kayitId\":null,\"hata\":null,\"ozet\":null,\"apiEsdegeriUsd\":null,\"alinma\":\"2026-11-06T11:02:15.120Z\",\"baslama\":\"2026-11-06T11:02:16.004Z\",\"bitis\":null}]}\n\nevent: etkinlik\ndata: {\"etkinlik\":{\"id\":\"3f9c1a7be210\",\"dosyaAdi\":\"kasim.pdf\",\"boyut\":48211,\"kaynak\":\"api\",\"etiket\":null,\"kuyrukId\":\"20261106-110215-8c1f02ab\",\"sira\":2,\"durum\":\"bitti\",\"model\":\"claude-opus-5-5\",\"modeller\":[\"claude-haiku-5-5\",\"claude-opus-5-5\"],\"onbellek\":false,\"kayitId\":\"20261106-110241-5d2e7a90\",\"hata\":null,\"ozet\":{\"faturaNo\":\"GIB2026000004521\",\"faturaTarihi\":\"2026-11-01\",\"saticiUnvan\":\"Türk Telekom A.Ş.\",\"genelToplam\":1416,\"paraBirimi\":\"TRY\",\"kalemSayisi\":3},\"apiEsdegeriUsd\":0.0318,\"alinma\":\"2026-11-06T11:02:15.120Z\",\"baslama\":\"2026-11-06T11:02:16.004Z\",\"bitis\":\"2026-11-06T11:02:41.502Z\"},\"istatistik\":{\"baslangic\":\"2026-11-06T09:00:00.000Z\",\"esZamanli\":2,\"sirada\":1,\"okunuyor\":1,\"bitti\":15,\"kayittan\":5,\"hata\":1,\"apiEsdegeriUsd\":0.4441}}\n\n: canli\n"
+            }
+          ]
+        },
+        {
+          "name": "Kayıtları listele",
+          "request": {
             "method": "GET",
             "header": [],
             "url": {
@@ -408,57 +1923,56 @@
                 "api",
                 "invoices"
               ]
-            }
+            },
+            "description": "Son 100 kaydın özetini döndürür, en yeni başta."
           },
-          "status": "OK",
-          "code": 200,
-          "_postman_previewlanguage": "json",
-          "header": [
+          "event": [
             {
-              "key": "Content-Type",
-              "value": "application/json; charset=utf-8"
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Liste döndü', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
             }
           ],
-          "body": "[\n  {\n    \"id\": \"20261106-090807-3fa94c1d\",\n    \"dosyaAdi\": \"fatura.pdf\",\n    \"olusturulma\": \"2026-11-06T09:08:07.000Z\",\n    \"faturaNo\": \"ABC2026000000123\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"genelToplam\": 1800,\n    \"paraBirimi\": \"TRY\"\n  }\n]"
-        }
-      ]
-    },
-    {
-      "name": "Kaydı getir",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/api/invoices/{{faturaId}}",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "api",
-            "invoices",
-            "{{faturaId}}"
+          "response": [
+            {
+              "name": "Liste",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "[\n  {\n    \"id\": \"20261106-090807-3fa94c1d\",\n    \"dosyaAdi\": \"fatura.pdf\",\n    \"olusturulma\": \"2026-11-06T09:08:07.000Z\",\n    \"faturaNo\": \"ABC2026000000123\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"genelToplam\": 1800,\n    \"paraBirimi\": \"TRY\"\n  }\n]"
+            }
           ]
         },
-        "description": "Kayıtlı bir okumanın sonucunu döndürür. `faturaId`, \"Fatura oku\" isteklerinden sonra otomatik dolar; elle de yazabilirsiniz (ör. 20261106-090807-3fa94c1d)."
-      },
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Kayıt bulundu', () => {",
-              "  pm.response.to.have.status(200);",
-              "  pm.expect(pm.response.json()).to.have.all.keys('fatura', 'kalemler', 'olcum');",
-              "});"
-            ]
-          }
-        }
-      ],
-      "response": [
-        {
-          "name": "Kayıt",
-          "originalRequest": {
+          "name": "Kaydı getir",
+          "request": {
             "method": "GET",
             "header": [],
             "url": {
@@ -471,52 +1985,118 @@
                 "invoices",
                 "{{faturaId}}"
               ]
-            }
-          },
-          "status": "OK",
-          "code": 200,
-          "_postman_previewlanguage": "json",
-          "header": [
-            {
-              "key": "Content-Type",
-              "value": "application/json; charset=utf-8"
             },
+            "description": "Kayıtlı bir okumanın sonucunu döndürür. `faturaId`, \"Fatura oku\" isteklerinden sonra otomatik dolar; elle de yazabilirsiniz (ör. 20261106-090807-3fa94c1d)."
+          },
+          "event": [
             {
-              "key": "X-Fatura-Id",
-              "value": "20261106-090807-3fa94c1d"
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Kayıt bulundu', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json()).to.have.all.keys('fatura', 'kalemler', 'olcum');",
+                  "});"
+                ]
+              }
             }
           ],
-          "body": "{\n  \"fatura\": {\n    \"faturaNo\": \"ABC2026000000123\",\n    \"faturaTarihi\": \"2026-11-05\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"saticiVergiNo\": \"1234567890\",\n    \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n    \"aliciVergiNo\": \"9876543210\",\n    \"paraBirimi\": \"TRY\",\n    \"araToplam\": 1500,\n    \"kdvToplam\": 300,\n    \"genelToplam\": 1800\n  },\n  \"kalemler\": [\n    {\n      \"aciklama\": \"Danışmanlık\",\n      \"miktar\": 2,\n      \"birim\": \"saat\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 1000\n    },\n    {\n      \"aciklama\": \"Lisans\",\n      \"miktar\": 1,\n      \"birim\": \"adet\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 500\n    }\n  ],\n  \"olcum\": {\n    \"kaynak\": \"kayit\",\n    \"istekSuresiMs\": 3,\n    \"okuma\": {\n      \"sureMs\": 14200,\n      \"apiSureMs\": 12800,\n      \"tur\": 2,\n      \"girdiToken\": 12,\n      \"onbellektenToken\": 15800,\n      \"onbellegeToken\": 0,\n      \"ciktiToken\": 420,\n      \"apiEsdegeriUsd\": 0.0312,\n      \"model\": \"claude-sonnet-5-5\",\n      \"effort\": \"low\"\n    }\n  }\n}"
+          "response": [
+            {
+              "name": "Kayıt",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/{{faturaId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "{{faturaId}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "X-Fatura-Id",
+                  "value": "20261106-090807-3fa94c1d"
+                }
+              ],
+              "body": "{\n  \"fatura\": {\n    \"faturaNo\": \"ABC2026000000123\",\n    \"faturaTarihi\": \"2026-11-05\",\n    \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n    \"saticiVergiNo\": \"1234567890\",\n    \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n    \"aliciVergiNo\": \"9876543210\",\n    \"paraBirimi\": \"TRY\",\n    \"araToplam\": 1500,\n    \"kdvToplam\": 300,\n    \"genelToplam\": 1800\n  },\n  \"kalemler\": [\n    {\n      \"aciklama\": \"Danışmanlık\",\n      \"miktar\": 2,\n      \"birim\": \"saat\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 1000\n    },\n    {\n      \"aciklama\": \"Lisans\",\n      \"miktar\": 1,\n      \"birim\": \"adet\",\n      \"birimFiyat\": 500,\n      \"kdvOrani\": 20,\n      \"tutar\": 500\n    }\n  ],\n  \"olcum\": {\n    \"kaynak\": \"kayit\",\n    \"istekSuresiMs\": 3,\n    \"okuma\": {\n      \"sureMs\": 6100,\n      \"apiSureMs\": 5200,\n      \"tur\": 2,\n      \"girdiToken\": 12,\n      \"onbellektenToken\": 15800,\n      \"onbellegeToken\": 0,\n      \"ciktiToken\": 410,\n      \"apiEsdegeriUsd\": 0.000364,\n      \"model\": \"claude-haiku-5-5\",\n      \"effort\": \"low\",\n      \"adimlar\": [\n        {\n          \"sureMs\": 6100,\n          \"apiSureMs\": 5200,\n          \"tur\": 2,\n          \"girdiToken\": 12,\n          \"onbellektenToken\": 15800,\n          \"onbellegeToken\": 0,\n          \"ciktiToken\": 410,\n          \"apiEsdegeriUsd\": 0.000364,\n          \"model\": \"claude-haiku-5-5\",\n          \"sorunlar\": [],\n          \"hata\": null,\n          \"kullanildi\": true\n        }\n      ]\n    }\n  }\n}"
+            },
+            {
+              "name": "Bulunamadı",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/invoices/20261106-000000-00000000",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "invoices",
+                    "20261106-000000-00000000"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"bulunamadi\",\n    \"mesaj\": \"Kayıt bulunamadı.\"\n  }\n}"
+            }
+          ]
         },
         {
-          "name": "Bulunamadı",
-          "originalRequest": {
+          "name": "Fatura dosyasını indir",
+          "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/invoices/20261106-000000-00000000",
+              "raw": "{{baseUrl}}/api/invoices/{{faturaId}}/dosya",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
                 "invoices",
-                "20261106-000000-00000000"
+                "{{faturaId}}",
+                "dosya"
               ]
-            }
+            },
+            "description": "Orijinal PDF ya da resim. Dosyası olmayan eski kayıtlarda 404."
           },
-          "status": "Not Found",
-          "code": 404,
-          "_postman_previewlanguage": "json",
-          "header": [
-            {
-              "key": "Content-Type",
-              "value": "application/json; charset=utf-8"
-            }
-          ],
-          "body": "{\n  \"hata\": {\n    \"kod\": \"bulunamadi\",\n    \"mesaj\": \"Kayıt bulunamadı.\"\n  }\n}"
+          "response": []
         }
       ]
     }
-  ]
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  }
 }

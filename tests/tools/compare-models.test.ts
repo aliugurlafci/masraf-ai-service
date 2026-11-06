@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { ExtractionError, type ExtractInvoice } from '../src/claude-extractor.ts';
+import { ExtractionError, type ExtractInvoice } from '../../src/claude/extractor.ts';
 import {
   collectFiles,
   compareModels,
@@ -12,9 +12,9 @@ import {
   totalsAgree,
   type Attempt,
   type InputFile,
-} from '../src/compare-models.ts';
-import type { Invoice } from '../src/invoice-schema.ts';
-import { PDF_BYTES, PNG_BYTES, sampleInvoice, sampleOlcum } from './helpers.ts';
+} from '../../src/tools/compare-models.ts';
+import type { Invoice } from '../../src/invoice/schema.ts';
+import { PDF_BYTES, PNG_BYTES, sampleInvoice, sampleOlcum } from '../helpers.ts';
 
 const MODELS = ['haiku', 'sonnet', 'opus'];
 

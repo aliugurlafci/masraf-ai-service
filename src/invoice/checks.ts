@@ -1,4 +1,4 @@
-import type { Invoice } from './invoice-schema.ts';
+import type { Invoice } from './schema.ts';
 
 const REQUIRED = [
   ['faturaNo', 'fatura no'],

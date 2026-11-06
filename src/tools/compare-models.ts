@@ -7,11 +7,11 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { createCascadeExtractor } from './cascade.ts';
-import { createClaudeExtractor, ExtractionError, type ExtractInvoice } from './claude-extractor.ts';
-import { loadConfig, MODEL_NAME_REGEX } from './config.ts';
-import { detectFileType, type DetectedFile } from './file-type.ts';
-import type { Invoice } from './invoice-schema.ts';
+import { createCascadeExtractor } from '../claude/cascade.ts';
+import { createClaudeExtractor, ExtractionError, type ExtractInvoice } from '../claude/extractor.ts';
+import { loadConfig, MODEL_NAME_REGEX } from '../config.ts';
+import { detectFileType, type DetectedFile } from '../invoice/file-type.ts';
+import type { Invoice } from '../invoice/schema.ts';
 
 export const DEFAULT_MODELS: readonly string[] = ['haiku', 'sonnet', 'opus'];
 export const CASCADE_SEPARATOR = '>';

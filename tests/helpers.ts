@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
-import type { Extraction } from '../src/claude-extractor.ts';
-import type { Invoice } from '../src/invoice-schema.ts';
-import type { ClaudeOlcum } from '../src/olcum.ts';
+import type { Extraction } from '../src/claude/extractor.ts';
+import type { Invoice } from '../src/invoice/schema.ts';
+import type { ClaudeOlcum } from '../src/claude/olcum.ts';
 
 export const FAKE_CLAUDE = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
 export const FAKE_TOKEN = `sk-ant-oat01-${'a'.repeat(40)}`;

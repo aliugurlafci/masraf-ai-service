@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectFileType } from '../src/file-type.ts';
+import { detectFileType } from '../../src/invoice/file-type.ts';
 
 const bytes = (...b: number[]): Buffer => Buffer.from(b);
 
