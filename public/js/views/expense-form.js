@@ -13,6 +13,7 @@ import { el, icon, ICONS, replay } from '../dom.js';
 import { fmtAmountInput, fmtCount, fmtCurrency, fmtDateLong, fmtRateInput, modelName, parseAmount, toCents, todayIso } from '../format.js';
 import { approverChain, chainLead, expenseHref, invoicePreview } from '../expense-ui.js';
 import { invoicesTotal, needsEquivalent } from '../equivalents.js';
+import { editInvoiceDialog, labelOf, missingOf, pathLabel, pickInvoice, sameInvoice } from '../invoice-edit.js';
 import { sniffType, typedObjectUrl } from '../files.js';
 import { totalChecks } from '../invoice.js';
 import { categoryIcon } from '../labels.js';
@@ -105,6 +106,7 @@ export const expenseFormView = {
     const editing = route.name === 'masraf-duzenle';
     const id = editing ? route.params.id : null;
     const fromInvoice = editing ? null : route.query.get('fatura');
+    const focusInvoice = editing ? route.query.get('fatura') : null; // opens that invoice's editor
 
     let alive = true;
     let base = session.knownBaseCurrency() ?? 'TRY';
@@ -406,6 +408,8 @@ export const expenseFormView = {
       if (ids.length > 0) body.faturaIdler = ids;
       const eq = equivalents().given;
       if (Object.keys(eq).length > 0) body.yerelKarsiliklar = eq;
+      const fix = corrections({ forPreview: true });
+      if (Object.keys(fix).length > 0) body.faturaDuzeltmeleri = fix;
       const r = await api.previewFlow(body, { signal });
       if (!alive || my !== previewToken) return;
       if (!r.ok) {
@@ -483,10 +487,18 @@ export const expenseFormView = {
       const failed = cards.filter((c) => c.kind === 'error').length;
       const blocked = pending > 0 || failed > 0;
       const missing = sendBtn ? equivalents().missing.length : 0;
-      readingHint.hidden = !blocked && missing === 0;
-      readingHint.classList.toggle('warn', !pending && (failed > 0 || missing > 0));
+      // Only a hint: the server decides whether the form can be sent.
+      const incomplete = sendBtn ? readyCards().filter((c) => missingFor(c).length > 0).length : 0;
+      readingHint.hidden = !blocked && missing === 0 && incomplete === 0;
+      readingHint.classList.toggle('warn', !pending && (failed > 0 || missing > 0 || incomplete > 0));
       if (blocked) readingHint.replaceChildren(icon(pending > 0 ? ICONS.clock : ICONS.warn), el('span', { text: blockText(pending, failed) }));
       else if (missing > 0) readingHint.replaceChildren(icon(ICONS.warn), el('span', { text: missingText(missing) }));
+      else if (incomplete > 0) {
+        readingHint.replaceChildren(
+          icon(ICONS.warn),
+          el('span', { text: `${incomplete === 1 ? 'Bir faturada' : `${fmtCount(incomplete)} faturada`} zorunlu alan (fatura no, tarih, satıcı, genel toplam) boş; onaya göndermeden önce “Eksikleri doldur” ile tamamlayın. Taslak olarak kaydedebilirsiniz.` }),
+        );
+      }
       setBusy(saveBtn, busy);
       if (sendBtn) setBusy(sendBtn, busy);
       if (blocked) saveBtn.disabled = true;
@@ -519,6 +531,11 @@ export const expenseFormView = {
         eqText: '', // the base-currency equivalent as typed; kept while the form's currency makes it unneeded
         eq: null, // { field, input, hint }: built once, so typing never loses the focus
         serverError: null,
+        original: null, // { fatura, kalemler }: what was read, which "Okunan değere dön" goes back to
+        corr: undefined, // the correction to send: undefined = untouched, null = remove it, { fatura, kalemler }
+        duzeltildi: false, // the saved form already holds a correction for this invoice
+        eksik: null, // required fields the server reports empty (saved invoices, until edited here)
+        pathErrors: {}, // server messages by path inside the correction ("fatura.faturaTarihi")
         node: null,
         statusNode: null,
         noteSlot: null,
@@ -558,6 +575,55 @@ export const expenseFormView = {
         },
         attrs: { 'aria-label': `${label}: ${card.name}` },
       });
+    }
+
+    const isCorrected = (card) => (card.corr !== undefined ? card.corr !== null : card.duzeltildi);
+
+    /** Empty required fields: the server's list for a saved invoice until it is edited here, else worked out from the data. */
+    const missingFor = (card) => (card.corr === undefined && card.eksik ? card.eksik : missingOf(card.fatura));
+
+    /** The invoice's valid data as the schema's shape. */
+    const validData = (card) => pickInvoice(card.fatura, card.kalemler);
+
+    async function openEditor(card) {
+      if (busy || !isReady(card)) return;
+      const result = await editInvoiceDialog({
+        title: `Fatura bilgileri: ${card.name}`,
+        current: validData(card),
+        errors: card.pathErrors,
+        canRevert: isCorrected(card),
+      });
+      if (!alive || !cards.includes(card) || result === null) return;
+      const original = card.original ?? validData(card);
+      if (result === 'revert') {
+        markDirty();
+        settle(card, { fatura: { ...card.fatura, ...original.fatura }, kalemler: original.kalemler, corr: null, eksik: null, pathErrors: {}, serverError: null });
+        say(`${card.name}: okunan değerlere dönüldü.`);
+        return;
+      }
+      if (sameInvoice(result, validData(card))) return;
+      markDirty();
+      settle(card, { fatura: { ...card.fatura, ...result.fatura }, kalemler: result.kalemler, corr: sameInvoice(result, original) ? null : result, eksik: null, pathErrors: {}, serverError: null });
+      say(`${card.name} düzeltildi.`);
+      offerNextIncomplete(card);
+    }
+
+    /** After "Uygula": points at the next invoice that still has empty required fields. */
+    function offerNextIncomplete(after) {
+      const rest = readyCards().filter((c) => c !== after && missingFor(c).length > 0);
+      if (rest.length === 0) return;
+      const next = rest.find((c) => cards.indexOf(c) > cards.indexOf(after)) ?? rest[0];
+      const n = cards.indexOf(next) + 1;
+      invAlert.replaceChildren(
+        el('div', { className: 'inv-next' }, el('p', { text: `Sıradaki eksik fatura: ${n}. fatura` }), btn(`${n}. faturaya geç`, { size: 'sm', kind: 'primary', onClick: () => openEditor(next) })),
+      );
+    }
+
+    /** What the preview and the save send for this invoice: a correction, or nothing. */
+    function correctionFor(card) {
+      if (card.corr) return card.corr;
+      if (card.corr === undefined && card.duzeltildi) return validData(card);
+      return undefined;
     }
 
     function cardNode(card) {
@@ -602,25 +668,36 @@ export const expenseFormView = {
       } else {
         const f = card.fatura ?? {};
         const problems = card.kalemler ? totalChecks({ fatura: f, kalemler: card.kalemler }).filter((c) => !c.ok) : [];
+        const gone = missingFor(card);
         let lead = 'Bağlı fatura';
         if (card.kind === 'done') lead = card.fromRecord ? 'Okunan fatura bağlandı.' : card.onbellek ? 'Daha önce okunmuş; sonuç kayıttan alındı.' : 'Fatura okundu.';
         card.noteSlot = el('div', { className: 'inv-card-notes' });
+        const status = el('p', { className: 'inv-status ok' }, icon(ICONS.checkCircle), el('span', { text: lead }), isCorrected(card) ? el('span', { className: 'tag accent', text: 'Düzeltildi' }) : null);
+        const fact = (key, label, value) => {
+          const isGone = gone.includes(key);
+          return el('div', { className: isGone ? 'is-missing' : null }, el('dt', { text: label }), el('dd', { text: isGone ? 'Eksik' : (value ?? '—') }));
+        };
         add(
-          cardTop(card, numberMark(), el('p', { className: 'inv-status ok' }, icon(ICONS.checkCircle), el('span', { text: lead }))),
+          cardTop(card, numberMark(), status),
           el(
             'dl',
             { className: 'kv compact' },
-            kv('Fatura no', f.faturaNo ?? 'Okunamadı'),
-            kv('Tarih', fmtDateLong(f.faturaTarihi)),
-            kv('Satıcı', f.saticiUnvan),
-            kv('Genel toplam', fmtCurrency(f.genelToplam, f.paraBirimi)),
+            fact('faturaNo', 'Fatura no', f.faturaNo),
+            fact('faturaTarihi', 'Tarih', fmtDateLong(f.faturaTarihi)),
+            fact('saticiUnvan', 'Satıcı', f.saticiUnvan),
+            fact('genelToplam', 'Genel toplam', fmtCurrency(f.genelToplam, f.paraBirimi)),
           ),
+          gone.length > 0
+            ? el('p', { className: 'inv-missing', role: 'status' }, icon(ICONS.alert), el('span', { text: `Boş zorunlu alan: ${gone.map((k) => labelOf(k).toLocaleLowerCase('tr-TR')).join(', ')}. “Eksikleri doldur” ile tamamlayın; onaya göndermek için gerekli.` }))
+            : null,
           card.noteSlot,
           problems.length > 0 ? alertBox('warn', 'Okunan rakamları kontrol edin', problems.map((c) => c.text)) : null,
           previewBlock(card),
           el(
             'div',
             { className: 'inv-actions' },
+            gone.length > 0 ? btn('Eksikleri doldur', { icon: ICONS.edit, size: 'sm', kind: 'primary', onClick: () => openEditor(card), attrs: { 'aria-label': `Eksikleri doldur: ${card.name}`, 'aria-haspopup': 'dialog' } }) : null,
+            btn('Bilgileri düzenle', { icon: ICONS.edit, size: 'sm', onClick: () => openEditor(card), attrs: { 'aria-label': `Bilgileri düzenle: ${card.name}`, 'aria-haspopup': 'dialog' } }),
             card.id
               ? btn('Okunan faturayı aç', {
                   icon: ICONS.external,
@@ -908,6 +985,7 @@ export const expenseFormView = {
         id: r.id,
         fatura: r.body.fatura,
         kalemler: r.body.kalemler,
+        original: pickInvoice(r.body.fatura, r.body.kalemler),
         onbellek: r.body.olcum?.kaynak === 'kayit' || r.res?.headers.get('X-Fatura-Onbellek') === '1',
         preview: { url, mime, name: card.name },
       });
@@ -981,7 +1059,7 @@ export const expenseFormView = {
       }
       const f = r.body.fatura ?? {};
       markDirty();
-      settle(card, { kind: 'done', fromRecord: true, name: f.faturaNo ? `Fatura ${f.faturaNo}` : 'Okunan fatura', fatura: r.body.fatura, kalemler: r.body.kalemler, previewLoading: true });
+      settle(card, { kind: 'done', fromRecord: true, name: f.faturaNo ? `Fatura ${f.faturaNo}` : 'Okunan fatura', fatura: r.body.fatura, kalemler: r.body.kalemler, original: pickInvoice(r.body.fatura, r.body.kalemler), previewLoading: true });
       const file = await api.getInvoiceFile(fid, { signal: ctl.signal });
       const type = file.ok ? await sniffType(file.blob) : null;
       if (file.aborted || !alive || !cards.includes(card)) return;
@@ -1183,6 +1261,10 @@ export const expenseFormView = {
             id: f.id,
             name: f.dosyaAdi || (f.faturaNo ? `Fatura ${f.faturaNo}` : 'Fatura'),
             fatura: f,
+            kalemler: f.kalemler ?? [],
+            original: f.duzeltildi && f.okunan ? pickInvoice(f.okunan.fatura, f.okunan.kalemler) : pickInvoice(f, f.kalemler),
+            duzeltildi: Boolean(f.duzeltildi),
+            eksik: Array.isArray(f.eksikAlanlar) ? f.eksikAlanlar : [],
             preview: f.dosyaVar ? { url: api.invoiceFileUrl(f.id), mime: f.mime, name: f.dosyaAdi } : null,
             eqText: f.yerelKarsilik !== null && f.yerelKarsilik !== undefined ? fmtAmountInput(f.yerelKarsilik) : '',
           }),
@@ -1246,7 +1328,25 @@ export const expenseFormView = {
       const eq = equivalents();
       for (const { card, error } of eq.invalid) errors[`yerelKarsiliklar.${card.id}`] = error;
       data.yerelKarsiliklar = eq.given;
+      data.faturaDuzeltmeleri = corrections();
       return { errors, data, missing: eq.missing };
+    }
+
+    /**
+     * faturaDuzeltmeleri: { faturaId: { fatura, kalemler } | null }. Only invoices the user touched go
+     * in; null removes a correction the saved form holds. The preview also needs the saved ones, since
+     * it has no form to read them from.
+     */
+    function corrections({ forPreview = false } = {}) {
+      const out = {};
+      for (const card of readyCards()) {
+        if (forPreview) {
+          const c = correctionFor(card);
+          if (c) out[card.id] = c;
+        } else if (card.corr) out[card.id] = card.corr;
+        else if (card.corr === null && card.duzeltildi) out[card.id] = null;
+      }
+      return out;
     }
 
     /** Field names to controls, the equivalent inputs included (yerelKarsiliklar.<faturaId>). */
@@ -1263,6 +1363,7 @@ export const expenseFormView = {
       if (data.aciklama) b.aciklama = data.aciklama;
       if (data.faturaIdler.length > 0) b.faturaIdler = data.faturaIdler;
       if (Object.keys(data.yerelKarsiliklar).length > 0) b.yerelKarsiliklar = data.yerelKarsiliklar;
+      if (Object.keys(data.faturaDuzeltmeleri).length > 0) b.faturaDuzeltmeleri = data.faturaDuzeltmeleri;
       return b;
     }
 
@@ -1288,6 +1389,8 @@ export const expenseFormView = {
       if (!sameList(data.faturaIdler, saved)) p.faturaIdler = data.faturaIdler;
       // Sent, the map replaces every equivalent; so it goes in full, with a changed list too.
       if (p.faturaIdler || !sameAmounts(data.yerelKarsiliklar, savedEquivalents(d))) p.yerelKarsiliklar = data.yerelKarsiliklar;
+      // Listed invoices change; the others keep their correction on the server.
+      if (Object.keys(data.faturaDuzeltmeleri).length > 0) p.faturaDuzeltmeleri = data.faturaDuzeltmeleri;
       return p;
     }
 
@@ -1316,6 +1419,31 @@ export const expenseFormView = {
       } else if (e.kod === 'fatura_kullaniliyor') {
         listMessages.push(e.mesaj);
       }
+      // alanlar["faturalar.<id>.<alan>"] (409 fatura_eksik), alanlar["faturalar.<id>"] (409 fatura_mukerrer)
+      // and alanlar["faturaDuzeltmeleri.<id>.<yol>"] (400) go under that invoice; the editor shows them by field.
+      const perCard = new Map();
+      if (alanlar) {
+        for (const [key, message] of Object.entries(alanlar)) {
+          const m = /^(faturalar|faturaDuzeltmeleri)\.([^.]+)(?:\.(.+))?$/.exec(key);
+          if (!m) continue;
+          delete alanlar[key];
+          const card = cards.find((c) => c.id === m[2]);
+          if (!card) {
+            listMessages.push(String(message));
+            continue;
+          }
+          const rest = m[3] ?? null;
+          const entry = perCard.get(card) ?? { lines: [], paths: {} };
+          entry.lines.push(rest ? `${pathLabel(rest)}: ${message}` : String(message));
+          if (rest) entry.paths[m[1] === 'faturalar' ? `fatura.${rest}` : rest] = String(message);
+          perCard.set(card, entry);
+        }
+        for (const [card, entry] of perCard) {
+          card.pathErrors = entry.paths;
+          setCardError(card, entry.lines.join(' '));
+          firstCard ??= card;
+        }
+      }
       if (listMessages.length > 0) invAlert.replaceChildren(alertBox('err', null, listMessages));
       const invoiceProblem = firstCard !== null || listMessages.length > 0;
 
@@ -1324,6 +1452,9 @@ export const expenseFormView = {
       if (!alanlar) {
         // A refused send on a new form created nothing; it can still be kept as a draft.
         summary.replaceChildren(alertBox('err', null, [e.mesaj, unsaved && e.durum === 409 ? 'Masraf kaydedilmedi; taslak olarak kaydedebilirsiniz.' : null].filter(Boolean)));
+      } else if (e.kod === 'fatura_eksik' || e.kod === 'fatura_mukerrer') {
+        const lead = e.kod === 'fatura_eksik' ? 'Bazı faturalarda zorunlu alanlar boş. İşaretli faturanın “Eksikleri doldur” düğmesiyle tamamlayın ya da taslak olarak kaydedin.' : 'Bir fatura başka bir masrafta ya da bu masrafta zaten kayıtlı. İşaretli faturayı kaldırın veya düzeltin.';
+        summary.replaceChildren(alertBox('err', 'Onaya gönderilemedi', [e.mesaj, lead, unsaved && e.durum === 409 ? 'Masraf kaydedilmedi; taslak olarak kaydedebilirsiniz.' : null].filter(Boolean)));
       } else if (e.kod === 'karsilik_eksik') {
         const items = [...new Set(Object.values(alanlar).map(String))];
         summary.replaceChildren(alertBox('err', 'Onaya gönderilemedi', [...items, 'Karşılıkları girip yeniden gönderin ya da taslak olarak kaydedin.']));
@@ -1336,6 +1467,20 @@ export const expenseFormView = {
       const target = firstCard?.node ?? (alanlar && listMessages.length > 0 ? invAlert : summary);
       target.scrollIntoView({ block: 'nearest' });
       target.focus({ preventScroll: true });
+    }
+
+    /** After a save that keeps the page open: the corrections are on the server now. */
+    function syncFromSaved(d) {
+      for (const card of cards) {
+        const f = (d.faturalar ?? []).find((x) => x.id === card.id);
+        if (!f) continue;
+        card.corr = undefined;
+        card.duzeltildi = Boolean(f.duzeltildi);
+        card.eksik = Array.isArray(f.eksikAlanlar) ? f.eksikAlanlar : [];
+        card.original = f.duzeltildi && f.okunan ? pickInvoice(f.okunan.fatura, f.okunan.kalemler) : pickInvoice(f, f.kalemler);
+        card.pathErrors = {};
+        renderCard(card);
+      }
     }
 
     function setSaving(on) {
@@ -1376,6 +1521,16 @@ export const expenseFormView = {
         missing[0].eq?.input.focus();
         return;
       }
+      if (sendAfter) {
+        // Nothing goes to the server; the server still enforces the rule. This only leads the user to the field.
+        const incomplete = readyCards().filter((c) => missingFor(c).length > 0);
+        if (incomplete.length > 0) {
+          toast('Göndermeden önce eksik bilgileri doldurun.');
+          incomplete[0].node?.scrollIntoView({ block: 'nearest' });
+          openEditor(incomplete[0]);
+          return;
+        }
+      }
       sentCards = readyCards();
       setSaving(true);
       let r;
@@ -1401,7 +1556,7 @@ export const expenseFormView = {
         if (!s.ok) {
           setSaving(false);
           if (s.unauthorized) return;
-          if (s.error.kod === 'karsilik_eksik') {
+          if (['karsilik_eksik', 'fatura_eksik', 'fatura_mukerrer'].includes(s.error.kod)) {
             // The changes are saved; stay on the form so the missing equivalents can be entered. The
             // saved form may differ from what this page loaded (another tab), so compare the next save
             // with the server's copy; failing that, with the equivalents it reported missing removed.
@@ -1409,6 +1564,7 @@ export const expenseFormView = {
             if (!alive) return;
             const gone = new Set(Object.keys(s.error.alanlar ?? {}).map((k) => k.replace(/^yerelKarsiliklar\./, '')));
             detail = fresh.ok ? fresh.body : { ...saved, faturalar: (saved.faturalar ?? []).map((f) => (gone.has(f.id) ? { ...f, yerelKarsilik: null } : f)) };
+            syncFromSaved(detail);
             toast('Değişiklikler kaydedildi ama masraf onaya gönderilemedi.', 'err');
             showServerError(s.error);
             return;
@@ -1471,7 +1627,11 @@ export const expenseFormView = {
       if (detail?.kategori && !categories.some((c) => c.id === detail.kategori.id)) categories.push({ ...detail.kategori, aktif: false });
 
       build();
-      if (detail) fillFromDetail(detail);
+      if (detail) {
+        fillFromDetail(detail);
+        const target = focusInvoice ? cards.find((c) => c.id === focusInvoice) : null;
+        if (target) openEditor(target);
+      }
       else {
         controls.masrafTarihi.value = todayIso();
         renderPanelState();

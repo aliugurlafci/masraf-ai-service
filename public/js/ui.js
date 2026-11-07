@@ -45,6 +45,7 @@ export function toast(text, kind) {
   const node = el('div', { className: `toast${kind ? ` ${kind}` : ''}` }, icon(glyph), el('span', { text }));
   box.append(node);
   while (box.children.length > 3) box.firstElementChild.remove();
+  raiseToasts();
   setTimeout(
     () => {
       node.classList.add('out');
@@ -52,6 +53,22 @@ export function toast(text, kind) {
     },
     kind === 'err' ? 6500 : 3800,
   );
+}
+
+/**
+ * A modal dialog lives in the top layer and covers anything else, toasts included. Showing the toast box
+ * again as a popover moves it to the top of that layer. Called for every new toast and after a dialog
+ * opens (a toast shown just before the dialog would otherwise end up behind it).
+ */
+function raiseToasts() {
+  const box = $('toasts');
+  if (!box || box.childElementCount === 0 || typeof box.showPopover !== 'function') return;
+  try {
+    if (box.matches(':popover-open')) box.hidePopover();
+    box.showPopover();
+  } catch {
+    // Not connected or unsupported: the box still shows as a plain fixed element.
+  }
 }
 
 /** Shows a failed call's message, unless the call was cancelled or ended in the login screen. */
@@ -395,6 +412,7 @@ export function openDialog({
   const ctl = { dialog, form, close, setError, setBusy: setBusyState, done, submitButton: submitBtn };
   openDialogs.add(ctl);
   dialog.showModal();
+  raiseToasts();
   const firstInput = form.querySelector('.dlg-body [autofocus], .dlg-body input:not([type="hidden"]):not([disabled]), .dlg-body select, .dlg-body textarea');
   let target = firstInput ?? submitBtn ?? cancelBtn;
   if (focus === 'cancel') target = cancelBtn;

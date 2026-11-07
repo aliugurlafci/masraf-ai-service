@@ -9,7 +9,7 @@ import { spacing, useTheme } from '@/theme';
 
 export default function EditExpenseScreen() {
   const { colors } = useTheme();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, fatura } = useLocalSearchParams<{ id: string; fatura?: string }>();
   const masraf = useMasraf(Number(id));
 
   return (
@@ -29,7 +29,7 @@ export default function EditExpenseScreen() {
           onAction={() => router.back()}
         />
       ) : (
-        <ExpenseForm mode="edit" initial={masraf.data} onDone={() => router.back()} />
+        <ExpenseForm mode="edit" initial={masraf.data} focusInvoice={fatura} onDone={() => router.back()} />
       )}
     </View>
   );

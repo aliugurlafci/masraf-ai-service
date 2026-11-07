@@ -123,6 +123,23 @@ export const logout = () => send('DELETE', '/api/oturum', undefined, { auth: fal
 export const me = (opts) => get('/api/ben', opts);
 export const changeMyPassword = (mevcutSifre, yeniSifre) => send('PUT', '/api/ben/sifre', { mevcutSifre, yeniSifre });
 export const summary = (opts) => get('/api/ozet', opts);
+/** { mailBildirim: boolean } → Kullanici. In-app notifications cannot be turned off. */
+export const updatePreferences = (data) => send('PUT', '/api/ben/tercihler', data);
+
+// ---------- Notifications ----------
+
+/** { okunmamis: 1, sayfa, adet } → { kayitlar, toplam, okunmamis, sayfa, adet } */
+export const listNotifications = (params, opts) => get(`/api/bildirimler${qs(params)}`, opts);
+export const markNotificationRead = (id) => send('POST', `/api/bildirimler/${seg(id)}/okundu`);
+export const markAllNotificationsRead = () => send('POST', '/api/bildirimler/hepsi-okundu');
+
+// ---------- Mail outbox (yonetici) ----------
+
+/** { alici? } → 202 { id } · 409 mail_kapali */
+export const sendTestMail = (alici) => send('POST', '/api/eposta/deneme', alici ? { alici } : {});
+/** { durum, adet } → [{ id, alici, konu, durum, deneme, sonHata, olusturma, gonderim }] */
+export const listMails = (params, opts) => get(`/api/eposta${qs(params)}`, opts);
+export const retryMail = (id) => send('POST', `/api/eposta/${seg(id)}/yeniden`);
 
 // ---------- Users (yonetici) ----------
 
@@ -168,13 +185,27 @@ export const updateCategory = (id, data) => send('PATCH', `/api/kategoriler/${se
 /** { kapsam: 'benim'|'tumu', durum: 'onayda,taslak', q, sayfa, adet } */
 export const listExpenses = (params, opts) => get(`/api/masraflar${qs(params)}`, opts);
 export const getExpense = (id, opts) => get(`/api/masraflar/${seg(id)}`, opts);
-/** { baslik, kategoriId, masrafTarihi, tutar, paraBirimi?, kur?, satici?, aciklama?, faturaIdler?, gonder? } → 201 MasrafDetay. */
+/** { baslik, kategoriId, masrafTarihi, tutar, paraBirimi?, kur?, satici?, aciklama?, faturaIdler?, yerelKarsiliklar?, faturaDuzeltmeleri?, gonder? } → 201 MasrafDetay. */
 export const createExpense = (data) => send('POST', '/api/masraflar', data);
 /** Only the fields that change; faturaIdler, when sent, replaces the whole invoice list (order included). */
 export const updateExpense = (id, data) => send('PATCH', `/api/masraflar/${seg(id)}`, data);
 
 /** action: gonder | geri-cek | iptal | onayla | reddet | odendi | devret */
 export const expenseAction = (id, action, body) => send('POST', `/api/masraflar/${seg(id)}/${action}`, body);
+
+/** The approval certificate (PDF) of an approved or paid expense, as a Blob. */
+export async function getExpensePdf(id, opts) {
+  const r = await fetchBlob(`/api/masraflar/${seg(id)}/pdf`, opts);
+  if (!r.ok) return r;
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(r.disposition ?? '');
+  let filename = null;
+  try {
+    filename = m ? decodeURIComponent(m[1]) : null;
+  } catch {
+    filename = null;
+  }
+  return { ...r, filename };
+}
 
 /** durum: bekleyen | karar */
 export const listApprovals = (durum, opts) => get(`/api/onaylar${qs({ durum })}`, opts);

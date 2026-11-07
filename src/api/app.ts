@@ -17,6 +17,8 @@ import { accountRouter, loginHandler } from './account-routes.ts';
 import { adminRouter } from './admin-routes.ts';
 import { requireSession, tokenOf, userOf } from './auth.ts';
 import { expenseRouter } from './expense-routes.ts';
+import { notificationRouter } from './notification-routes.ts';
+import { NO_MAIL, type NotifySettings } from '../notifications/store.ts';
 import { liveStream, type Visibility } from './live.ts';
 import { isLocalNetworkAddress } from './network.ts';
 import { HttpError, readBatchUpload, readUpload, senderOf, wantsRefresh } from './uploads.ts';
@@ -54,6 +56,8 @@ export interface AppDeps {
   /** Idle keep-alive interval of the live stream. Default 20 s. */
   readonly liveHeartbeatMs?: number;
   readonly log?: (line: string) => void;
+  /** Mail settings of the notifications. Default: mail off, mails written as skipped. */
+  readonly mail?: NotifySettings;
 }
 
 const EXTRACTION_STATUS: Record<ExtractionError['code'], number> = {
@@ -112,7 +116,8 @@ export function createApp(deps: AppDeps): express.Express {
   const auth = deps.auth ?? DEFAULT_AUTH;
   const baseCurrency = deps.baseCurrency ?? 'TRY';
   const storage = deps.storage ?? createInvoiceStorage(deps.db);
-  const expenses = createExpenseService(deps.db, { baseCurrency });
+  const mail = deps.mail ?? NO_MAIL;
+  const expenses = createExpenseService(deps.db, { baseCurrency, notifications: mail });
   const limiter = deps.loginLimiter ?? createLoginLimiter(auth.loginMaxAttempts, auth.loginLockMs);
 
   // Every upload is noted for its sender; that is what lets them open the invoice and attach it to a form.
@@ -167,6 +172,24 @@ export function createApp(deps: AppDeps): express.Express {
   };
 
   app.disable('x-powered-by');
+
+  // Invoice uploads: log every one that does not succeed (refused, failed or cut off by the client), so
+  // an upload the phone reports as failed can be traced on the console. Successful ones log themselves.
+  app.use((req, res, next) => {
+    if (req.method !== 'POST' || !req.path.startsWith('/api/invoices')) {
+      next();
+      return;
+    }
+    const started = Date.now();
+    const declared = req.headers['content-length'] ?? '?';
+    const where = `${req.path} istemci=${req.socket.remoteAddress ?? '?'} beyan=${declared} bayt`;
+    res.on('close', () => {
+      const took = `${Date.now() - started} ms`;
+      if (!res.writableFinished) log(`yükleme yarıda kesildi: ${where}, alınan=${req.socket.bytesRead} bayt, ${took}`);
+      else if (res.statusCode >= 400) log(`yükleme reddedildi ${res.statusCode}: ${where}, ${took}`);
+    });
+    next();
+  });
 
   // Local service: only this machine or, when opened, the local network; reject other hosts (DNS
   // rebinding) and cross-site browser requests.
@@ -327,7 +350,7 @@ export function createApp(deps: AppDeps): express.Express {
     }
   });
 
-  app.use('/api', json, accountRouter(accountDeps), adminRouter({ db: deps.db, baseCurrency, passwordMinLength: auth.passwordMinLength }), expenseRouter(expenses));
+  app.use('/api', json, accountRouter(accountDeps), adminRouter({ db: deps.db, baseCurrency, passwordMinLength: auth.passwordMinLength }), expenseRouter(expenses), notificationRouter({ db: deps.db, mail }));
 
   app.use(express.static(join(ROOT_DIR, 'public'), { index: 'index.html' }));
 

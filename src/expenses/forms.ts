@@ -3,7 +3,13 @@ import { formatMoney, planApprovals, type PlannedStep } from '../approval/flow.t
 import { loadFlowById, loadUserFlow, type AkisOzet, type RoutingFlow } from '../approval/flow-store.ts';
 import { dateOnly, execute, iso, isUniqueViolation, p, query, queryOne, transaction, type Db, type Executor, type Param } from '../db/sql.ts';
 import { conflict, forbidden, HttpError, notFound } from '../errors.ts';
+import { REQUIRED } from '../invoice/checks.ts';
+import { duplicateKey, mergeCorrections, missingFields, type RequiredField } from '../invoice/effective.ts';
+import { InvoiceSchema, type Invoice } from '../invoice/schema.ts';
+import type { FormRef, NotificationEvent } from '../notifications/events.ts';
+import { activeAccountants, NO_MAIL, notify, type NotifySettings } from '../notifications/store.ts';
 import type { Simge } from './categories.ts';
+import { renderApprovalPdf, type PdfData } from './pdf.ts';
 import {
   amountMismatch,
   approvalAmount,
@@ -77,6 +83,19 @@ export interface FaturaOzeti {
   readonly yerelKarsilik: number | null;
   /** The invoice is in a third currency: the form cannot be sent without `yerelKarsilik`. */
   readonly karsilikGerekli: boolean;
+  // The fields above that come from the invoice and these are its effective data (the correction, if any).
+  readonly saticiVergiNo: string | null;
+  readonly aliciUnvan: string | null;
+  readonly aliciVergiNo: string | null;
+  readonly araToplam: number | null;
+  readonly kdvToplam: number | null;
+  readonly kalemler: Invoice['kalemler'];
+  /** The user corrected the invoice on this form. */
+  readonly duzeltildi: boolean;
+  /** The read result while the invoice is corrected, else null. */
+  readonly okunan: Invoice | null;
+  /** Required fields empty in the effective data. */
+  readonly eksikAlanlar: readonly RequiredField[];
 }
 
 export interface MasrafDetay extends MasrafOzet {
@@ -110,6 +129,11 @@ export interface FormInput {
    * them all; left out, the equivalents of the invoices still on the form stay.
    */
   readonly yerelKarsiliklar?: Readonly<Record<string, number>> | undefined;
+  /**
+   * Corrections by invoice id: a value replaces the invoice's correction on this form, null removes it,
+   * invoices left out keep theirs. Only for invoices on the form after `faturaIdler` is applied.
+   */
+  readonly faturaDuzeltmeleri?: Readonly<Record<string, Invoice | null>> | undefined;
 }
 
 export type FormPatch = Partial<FormInput>;
@@ -202,6 +226,80 @@ const formFrom = (lock: boolean): string => `
   LEFT JOIN dbo.kullanicilar bu ON bu.id = b.onayci_id`;
 
 const num = (v: number | null): number | null => (v === null ? null : Number(v));
+
+/** Columns of fatura_kayitlari (alias r) an invoice's read result is built from. */
+const READ_COLUMNS = 'r.sonuc, r.fatura_no, r.fatura_tarihi, r.satici_unvan, r.genel_toplam, r.para_birimi';
+
+interface ReadRow {
+  sonuc: string;
+  fatura_no: string | null;
+  fatura_tarihi: Date | null;
+  satici_unvan: string | null;
+  genel_toplam: number | null;
+  para_birimi: string | null;
+}
+
+/** Invoice JSON from the database, or null when it is missing or no longer fits the schema. */
+function parseInvoice(text: string | null): Invoice | null {
+  if (text === null) return null;
+  try {
+    const parsed = InvoiceSchema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The read result; a record whose JSON no longer fits the schema falls back to its list columns. */
+function readResult(r: ReadRow): Invoice {
+  return (
+    parseInvoice(r.sonuc) ?? {
+      fatura: {
+        faturaNo: r.fatura_no,
+        faturaTarihi: dateOnly(r.fatura_tarihi),
+        saticiUnvan: r.satici_unvan,
+        saticiVergiNo: null,
+        aliciUnvan: null,
+        aliciVergiNo: null,
+        paraBirimi: r.para_birimi,
+        araToplam: null,
+        kdvToplam: null,
+        genelToplam: r.genel_toplam,
+      },
+      kalemler: [],
+    }
+  );
+}
+
+/** One invoice on a form: its read result, the user's correction on this form and the entered equivalent. */
+interface FormInvoice {
+  readonly id: string;
+  readonly dosyaAdi: string;
+  readonly mime: string | null;
+  readonly read: Invoice;
+  readonly correction: Invoice | null;
+  readonly yerelKarsilik: number | null;
+}
+
+/** The data every calculation of the form uses: the correction when there is one, else the read result. */
+const effectiveOf = (x: Pick<FormInvoice, 'read' | 'correction'>): Invoice => x.correction ?? x.read;
+
+const totalOf = (invoice: Invoice, yerelKarsilik: number | null = null): InvoiceTotal & { yerelKarsilik: number | null } => ({
+  genelToplam: invoice.fatura.genelToplam,
+  paraBirimi: invoice.fatura.paraBirimi,
+  yerelKarsilik,
+});
+
+/** Lines of at most 500 characters (form_gecmisi.aciklama) for the history, so a long note is not cut. */
+function historyNotes(parts: readonly string[]): Array<string | null> {
+  const lines: string[] = [];
+  for (const part of parts) {
+    const last = lines.length - 1;
+    if (last >= 0 && (lines[last] as string).length + 1 + part.length <= 500) lines[last] = `${lines[last]} ${part}`;
+    else lines.push(part);
+  }
+  return lines.length === 0 ? [null] : lines;
+}
 
 function toSummary(r: FormRow): MasrafOzet {
   return {
@@ -308,6 +406,7 @@ export interface ExpenseService {
       kur?: number | null | undefined;
       faturaIdler?: readonly string[] | undefined;
       yerelKarsiliklar?: Readonly<Record<string, number>> | undefined;
+      faturaDuzeltmeleri?: Readonly<Record<string, Invoice | null>> | undefined;
       akisId?: number | undefined;
     },
   ): Promise<Onizleme>;
@@ -315,10 +414,34 @@ export interface ExpenseService {
   pendingCount(actor: Actor): Promise<number>;
   summary(actor: Actor): Promise<Ozet>;
   exportRows(actor: Actor, filter: { durum?: readonly FormDurum[] | undefined; baslangic?: string | undefined; bitis?: string | undefined }): Promise<ExportRow[]>;
+  /** The approval document, for whoever may see the form; only while it is onaylandi or odendi. */
+  pdf(id: number, actor: Actor): Promise<Buffer>;
+  /** The approval document for a queued mail, from the form as it is now; null when the form is gone. */
+  pdfForMail(id: number): Promise<Buffer | null>;
 }
 
-export function createExpenseService(db: Db, opts: { readonly baseCurrency: string }): ExpenseService {
+export interface ExpenseServiceOptions {
+  readonly baseCurrency: string;
+  /** Mail settings of the notifications; default: mails written as skipped. */
+  readonly notifications?: NotifySettings | undefined;
+}
+
+export function createExpenseService(db: Db, opts: ExpenseServiceOptions): ExpenseService {
   const base = opts.baseCurrency;
+  const mail = opts.notifications ?? NO_MAIL;
+
+  /** What notifications say about the form, in the state it has after the action. */
+  const refOf = (row: FormRow, durum: FormDurum): FormRef => ({
+    id: row.id,
+    baslik: row.baslik,
+    sahip: { id: row.olusturan_id, adSoyad: row.olusturan_ad },
+    tutar: Number(row.tutar),
+    paraBirimi: row.para_birimi,
+    durum,
+  });
+
+  /** Writes the notifications of an action in its transaction. */
+  const tell = (tx: sql.Transaction, event: NotificationEvent, actor: Actor): Promise<void> => notify(tx, event, actor.id, mail);
 
   async function readRow(ex: Executor, id: number, lock: boolean): Promise<FormRow | null> {
     return queryOne<FormRow>(ex, `SELECT ${FORM_COLUMNS} ${formFrom(lock)} WHERE f.id = @id`, { id: p.int(id) });
@@ -367,52 +490,79 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
     };
   }
 
-  async function invoiceTotals(ex: Executor, ids: readonly string[]): Promise<Map<string, InvoiceTotal>> {
+  /** The read result of each invoice record in `ids`. */
+  async function readInvoices(ex: Executor, ids: readonly string[]): Promise<Map<string, Invoice>> {
     if (ids.length === 0) return new Map();
     const { list, params } = idList(ids);
-    const rows = await query<{ id: string; genel_toplam: number | null; para_birimi: string | null }>(
-      ex,
-      `SELECT id, genel_toplam, para_birimi FROM dbo.fatura_kayitlari WHERE id IN (${list})`,
-      params,
-    );
-    return new Map(rows.map((r) => [r.id, { genelToplam: r.genel_toplam, paraBirimi: r.para_birimi }]));
+    const rows = await query<ReadRow & { id: string }>(ex, `SELECT r.id, ${READ_COLUMNS} FROM dbo.fatura_kayitlari r WHERE r.id IN (${list})`, params);
+    return new Map(rows.map((r) => [r.id, readResult(r)]));
   }
 
-  /** The form's invoices in order, with the equivalents entered for them. */
-  async function formInvoices(ex: Executor, formId: number): Promise<Array<InvoiceTotal & { id: string; yerelKarsilik: number | null }>> {
-    const rows = await query<{ kayit_id: string; yerel_karsilik: number | null; genel_toplam: number | null; para_birimi: string | null }>(
+  /** The form's invoices in order, with their corrections and the equivalents entered for them. */
+  async function formInvoices(ex: Executor, formId: number): Promise<FormInvoice[]> {
+    const rows = await query<ReadRow & { kayit_id: string; dosya_adi: string; mime: string | null; yerel_karsilik: number | null; duzeltme: string | null }>(
       ex,
-      `SELECT ff.kayit_id, ff.yerel_karsilik, r.genel_toplam, r.para_birimi
-       FROM dbo.form_faturalari ff JOIN dbo.fatura_kayitlari r ON r.id = ff.kayit_id
+      `SELECT ff.kayit_id, ff.yerel_karsilik, ff.duzeltme, r.dosya_adi, d.mime, ${READ_COLUMNS}
+       FROM dbo.form_faturalari ff
+       JOIN dbo.fatura_kayitlari r ON r.id = ff.kayit_id
+       LEFT JOIN dbo.fatura_dosyalari d ON d.kayit_id = r.id
        WHERE ff.form_id = @f ORDER BY ff.sira`,
       { f: p.int(formId) },
     );
-    return rows.map((r) => ({ id: r.kayit_id, yerelKarsilik: num(r.yerel_karsilik), genelToplam: r.genel_toplam, paraBirimi: r.para_birimi }));
+    return rows.map((r) => ({
+      id: r.kayit_id,
+      dosyaAdi: r.dosya_adi,
+      mime: r.mime,
+      read: readResult(r),
+      correction: parseInvoice(r.duzeltme),
+      yerelKarsilik: num(r.yerel_karsilik),
+    }));
   }
 
   /**
-   * The equivalents to store for `ids` on a form in `formCurrency`: only for invoices that need one.
-   * With `strict`, an equivalent for an invoice not in `ids` is refused.
+   * The equivalents to store for `ids` on a form in `formCurrency`: only for invoices that need one,
+   * judged by their effective data in `invoices`. With `strict`, an equivalent for an invoice not in
+   * `ids` is refused.
    */
-  async function equivalentsFor(
-    ex: Executor,
+  function equivalentsFor(
     ids: readonly string[],
+    invoices: ReadonlyMap<string, Invoice>,
     given: Readonly<Record<string, number>>,
     formCurrency: string,
     strict: boolean,
-  ): Promise<Map<string, number>> {
+  ): Map<string, number> {
     if (strict) {
       const stray = Object.keys(given).find((id) => !ids.includes(id));
       if (stray !== undefined) fail(`yerelKarsiliklar.${stray}`, 'Bu fatura masrafta yok.');
     }
-    const facts = await invoiceTotals(ex, ids);
     const kept = new Map<string, number>();
     for (const id of ids) {
       const value = given[id];
-      const invoice = facts.get(id);
-      if (value !== undefined && invoice !== undefined && needsEquivalent(formCurrency, base, invoice)) kept.set(id, value);
+      const invoice = invoices.get(id);
+      if (value !== undefined && invoice !== undefined && needsEquivalent(formCurrency, base, totalOf(invoice))) kept.set(id, value);
     }
     return kept;
+  }
+
+  /**
+   * The corrections the form keeps after a request (see mergeCorrections), the effective data of every
+   * invoice and the history notes. A correction for an invoice that is not on the form is refused.
+   */
+  function correctionsFor(
+    ids: readonly string[],
+    reads: ReadonlyMap<string, Invoice>,
+    stored: ReadonlyMap<string, Invoice>,
+    given: Readonly<Record<string, Invoice | null>> | undefined,
+  ): { corrections: Map<string, Invoice>; effective: Map<string, Invoice>; notes: string[] } {
+    const stray = Object.keys(given ?? {}).find((id) => !ids.includes(id));
+    if (stray !== undefined) fail(`faturaDuzeltmeleri.${stray}`, 'Bu fatura masrafta yok.');
+    const { corrections, notes } = mergeCorrections(ids, reads, stored, given);
+    const effective = new Map<string, Invoice>();
+    for (const id of ids) {
+      const invoice = corrections.get(id) ?? reads.get(id);
+      if (invoice !== undefined) effective.set(id, invoice);
+    }
+    return { corrections, effective, notes };
   }
 
   /** The ids among `ids` that `actor` uploaded. */
@@ -454,17 +604,34 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
     throw new HttpError(409, 'fatura_kullaniliyor', mesaj, { alanlar: { [`faturaIdler.${i}`]: mesaj } });
   }
 
-  /** Replaces the form's invoices with `ids`, in this order, with their entered equivalents. */
-  async function setInvoices(tx: sql.Transaction, formId: number, ids: readonly string[], equivalents: ReadonlyMap<string, number>): Promise<void> {
+  /**
+   * Replaces the form's invoices with `ids`, in this order, with their entered equivalents and
+   * corrections. The duplicate key is computed from each invoice's effective data (`effective`).
+   */
+  async function setInvoices(
+    tx: sql.Transaction,
+    formId: number,
+    ids: readonly string[],
+    equivalents: ReadonlyMap<string, number>,
+    corrections: ReadonlyMap<string, Invoice>,
+    effective: ReadonlyMap<string, Invoice>,
+  ): Promise<void> {
     await execute(tx, 'DELETE FROM dbo.form_faturalari WHERE form_id = @f', { f: p.int(formId) });
     if (ids.length === 0) return;
     const { params } = idList(ids);
-    const amounts = Object.fromEntries(ids.map((id, i) => [`k${i}`, p.money(equivalents.get(id) ?? null)]));
+    const values: Record<string, Param> = {};
+    ids.forEach((id, i) => {
+      const correction = corrections.get(id);
+      const invoice = effective.get(id);
+      values[`k${i}`] = p.money(equivalents.get(id) ?? null);
+      values[`d${i}`] = p.text(correction === undefined ? null : JSON.stringify(correction));
+      values[`m${i}`] = p.str(invoice === undefined ? null : duplicateKey(invoice), 450);
+    });
     await execute(
       tx,
-      `INSERT INTO dbo.form_faturalari (form_id, kayit_id, sira, yerel_karsilik)
-       VALUES ${ids.map((_, i) => `(@f, @i${i}, ${i + 1}, @k${i})`).join(', ')}`,
-      { ...params, ...amounts, f: p.int(formId) },
+      `INSERT INTO dbo.form_faturalari (form_id, kayit_id, sira, yerel_karsilik, duzeltme, mukerrer_anahtari)
+       VALUES ${ids.map((_, i) => `(@f, @i${i}, ${i + 1}, @k${i}, @d${i}, @m${i})`).join(', ')}`,
+      { ...params, ...values, f: p.int(formId) },
     );
   }
 
@@ -477,8 +644,66 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
     return `${parts.join(', ')}.`.replace(/^./, (c) => c.toUpperCase());
   }
 
+  /** Sending needs every required field of every invoice, in its effective data. */
+  function checkComplete(invoices: readonly FormInvoice[]): void {
+    const missing = invoices.map((inv, i) => ({ inv, i, fields: missingFields(effectiveOf(inv)) })).filter((m) => m.fields.length > 0);
+    const first = missing[0];
+    if (first === undefined) return;
+    const labels: Record<string, string> = Object.fromEntries(REQUIRED);
+    const where = invoices.length === 1 ? 'Faturada' : `${first.i + 1}. faturada`;
+    const mesaj = `${where} eksik bilgi var: ${first.fields.map((f) => labels[f]).join(', ')}. Eksik alanları doldurup yeniden gönderin.`;
+    throw new HttpError(409, 'fatura_eksik', mesaj, {
+      alanlar: Object.fromEntries(missing.flatMap((m) => m.fields.map((f) => [`faturalar.${m.inv.id}.${f}`, 'Bu alan okunamadı; doldurun.']))),
+    });
+  }
+
+  /** Serialises sends, so two forms holding the same invoice cannot both pass the duplicate check. */
+  async function lockSends(ex: Executor): Promise<void> {
+    await execute(ex, `EXEC sp_getapplock @Resource = N'masraf_gonderim', @LockMode = N'Exclusive', @LockOwner = N'Transaction', @LockTimeout = 15000`);
+  }
+
+  /**
+   * Sending is refused when an invoice on the form has the same duplicate key as another invoice on the
+   * form or on any live (aktif) invoice link of another form. Call with the send lock held.
+   */
+  async function checkDuplicates(ex: Executor, row: FormRow, actor: Actor, invoices: readonly FormInvoice[]): Promise<void> {
+    const keys = invoices.map((inv) => duplicateKey(effectiveOf(inv)));
+    const which = (i: number): string => (invoices.length === 1 ? 'Bu fatura' : `${i + 1}. fatura`);
+    const problems = new Map<string, string>();
+    keys.forEach((key, i) => {
+      const earlier = key === null ? -1 : keys.indexOf(key);
+      if (earlier >= 0 && earlier < i) problems.set((invoices[i] as FormInvoice).id, `${i + 1}. fatura, ${earlier + 1}. faturayla aynı; aynı fatura iki kez beyan edilemez.`);
+    });
+    const unique = [...new Set(keys.filter((k) => k !== null))];
+    if (unique.length > 0) {
+      const params: Record<string, Param> = Object.fromEntries(unique.map((k, i) => [`k${i}`, p.str(k, 450)]));
+      const hits = await query<{ mukerrer_anahtari: string; form_id: number; olusturan_id: number }>(
+        ex,
+        `SELECT ff.mukerrer_anahtari, ff.form_id, f.olusturan_id
+         FROM dbo.form_faturalari ff JOIN dbo.masraf_formlari f ON f.id = ff.form_id
+         WHERE ff.aktif = 1 AND ff.form_id <> @self AND ff.mukerrer_anahtari IN (${unique.map((_, i) => `@k${i}`).join(', ')})
+         ORDER BY ff.form_id`,
+        { ...params, self: p.int(row.id) },
+      );
+      // An own form is named; someone else's form number is not given away.
+      const byKey = new Map<string, (typeof hits)[number]>();
+      for (const h of hits) if (!byKey.has(h.mukerrer_anahtari) || h.olusturan_id === actor.id) byKey.set(h.mukerrer_anahtari, h);
+      keys.forEach((key, i) => {
+        const hit = key === null ? undefined : byKey.get(key);
+        const id = (invoices[i] as FormInvoice).id;
+        if (hit === undefined || problems.has(id)) return;
+        const where = hit.olusturan_id === actor.id ? `#${hit.form_id} numaralı masraf formundaki` : 'başka bir masraf formundaki';
+        problems.set(id, `${which(i)} ${where} bir faturayla aynı; aynı fatura iki kez beyan edilemez.`);
+      });
+    }
+    if (problems.size === 0) return;
+    const ordered = invoices.filter((inv) => problems.has(inv.id)).map((inv) => [`faturalar.${inv.id}`, problems.get(inv.id) as string] as const);
+    throw new HttpError(409, 'fatura_mukerrer', (ordered[0] as readonly [string, string])[1], { alanlar: Object.fromEntries(ordered) });
+  }
+
   /** Sending needs the base-currency equivalent of every invoice in a third currency. */
-  function checkEquivalents(row: FormRow, invoices: ReadonlyArray<InvoiceTotal & { id: string; yerelKarsilik: number | null }>): void {
+  function checkEquivalents(row: FormRow, formInvoiceList: readonly FormInvoice[]): void {
+    const invoices = formInvoiceList.map((x) => ({ id: x.id, ...totalOf(effectiveOf(x), x.yerelKarsilik) }));
     const missing = invoices
       .map((inv, i) => ({ inv, i }))
       .filter(({ inv }) => needsEquivalent(row.para_birimi, base, inv) && !(inv.yerelKarsilik !== null && inv.yerelKarsilik > 0));
@@ -566,11 +791,18 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
   const nobodyToApprove = (): HttpError =>
     conflict('onaylayan_yok', 'Bu masrafı onaylayabilecek başka bir kullanıcı yok. Yöneticinizden onay akışına bir onaycı eklemesini isteyin.');
 
-  /** Sends a locked form: copies the matching approvers, the first one waits for a decision. */
+  /**
+   * Sends a locked form: copies the matching approvers, the first one waits for a decision. Checks in
+   * the order of the contract: fatura_eksik, fatura_mukerrer, karsilik_eksik, onaylayan_yok.
+   */
   async function submitLocked(tx: sql.Transaction, row: FormRow, actor: Actor): Promise<void> {
+    await lockSends(tx);
     const invoices = await formInvoices(tx, row.id);
+    checkComplete(invoices);
+    await checkDuplicates(tx, row, actor, invoices);
     checkEquivalents(row, invoices);
-    const amount = approvalAmount({ tutar: Number(row.tutar), paraBirimi: row.para_birimi, kur: num(row.kur) }, base, invoices);
+    const totals = invoices.map((x) => totalOf(effectiveOf(x), x.yerelKarsilik));
+    const amount = approvalAmount({ tutar: Number(row.tutar), paraBirimi: row.para_birimi, kur: num(row.kur) }, base, totals);
     const { akis, steps } = await plan(tx, row.olusturan_id, amount);
     if (steps === null) throw nobodyToApprove();
     const tur = row.tur + 1;
@@ -605,31 +837,15 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
     for (const s of steps.filter((x) => x.durum === 'atlandi')) {
       await history(tx, row.id, s.onayciId, 'atlandi', 'Kendi masrafı olduğu için bu adım atlandı.');
     }
+    const first = steps.find((x) => x.durum === 'bekliyor');
+    if (first !== undefined) await tell(tx, { kind: 'onay_bekliyor', form: refOf(row, 'onayda'), onayciId: first.onayciId, sonraki: false }, actor);
   }
 
   async function detail(id: number, actor: Actor): Promise<MasrafDetay> {
     const row = await readRow(db, id, false);
     if (row === null || !(await canSee(db, row, actor))) throw notFound('Masraf formu bulunamadı.');
     const [invoices, steps, events] = await Promise.all([
-      query<{
-        id: string;
-        dosya_adi: string;
-        fatura_no: string | null;
-        fatura_tarihi: Date | null;
-        satici_unvan: string | null;
-        genel_toplam: number | null;
-        para_birimi: string | null;
-        mime: string | null;
-        yerel_karsilik: number | null;
-      }>(
-        db,
-        `SELECT r.id, r.dosya_adi, r.fatura_no, r.fatura_tarihi, r.satici_unvan, r.genel_toplam, r.para_birimi, d.mime, ff.yerel_karsilik
-         FROM dbo.form_faturalari ff
-         JOIN dbo.fatura_kayitlari r ON r.id = ff.kayit_id
-         LEFT JOIN dbo.fatura_dosyalari d ON d.kayit_id = r.id
-         WHERE ff.form_id = @f ORDER BY ff.sira`,
-        { f: p.int(id) },
-      ),
+      formInvoices(db, id),
       query<{
         id: number;
         tur: number;
@@ -657,19 +873,31 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
         { f: p.int(id) },
       ),
     ]);
-    const faturalar: FaturaOzeti[] = invoices.map((invoice) => ({
-      id: invoice.id,
-      dosyaAdi: invoice.dosya_adi,
-      dosyaVar: invoice.mime !== null,
-      mime: invoice.mime,
-      faturaNo: invoice.fatura_no,
-      faturaTarihi: dateOnly(invoice.fatura_tarihi),
-      saticiUnvan: invoice.satici_unvan,
-      genelToplam: invoice.genel_toplam,
-      paraBirimi: invoice.para_birimi,
-      yerelKarsilik: num(invoice.yerel_karsilik),
-      karsilikGerekli: needsEquivalent(row.para_birimi, base, { paraBirimi: invoice.para_birimi }),
-    }));
+    const faturalar: FaturaOzeti[] = invoices.map((invoice) => {
+      const f = effectiveOf(invoice).fatura;
+      return {
+        id: invoice.id,
+        dosyaAdi: invoice.dosyaAdi,
+        dosyaVar: invoice.mime !== null,
+        mime: invoice.mime,
+        faturaNo: f.faturaNo,
+        faturaTarihi: f.faturaTarihi,
+        saticiUnvan: f.saticiUnvan,
+        genelToplam: f.genelToplam,
+        paraBirimi: f.paraBirimi,
+        yerelKarsilik: invoice.yerelKarsilik,
+        karsilikGerekli: needsEquivalent(row.para_birimi, base, { paraBirimi: f.paraBirimi }),
+        saticiVergiNo: f.saticiVergiNo,
+        aliciUnvan: f.aliciUnvan,
+        aliciVergiNo: f.aliciVergiNo,
+        araToplam: f.araToplam,
+        kdvToplam: f.kdvToplam,
+        kalemler: effectiveOf(invoice).kalemler,
+        duzeltildi: invoice.correction !== null,
+        okunan: invoice.correction === null ? null : invoice.read,
+        eksikAlanlar: missingFields(effectiveOf(invoice)),
+      };
+    });
     return {
       ...toSummary(row),
       aciklama: row.aciklama,
@@ -701,6 +929,40 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       })),
       izinler: permissions(facts(row), actor),
     };
+  }
+
+  /** The approval document of a form, from the form as it is now. */
+  async function renderPdf(row: FormRow): Promise<Buffer> {
+    // The owner always sees the form; the permissions in the detail are not used here.
+    const d = await detail(row.id, { id: row.olusturan_id, rol: 'calisan' });
+    const owner = await queryOne<{ departman: string | null }>(db, 'SELECT departman FROM dbo.kullanicilar WHERE id = @u', { u: p.int(row.olusturan_id) });
+    const data: PdfData = {
+      form: {
+        id: d.id,
+        baslik: d.baslik,
+        sahip: d.olusturan.adSoyad,
+        departman: owner?.departman ?? null,
+        kategori: d.kategori.ad,
+        masrafTarihi: d.masrafTarihi,
+        tutar: d.tutar,
+        paraBirimi: d.paraBirimi,
+        kur: d.kur,
+        onayTutari: d.onayTutari,
+        durum: d.durum,
+      },
+      base,
+      faturalar: d.faturalar,
+      onaylar: d.onaylar.map((s) => ({
+        sira: s.sira,
+        onayci: s.onayci.adSoyad,
+        durum: s.durum,
+        kararTarihi: s.kararTarihi === null ? null : new Date(s.kararTarihi),
+        aciklama: s.aciklama,
+        yedek: s.yedek,
+      })),
+      olusturma: new Date(),
+    };
+    return renderApprovalPdf(data);
   }
 
   async function pendingCount(actor: Actor): Promise<number> {
@@ -752,10 +1014,14 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       let id: number;
       try {
         id = await transaction(db, async (tx) => {
+          // Taken before the invoices are inserted, so a send running meanwhile never waits on them.
+          if (gonder) await lockSends(tx);
           const c = await checkInput(tx, input);
           const invoices = input.faturaIdler ?? [];
           await checkInvoices(tx, actor, invoices, null);
-          const equivalents = await equivalentsFor(tx, invoices, input.yerelKarsiliklar ?? {}, c.paraBirimi, true);
+          const reads = await readInvoices(tx, invoices);
+          const { corrections, effective, notes } = correctionsFor(invoices, reads, new Map(), input.faturaDuzeltmeleri);
+          const equivalents = equivalentsFor(invoices, effective, input.yerelKarsiliklar ?? {}, c.paraBirimi, true);
           const row = await queryOne<{ id: number }>(
             tx,
             `INSERT INTO dbo.masraf_formlari
@@ -765,8 +1031,9 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
             { me: p.int(actor.id), ...inputParams(c) },
           );
           if (row === null) throw new Error('masraf formu eklenemedi');
-          await setInvoices(tx, row.id, invoices, equivalents);
+          await setInvoices(tx, row.id, invoices, equivalents, corrections, effective);
           await history(tx, row.id, actor.id, 'olusturuldu');
+          if (notes.length > 0) for (const note of historyNotes(notes)) await history(tx, row.id, actor.id, 'guncellendi', note);
           if (gonder) await submitLocked(tx, await lockForm(tx, row.id, actor), actor);
           return row.id;
         });
@@ -799,9 +1066,15 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
           const before = invoiceIdsOf(row);
           const invoices = patch.faturaIdler ?? before;
           if (patch.faturaIdler !== undefined) await checkInvoices(tx, actor, invoices, row.id);
-          const stored = Object.fromEntries((await formInvoices(tx, row.id)).flatMap((x) => (x.yerelKarsilik === null ? [] : [[x.id, x.yerelKarsilik]])));
+          // Corrections follow the invoices: those of invoices taken off the form are dropped.
+          const current = await formInvoices(tx, row.id);
+          const stored = Object.fromEntries(current.flatMap((x) => (x.yerelKarsilik === null ? [] : [[x.id, x.yerelKarsilik]])));
+          const storedCorrections = new Map(current.flatMap((x) => (x.correction === null ? [] : [[x.id, x.correction] as const])));
+          const reads = await readInvoices(tx, invoices);
+          const { corrections, effective, notes } = correctionsFor(invoices, reads, storedCorrections, patch.faturaDuzeltmeleri);
           const given = patch.yerelKarsiliklar ?? stored;
-          await setInvoices(tx, row.id, invoices, await equivalentsFor(tx, invoices, given, c.paraBirimi, patch.yerelKarsiliklar !== undefined));
+          const equivalents = equivalentsFor(invoices, effective, given, c.paraBirimi, patch.yerelKarsiliklar !== undefined);
+          await setInvoices(tx, row.id, invoices, equivalents, corrections, effective);
           await execute(
             tx,
             `UPDATE dbo.masraf_formlari SET baslik = @baslik, aciklama = @aciklama, kategori_id = @kat, masraf_tarihi = @tarih,
@@ -810,7 +1083,10 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
              WHERE id = @id`,
             { id: p.int(row.id), ...inputParams(c) },
           );
-          await history(tx, row.id, actor.id, 'guncellendi', invoiceChanges(before, invoices));
+          const listChange = invoiceChanges(before, invoices);
+          for (const note of historyNotes([...(listChange === null ? [] : [listChange]), ...notes])) {
+            await history(tx, row.id, actor.id, 'guncellendi', note);
+          }
         });
       } catch (err) {
         if (isUniqueViolation(err)) throw invoiceInUse();
@@ -854,19 +1130,22 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
         // let a second decision complete a form.
         if (decided !== 1) throw notWaiting();
         await history(tx, row.id, actor.id, 'onaylandi', aciklama);
-        const next = await execute(
+        const next = await query<{ onayci_id: number }>(
           tx,
-          `WITH n AS (SELECT TOP (1) durum FROM dbo.form_onaylari WHERE form_id = @f AND tur = @t AND durum = 'sirada' ORDER BY sira)
-           UPDATE n SET durum = 'bekliyor'`,
+          `WITH n AS (SELECT TOP (1) durum, onayci_id FROM dbo.form_onaylari WHERE form_id = @f AND tur = @t AND durum = 'sirada' ORDER BY sira)
+           UPDATE n SET durum = 'bekliyor' OUTPUT inserted.onayci_id`,
           { f: p.int(row.id), t: p.int(row.tur) },
         );
-        if (next === 0) {
+        const waiting = next[0];
+        if (waiting === undefined) {
           await execute(tx, `UPDATE dbo.masraf_formlari SET durum = 'onaylandi', sonuclanma = SYSUTCDATETIME(), guncelleme = SYSUTCDATETIME() WHERE id = @f`, {
             f: p.int(row.id),
           });
           await history(tx, row.id, null, 'tamamlandi', 'Bütün onaylar tamamlandı.');
+          await tell(tx, { kind: 'onaylandi', form: refOf(row, 'onaylandi'), muhasebeIds: await activeAccountants(tx) }, actor);
         } else {
           await execute(tx, 'UPDATE dbo.masraf_formlari SET guncelleme = SYSUTCDATETIME() WHERE id = @f', { f: p.int(row.id) });
+          await tell(tx, { kind: 'onay_bekliyor', form: refOf(row, 'onayda'), onayciId: waiting.onayci_id, sonraki: true }, actor);
         }
       });
     },
@@ -888,6 +1167,8 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
           f: p.int(row.id),
         });
         await history(tx, row.id, actor.id, 'reddedildi', aciklama);
+        const who = await names(tx, [actor.id]);
+        await tell(tx, { kind: 'reddedildi', form: refOf(row, 'reddedildi'), reddeden: who.get(actor.id) ?? '', gerekce: aciklama }, actor);
       });
     },
 
@@ -897,14 +1178,15 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
           f: p.int(row.id),
         });
         await history(tx, row.id, actor.id, 'odendi');
+        await tell(tx, { kind: 'odendi', form: refOf(row, 'odendi') }, actor);
       });
     },
 
     reassign(id, actor, onayId, yeniOnayciId) {
       return act(id, actor, 'devret', async (tx, row) => {
-        const step = await queryOne<{ onayci_id: number; sira: number }>(
+        const step = await queryOne<{ onayci_id: number; sira: number; durum: AdimDurum }>(
           tx,
-          `SELECT onayci_id, sira FROM dbo.form_onaylari WHERE id = @o AND form_id = @f AND tur = @t AND durum IN ('bekliyor', 'sirada')`,
+          `SELECT onayci_id, sira, durum FROM dbo.form_onaylari WHERE id = @o AND form_id = @f AND tur = @t AND durum IN ('bekliyor', 'sirada')`,
           { o: p.int(onayId), f: p.int(row.id), t: p.int(row.tur) },
         );
         if (step === null) fail('onayId', 'Bu adım karar beklemiyor; yalnızca karar verilmemiş adımlar devredilebilir.');
@@ -922,10 +1204,15 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
         await execute(tx, 'UPDATE dbo.masraf_formlari SET guncelleme = SYSUTCDATETIME() WHERE id = @f', { f: p.int(row.id) });
         const who = await names(tx, [step.onayci_id, yeniOnayciId]);
         await history(tx, row.id, actor.id, 'devredildi', `${step.sira}. adım: ${who.get(step.onayci_id) ?? step.onayci_id} → ${who.get(yeniOnayciId) ?? yeniOnayciId}`);
+        await tell(
+          tx,
+          { kind: 'devredildi', form: refOf(row, 'onayda'), onayciId: yeniOnayciId, sira: step.sira, bekliyor: step.durum === 'bekliyor' },
+          actor,
+        );
       });
     },
 
-    async preview(actor, { tutar, paraBirimi, kur, faturaIdler, yerelKarsiliklar, akisId }) {
+    async preview(actor, { tutar, paraBirimi, kur, faturaIdler, yerelKarsiliklar, faturaDuzeltmeleri, akisId }) {
       let chosen: RoutingFlow | undefined;
       if (akisId !== undefined) {
         if (actor.rol !== 'yonetici') throw forbidden('Başka bir onay akışını yalnızca yönetici deneyebilir.');
@@ -938,11 +1225,12 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       // Only the actor's own uploads count; other ids are ignored, as the preview binds nothing.
       const requested = [...new Set(faturaIdler ?? [])].slice(0, MAX_INVOICES);
       const own = await uploadedBy(db, actor, requested);
-      const facts = await invoiceTotals(
+      const reads = await readInvoices(
         db,
         requested.filter((id) => own.has(id)),
       );
-      const invoices = [...facts].map(([id, invoice]) => ({ ...invoice, yerelKarsilik: yerelKarsiliklar?.[id] ?? null }));
+      // Corrections count like on the form; those of other invoices are ignored.
+      const invoices = [...reads].map(([id, read]) => totalOf(faturaDuzeltmeleri?.[id] ?? read, yerelKarsiliklar?.[id] ?? null));
       const amount = approvalAmount({ tutar, paraBirimi: pb, kur: k }, base, invoices);
       const { akis, steps } = await plan(db, actor.id, amount, chosen);
       if (steps === null) return { onayTutari: amount, paraBirimi: base, akis, adimlar: [], uyari: nobodyToApprove().message };
@@ -1038,6 +1326,20 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       };
     },
 
+    async pdf(id, actor) {
+      const row = await readRow(db, id, false);
+      if (row === null || !(await canSee(db, row, actor))) throw notFound('Masraf formu bulunamadı.');
+      if (row.durum !== 'onaylandi' && row.durum !== 'odendi') {
+        throw conflict('gecersiz_durum', 'Onay belgesi yalnızca onaylanan ya da ödenen masraf formları için alınabilir.');
+      }
+      return renderPdf(row);
+    },
+
+    async pdfForMail(id) {
+      const row = await readRow(db, id, false);
+      return row === null ? null : renderPdf(row);
+    },
+
     async exportRows(actor, { durum, baslangic, bitis }) {
       if (!isPrivileged(actor)) throw forbidden('Dışa aktarmayı yalnızca muhasebe ve yönetici yapabilir.');
       const params: Record<string, Param> = {};
@@ -1055,7 +1357,8 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       const rows = await query<FormRow & { departman: string | null; fatura_no: string | null }>(
         db,
         `SELECT TOP (50000) ${FORM_COLUMNS}, u.departman,
-           (SELECT STRING_AGG(CAST(r.fatura_no AS NVARCHAR(MAX)), N', ') WITHIN GROUP (ORDER BY ff.sira)
+           (SELECT STRING_AGG(CAST(CASE WHEN ff.duzeltme IS NULL THEN r.fatura_no ELSE JSON_VALUE(ff.duzeltme, '$.fatura.faturaNo') END AS NVARCHAR(MAX)), N', ')
+                   WITHIN GROUP (ORDER BY ff.sira)
             FROM dbo.form_faturalari ff JOIN dbo.fatura_kayitlari r ON r.id = ff.kayit_id WHERE ff.form_id = f.id) AS fatura_no
          ${formFrom(false)}
          ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY f.masraf_tarihi, f.id`,
@@ -1071,4 +1374,31 @@ export function createExpenseService(db: Db, opts: { readonly baseCurrency: stri
       }));
     },
   };
+}
+
+/**
+ * Fills the duplicate key of live invoice links that have none: links written before migration 003.
+ * Every later write computes the key itself, so after the first start only links without an invoice
+ * number (whose key is NULL by rule) are read again. Runs at start-up, before the server listens.
+ * Returns the number of links that got a key.
+ */
+export async function fillDuplicateKeys(db: Db): Promise<number> {
+  const rows = await query<ReadRow & { form_id: number; kayit_id: string; duzeltme: string | null }>(
+    db,
+    `SELECT ff.form_id, ff.kayit_id, ff.duzeltme, ${READ_COLUMNS}
+     FROM dbo.form_faturalari ff JOIN dbo.fatura_kayitlari r ON r.id = ff.kayit_id
+     WHERE ff.aktif = 1 AND ff.mukerrer_anahtari IS NULL`,
+  );
+  let filled = 0;
+  for (const r of rows) {
+    const key = duplicateKey(parseInvoice(r.duzeltme) ?? readResult(r));
+    if (key === null) continue;
+    filled += await execute(
+      db,
+      `UPDATE dbo.form_faturalari SET mukerrer_anahtari = @k
+       WHERE form_id = @f AND kayit_id = @i AND mukerrer_anahtari IS NULL`,
+      { k: p.str(key, 450), f: p.int(r.form_id), i: p.ascii(r.kayit_id, 24) },
+    );
+  }
+  return filled;
 }

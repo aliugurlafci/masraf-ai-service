@@ -73,6 +73,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
           <span>Yeni masraf</span>
         </a>
+        <a class="icon-btn bell" id="bell" href="#/bildirimler" aria-label="Bildirimler">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 14V9a4.5 4.5 0 0 1 9 0v5l1.5 1.5h-12zM8.5 17.5h3" /></svg>
+          <span class="badge bell-badge" id="bell-badge" aria-hidden="true" hidden></span>
+        </a>
         <div class="user-menu">
           <button class="user-btn" id="user-btn" type="button" aria-controls="user-menu">
             <span class="avatar" id="user-avatar" aria-hidden="true"></span>
@@ -169,7 +173,7 @@
         <p id="drop-text">Bırakın, okumaya başlasın</p>
       </div>
     </div>
-    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+    <div class="toasts" id="toasts" role="status" aria-live="polite" popover="manual"></div>
 
     <script type="module" src="js/main.js"></script>
   </body>

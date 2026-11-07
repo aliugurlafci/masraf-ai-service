@@ -79,6 +79,29 @@ const ServiceEnvSchema = z.object({
   ILK_YONETICI_EPOSTA: optionalText,
   ILK_YONETICI_SIFRE: z.string().optional(),
   ILK_YONETICI_AD: optionalText,
+  // Notification mail. "kapali" writes mails as skipped; nothing leaves the machine unless "smtp".
+  MAIL_GONDERIM: z.enum(['kapali', 'smtp'], { error: 'kapali ya da smtp olmalı' }).default('kapali'),
+  SMTP_HOST: optionalText.pipe(z.string().regex(/^[A-Za-z0-9.-]+$/, 'ana makine adı ya da IP adresi olmalı').optional()),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  SMTP_GUVENLIK: z.enum(['starttls', 'tls', 'yok'], { error: 'starttls, tls ya da yok olmalı' }).default('starttls'),
+  SMTP_KULLANICI: optionalText,
+  SMTP_SIFRE: z.string().optional(),
+  MAIL_GONDEREN: optionalText.pipe(z.string().max(200).regex(/^[^\r\n]*@[^\r\n]*$/, 'e-posta adresi içermeli').optional()),
+  MAIL_DENEME_SAYISI: z.coerce.number().int().min(1).max(20).default(5),
+  UYGULAMA_ADRESI: optionalText.pipe(
+    z
+      .string()
+      .regex(/^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/, 'http:// ya da https:// ile başlayan bir adres olmalı')
+      .transform((u) => u.replace(/\/+$/, ''))
+      .optional(),
+  ),
+  // Reminders: 0 hours turns them off.
+  HATIRLATMA_BEKLEME_SAAT: z.coerce.number().int().min(0).max(720).default(24),
+  HATIRLATMA_SAATI: z
+    .string()
+    .trim()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'SS:DD biçiminde olmalı (ör. 09:00)')
+    .default('09:00'),
 });
 
 export interface AppConfig {
@@ -124,12 +147,44 @@ export interface FirstAdmin {
   readonly adSoyad: string;
 }
 
+export interface SmtpSettings {
+  readonly host: string;
+  readonly port: number;
+  /** tls: TLS from the start (465); starttls: upgrade required (587); yok: plain (trusted networks only). */
+  readonly guvenlik: 'starttls' | 'tls' | 'yok';
+  readonly kullanici: string | null;
+  /** Never logged or written to the database. */
+  readonly sifre: string | null;
+}
+
+export interface MailSettings {
+  /** MAIL_GONDERIM=smtp; when false mails are written as skipped (atlandi) and never sent. */
+  readonly enabled: boolean;
+  /** Set when enabled. */
+  readonly smtp: SmtpSettings | null;
+  /** From address; set when enabled. */
+  readonly gonderen: string | null;
+  readonly maxAttempts: number;
+  /** Panel address for links in mails, without a trailing slash; null = no links. */
+  readonly appUrl: string | null;
+}
+
+export interface ReminderSettings {
+  /** Steps waiting longer than this many hours are reminded; 0 = off. */
+  readonly waitHours: number;
+  /** Local time of day after which the daily reminder run starts. */
+  readonly hour: number;
+  readonly minute: number;
+}
+
 export interface ServiceConfig {
   readonly auth: AuthSettings;
   /** Currency of the approval ranges and of the reports. */
   readonly baseCurrency: string;
   /** Created on the first start, when the database has no users yet. */
   readonly firstAdmin: FirstAdmin | null;
+  readonly mail: MailSettings;
+  readonly reminder: ReminderSettings;
 }
 
 export class ConfigError extends Error {
@@ -219,15 +274,31 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env): Service
     passwordMinLength: e.SIFRE_MIN_UZUNLUK,
   };
   let firstAdmin: FirstAdmin | null = null;
-  const sifre = e.ILK_YONETICI_SIFRE ?? '';
-  if (e.ILK_YONETICI_EPOSTA !== undefined || sifre !== '') {
+  const adminPassword = e.ILK_YONETICI_SIFRE ?? '';
+  if (e.ILK_YONETICI_EPOSTA !== undefined || adminPassword !== '') {
     if (e.ILK_YONETICI_EPOSTA === undefined || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.ILK_YONETICI_EPOSTA)) {
       throw new ConfigError('Geçersiz yapılandırma: ILK_YONETICI_EPOSTA geçerli bir e-posta adresi olmalı.');
     }
-    if (sifre.length < auth.passwordMinLength) {
+    if (adminPassword.length < auth.passwordMinLength) {
       throw new ConfigError(`Geçersiz yapılandırma: ILK_YONETICI_SIFRE en az ${auth.passwordMinLength} karakter olmalı.`);
     }
-    firstAdmin = { eposta: e.ILK_YONETICI_EPOSTA.toLowerCase(), sifre, adSoyad: e.ILK_YONETICI_AD ?? 'Sistem Yöneticisi' };
+    firstAdmin = { eposta: e.ILK_YONETICI_EPOSTA.toLowerCase(), sifre: adminPassword, adSoyad: e.ILK_YONETICI_AD ?? 'Sistem Yöneticisi' };
   }
-  return { auth, baseCurrency: e.PARA_BIRIMI, firstAdmin };
+  const enabled = e.MAIL_GONDERIM === 'smtp';
+  if (enabled && e.SMTP_HOST === undefined) throw new ConfigError('Geçersiz yapılandırma: MAIL_GONDERIM=smtp iken SMTP_HOST doldurulmalı.');
+  if (enabled && e.MAIL_GONDEREN === undefined) throw new ConfigError('Geçersiz yapılandırma: MAIL_GONDERIM=smtp iken MAIL_GONDEREN doldurulmalı.');
+  const sifre = e.SMTP_SIFRE ?? '';
+  const mail: MailSettings = {
+    enabled,
+    smtp:
+      enabled && e.SMTP_HOST !== undefined
+        ? { host: e.SMTP_HOST, port: e.SMTP_PORT, guvenlik: e.SMTP_GUVENLIK, kullanici: e.SMTP_KULLANICI ?? null, sifre: sifre === '' ? null : sifre }
+        : null,
+    gonderen: enabled ? (e.MAIL_GONDEREN ?? null) : null,
+    maxAttempts: e.MAIL_DENEME_SAYISI,
+    appUrl: e.UYGULAMA_ADRESI ?? null,
+  };
+  const [hour, minute] = e.HATIRLATMA_SAATI.split(':').map(Number) as [number, number];
+  const reminder: ReminderSettings = { waitHours: e.HATIRLATMA_BEKLEME_SAAT, hour, minute };
+  return { auth, baseCurrency: e.PARA_BIRIMI, firstAdmin, mail, reminder };
 }

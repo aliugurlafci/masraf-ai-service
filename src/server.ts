@@ -4,6 +4,11 @@ import { createCascadeExtractor } from './claude/cascade.ts';
 import { createClaudeExtractor } from './claude/extractor.ts';
 import { ConfigError, loadConfig, loadDbConfig, loadServiceConfig } from './config.ts';
 import { DatabaseError, openDatabase } from './db/database.ts';
+import { createExpenseService, fillDuplicateKeys } from './expenses/forms.ts';
+import { createOutbox } from './notifications/outbox.ts';
+import { createReminderJob } from './notifications/reminders.ts';
+import { smtpSender } from './notifications/smtp.ts';
+import type { NotifySettings } from './notifications/store.ts';
 import { ensureFirstAdmin } from './users/users.ts';
 
 function fail(message: string): never {
@@ -30,6 +35,10 @@ async function main(): Promise<void> {
     throw err;
   }
 
+  // Invoice links written before the duplicate key existed (migration 003) get theirs once.
+  const keyed = await fillDuplicateKeys(db);
+  if (keyed > 0) console.info(`${keyed} fatura bağının mükerrer anahtarı dolduruldu.`);
+
   const firstAdmin = await ensureFirstAdmin(db, service.firstAdmin);
   if (firstAdmin === 'ayar_yok') {
     await db.close();
@@ -55,6 +64,26 @@ async function main(): Promise<void> {
     }),
   }));
 
+  const mail: NotifySettings = { mailEnabled: service.mail.enabled, appUrl: service.mail.appUrl };
+  // Mail leaves the machine only when the user set MAIL_GONDERIM=smtp.
+  const smtp = service.mail.smtp;
+  // Renders the approval document attached to a mail, from the form as it is when the mail goes out.
+  const documents = createExpenseService(db, { baseCurrency: service.baseCurrency, notifications: mail });
+  const outbox =
+    service.mail.enabled && smtp !== null && service.mail.gonderen !== null
+      ? createOutbox({
+          db,
+          send: smtpSender(smtp),
+          from: service.mail.gonderen,
+          maxAttempts: service.mail.maxAttempts,
+          attachment: (formId) => documents.pdfForMail(formId),
+          secrets: [smtp.sifre, smtp.kullanici],
+        })
+      : null;
+  // Reminders run in every mail mode: the in-app notification always goes out; with mail off the
+  // mail is written as skipped (atlandi). Only HATIRLATMA_BEKLEME_SAAT=0 turns them off.
+  const reminders = createReminderJob({ db, settings: service.reminder, mail });
+
   const app = createApp({
     extract: createCascadeExtractor(steps, config.maxConcurrent),
     db,
@@ -64,6 +93,7 @@ async function main(): Promise<void> {
     ...(config.lanAccess ? { lanHosts: lanHostList(config.extraHosts) } : {}),
     auth: service.auth,
     baseCurrency: service.baseCurrency,
+    mail,
   });
 
   // IPv4 only: the local-network checks (src/api/network.ts) know IPv4 private ranges.
@@ -72,6 +102,13 @@ async function main(): Promise<void> {
     console.info(
       `Masraf servisi hazır: http://127.0.0.1:${config.port}  (model: ${config.claudeModels.join(' > ')}, aynı anda ${config.maxConcurrent} fatura, veritabanı: ${dbConfig.host}:${dbConfig.port}/${dbConfig.database})`,
     );
+    console.info(
+      service.mail.enabled
+        ? `Bildirim mailleri açık: ${smtp?.host}:${smtp?.port}.`
+        : 'Bildirim mailleri kapalı (MAIL_GONDERIM=kapali); uygulama içi bildirimler oluşur.',
+    );
+    outbox?.start();
+    reminders.start();
     if (config.lanAccess) {
       const addresses = [...lanAddresses(), ...config.extraHosts];
       console.info(
@@ -90,10 +127,17 @@ async function main(): Promise<void> {
   // Large uploads plus a Claude run can take minutes.
   server.requestTimeout = config.timeoutMs + 60_000;
   server.headersTimeout = 60_000;
+  // Phones keep idle connections for minutes (Android's OkHttp 5 min, iOS similar) and ignore the
+  // Keep-Alive header. With Node's default 5 s the server closed them first and a POST sent on such a
+  // connection failed as a network error on the phone. Outlast the clients so they close first.
+  server.keepAliveTimeout = 330_000;
 
   const shutdown = (): void => {
     server.close(() => {
-      db.close().finally(() => process.exit(0));
+      // The jobs finish the mail or reminder at hand before the pool closes.
+      Promise.all([outbox?.stop(), reminders.stop()])
+        .then(() => db.close())
+        .finally(() => process.exit(0));
     });
     // Open live-monitor streams never end on their own.
     server.closeAllConnections();

@@ -7,7 +7,8 @@ import type { AuthSettings } from '../config.ts';
 import type { Db } from '../db/sql.ts';
 import { HttpError } from '../errors.ts';
 import type { ExpenseService } from '../expenses/forms.ts';
-import { changeOwnPassword, findLoginUser } from '../users/users.ts';
+import { unreadCount } from '../notifications/store.ts';
+import { changeOwnPassword, findLoginUser, setMailPreference } from '../users/users.ts';
 import { clearSessionCookie, sessionOf, setSessionCookie, userOf } from './auth.ts';
 import { email, parse, password } from './validation.ts';
 
@@ -28,6 +29,8 @@ const PasswordBody = z.object({
   mevcutSifre: password,
   yeniSifre: password,
 });
+
+const PreferencesBody = z.object({ mailBildirim: z.boolean({ error: 'mailBildirim true ya da false olmalıdır.' }) }).strict();
 
 const wrongLogin = (): HttpError => new HttpError(401, 'hatali_giris', 'E-posta veya şifre hatalı.');
 
@@ -85,7 +88,8 @@ export function accountRouter(deps: AccountDeps): Router {
   r.get('/ben', async (_req, res, next) => {
     try {
       const kullanici = userOf(res);
-      res.json({ kullanici, bekleyenOnay: await deps.expenses.pendingCount(kullanici) });
+      const [bekleyenOnay, okunmamisBildirim] = await Promise.all([deps.expenses.pendingCount(kullanici), unreadCount(deps.db, kullanici.id)]);
+      res.json({ kullanici, bekleyenOnay, okunmamisBildirim });
     } catch (err) {
       next(err);
     }
@@ -97,6 +101,15 @@ export function accountRouter(deps: AccountDeps): Router {
       const session = sessionOf(res);
       await changeOwnPassword(deps.db, session.kullanici.id, body.mevcutSifre, body.yeniSifre, session.tokenOzeti, deps.auth.passwordMinLength);
       res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  r.put('/ben/tercihler', async (req, res, next) => {
+    try {
+      const body = parse(PreferencesBody, req.body);
+      res.json(await setMailPreference(deps.db, userOf(res).id, body.mailBildirim));
     } catch (err) {
       next(err);
     }

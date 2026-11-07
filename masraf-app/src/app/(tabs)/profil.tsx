@@ -2,11 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useOzet } from '@/api/queries';
+import { errorMessage } from '@/api/client';
+import { useMailPreference, useOzet } from '@/api/queries';
 import type { OnayciYeri } from '@/api/types';
 import { useAuth } from '@/auth/AuthProvider';
 import { Button, type IconName } from '@/components/ui/Button';
@@ -15,9 +16,11 @@ import { PressableScale } from '@/components/ui/PressableScale';
 import { ScreenHeader } from '@/components/ui/ScreenHeader';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { Text } from '@/components/ui/Text';
+import { useToast } from '@/components/ui/Toast';
 import { config } from '@/config';
 import { useMotion } from '@/hooks/useMotion';
 import { formatBand, formatDateTime, formatMoney, initials } from '@/lib/format';
+import { haptics } from '@/lib/haptics';
 import { ROLE_LABELS, STRATEGY_LABELS } from '@/lib/status';
 import { radius, spacing, useTheme, type ThemePreference } from '@/theme';
 
@@ -26,6 +29,8 @@ export default function ProfileScreen() {
   const motion = useMotion();
   const { user, signOut } = useAuth();
   const ozet = useOzet();
+  const toast = useToast();
+  const mailPreference = useMailPreference();
   const [leaving, setLeaving] = useState(false);
   const currency = ozet.data?.paraBirimi ?? 'TRY';
 
@@ -102,6 +107,38 @@ export default function ProfileScreen() {
           </Text>
           <Card padded={false}>
             <MenuRow icon="key-outline" label="Şifre değiştir" onPress={() => router.push('/sifre')} />
+          </Card>
+        </Animated.View>
+
+        <Animated.View entering={motion.enter(3)} style={styles.section}>
+          <Text variant="label" tone="muted" style={styles.sectionTitle}>
+            BİLDİRİMLER
+          </Text>
+          <Card style={styles.row}>
+            <View style={[styles.rowIcon, { backgroundColor: colors.primarySoft }]}>
+              <Ionicons name="mail-outline" size={20} color={colors.primary} />
+            </View>
+            <View style={styles.flex}>
+              <Text variant="bodyStrong">Bildirimleri e-posta ile de al</Text>
+              <Text variant="small" tone="muted">
+                Uygulama içi bildirimler her zaman gelir.
+              </Text>
+            </View>
+            <Switch
+              value={user.mailBildirim}
+              onValueChange={(value) => {
+                haptics.tap();
+                mailPreference.mutate(value, {
+                  onError: (err) => {
+                    haptics.error();
+                    toast(`Tercih kaydedilemedi: ${errorMessage(err)}`, 'danger');
+                  },
+                });
+              }}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              accessibilityLabel="Bildirimleri e-posta ile de al"
+              accessibilityRole="switch"
+            />
           </Card>
         </Animated.View>
 

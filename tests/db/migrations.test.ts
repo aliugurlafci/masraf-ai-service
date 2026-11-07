@@ -39,7 +39,7 @@ describe('migrations', () => {
 
   it('builds the schema from the first file, once, with the default flow and the categories', async () => {
     const all = await loadMigrations();
-    expect(all.map((m) => m.name)).toEqual(['001_baslangic.sql', '002_onay_stratejisi.sql']);
+    expect(all.map((m) => m.name)).toEqual(['001_baslangic.sql', '002_onay_stratejisi.sql', '003_fatura_duzeltme.sql', '004_bildirimler.sql', '005_bildirim_form_basligi.sql']);
     const first = all.filter((m) => m.version === 1);
     expect(await migrate(db, first)).toEqual(['001_baslangic.sql']);
     expect(await migrate(db, first)).toEqual([]);
@@ -116,9 +116,9 @@ describe('migrations', () => {
     ]);
     await execute(db, 'UPDATE dbo.kullanicilar SET onay_akisi_id = @f WHERE id = @u', { f: p.int(kademe), u: p.int(dora) });
 
-    const all = await loadMigrations();
-    expect(await migrate(db, all)).toEqual(['002_onay_stratejisi.sql']);
-    expect(await migrate(db, all)).toEqual([]);
+    const upToSecond = (await loadMigrations()).filter((m) => m.version <= 2);
+    expect(await migrate(db, upToSecond)).toEqual(['002_onay_stratejisi.sql']);
+    expect(await migrate(db, upToSecond)).toEqual([]);
 
     const rows = await query<{ ad: string; varsayilan: boolean; strateji: string; sira: number | null; onayci_id: number | null; onay_limiti: number | null }>(
       db,
@@ -264,16 +264,86 @@ describe('migrations', () => {
     ]);
   });
 
+  it('adds invoice corrections (JSON only) and an unenforced duplicate key to existing invoice links', async () => {
+    const upToThird = (await loadMigrations()).filter((m) => m.version <= 3);
+    expect(await migrate(db, upToThird)).toEqual(['003_fatura_duzeltme.sql']);
+    expect(await migrate(db, upToThird)).toEqual([]);
+    // Existing links keep their data; neither column is filled by the migration.
+    const links = await query<{ duzeltme: string | null; mukerrer_anahtari: string | null }>(db, 'SELECT duzeltme, mukerrer_anahtari FROM dbo.form_faturalari');
+    expect(links.length).toBeGreaterThan(0);
+    expect(links.every((l) => l.duzeltme === null && l.mukerrer_anahtari === null)).toBe(true);
+
+    await expect(execute(db, `UPDATE dbo.form_faturalari SET duzeltme = N'{bozuk'`)).rejects.toMatchObject({ number: 547 });
+    await execute(db, `UPDATE dbo.form_faturalari SET duzeltme = N'{"fatura":{},"kalemler":[]}'`);
+    // Two live links may share a key (drafts); the application refuses to send them.
+    const live = await execute(db, `UPDATE dbo.form_faturalari SET mukerrer_anahtari = N'V|1|A' WHERE aktif = 1`);
+    expect(live).toBeGreaterThan(0);
+    const index = await queryOne<{ is_unique: boolean; has_filter: boolean; filter_definition: string }>(
+      db,
+      `SELECT is_unique, has_filter, filter_definition FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.form_faturalari') AND name = 'ix_form_faturalari_mukerrer'`,
+    );
+    expect(index).toMatchObject({ is_unique: false, has_filter: true });
+    expect(index?.filter_definition).toContain('[aktif]=(1)');
+    // Keys compare exactly: no case or Turkish dotted/dotless I folding.
+    const collation = await queryOne<{ collation_name: string }>(
+      db,
+      `SELECT collation_name FROM sys.columns WHERE object_id = OBJECT_ID('dbo.form_faturalari') AND name = 'mukerrer_anahtari'`,
+    );
+    expect(collation?.collation_name).toBe('Latin1_General_100_BIN2');
+  });
+
+  it('adds notifications, the mail box, the mail preference and reminder times, with their checks', async () => {
+    const upToFourth = (await loadMigrations()).filter((m) => m.version <= 4);
+    expect(await migrate(db, upToFourth)).toEqual(['004_bildirimler.sql']);
+    expect(await migrate(db, upToFourth)).toEqual([]);
+    const user = await addUser('bildirim@firma.test');
+    expect(await queryOne(db, 'SELECT mail_bildirim FROM dbo.kullanicilar WHERE id = @u', { u: p.int(user) })).toEqual({ mail_bildirim: true });
+    expect(await queryOne(db, `SELECT COUNT(*) AS n FROM dbo.form_onaylari WHERE son_hatirlatma IS NOT NULL`)).toEqual({ n: 0 });
+
+    const notification = (tur: string) =>
+      execute(db, `INSERT INTO dbo.bildirimler (kullanici_id, tur, baslik, mesaj) VALUES (@u, @t, N'B', N'M')`, { u: p.int(user), t: p.ascii(tur, 20) });
+    await notification('onay_bekliyor');
+    await notification('odeme_bekliyor');
+    await expect(notification('bilinmeyen')).rejects.toMatchObject({ number: 547 });
+    expect(await queryOne(db, 'SELECT COUNT(*) AS n FROM dbo.bildirimler WHERE okunma IS NULL')).toEqual({ n: 2 });
+
+    const mail = (durum: string, ek: string | null = null) =>
+      execute(db, `INSERT INTO dbo.eposta_kutusu (adres, konu, metin, html, durum, ek_turu) VALUES (N'a@b.test', N'K', N'M', N'H', @d, @e)`, {
+        d: p.ascii(durum, 12),
+        e: p.ascii(ek, 16),
+      });
+    for (const durum of ['bekliyor', 'gonderildi', 'hata', 'atlandi']) await mail(durum);
+    await expect(mail('gitti')).rejects.toMatchObject({ number: 547 });
+    await expect(mail('bekliyor', 'fatura')).rejects.toMatchObject({ number: 547 });
+    // The approval document belongs to a form.
+    await expect(mail('bekliyor', 'masraf_pdf')).rejects.toMatchObject({ number: 547 });
+  });
+
+  it('keeps the form title on notifications, filling it for those written before', async () => {
+    const form = await queryOne<{ id: number; olusturan_id: number; baslik: string }>(db, 'SELECT TOP (1) id, olusturan_id, baslik FROM dbo.masraf_formlari ORDER BY id');
+    expect(form).not.toBeNull();
+    await execute(db, `INSERT INTO dbo.bildirimler (kullanici_id, tur, form_id, baslik, mesaj) VALUES (@u, 'odendi', @f, N'B', N'M')`, {
+      u: p.int(form?.olusturan_id ?? 0),
+      f: p.int(form?.id ?? 0),
+    });
+    const all = await loadMigrations();
+    expect(await migrate(db, all)).toEqual(['005_bildirim_form_basligi.sql']);
+    expect(await migrate(db, all)).toEqual([]);
+    const rows = await query<{ form_id: number | null; form_baslik: string | null }>(db, 'SELECT form_id, form_baslik FROM dbo.bildirimler ORDER BY id');
+    expect(rows.filter((r) => r.form_id === null).every((r) => r.form_baslik === null)).toBe(true);
+    expect(rows.find((r) => r.form_id === form?.id)?.form_baslik).toBe(form?.baslik);
+  });
+
   it('refuses a database built from migration files that are gone, instead of taking it as up to date', async () => {
     const all = await loadMigrations();
-    await execute(db, `INSERT INTO dbo.sema_surumleri (surum, ad) VALUES (3, N'003_form_faturalari.sql')`);
+    await execute(db, `INSERT INTO dbo.sema_surumleri (surum, ad) VALUES (99, N'099_form_faturalari.sql')`);
     const err = await migrate(db, all).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DatabaseError);
-    expect((err as Error).message).toContain('003_form_faturalari.sql');
+    expect((err as Error).message).toContain('099_form_faturalari.sql');
 
     // Another file under a number that exists is the same case: a database built before the schema
     // files were merged has 002_onay_akislari.sql and must not be taken as having the new 002.
-    await execute(db, `DELETE FROM dbo.sema_surumleri WHERE surum = 3; UPDATE dbo.sema_surumleri SET ad = N'002_onay_akislari.sql' WHERE surum = 2`);
+    await execute(db, `DELETE FROM dbo.sema_surumleri WHERE surum = 99; UPDATE dbo.sema_surumleri SET ad = N'002_onay_akislari.sql' WHERE surum = 2`);
     await expect(migrate(db, all)).rejects.toThrow('002_onay_akislari.sql');
 
     // So is a renamed file.

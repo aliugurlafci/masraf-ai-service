@@ -2,11 +2,12 @@
 // flows they approve in, and the password change form.
 // #/profil?bolum=sifre opens with the focus on the password form (user menu "Şifre değiştir").
 
+import * as api from '../api.js';
 import { el, ICONS, reducedMotion } from '../dom.js';
 import { fmtCurrency, fmtDateTime, fmtRelative } from '../format.js';
 import { bandPhrase, ROLE_HINTS, roleLabel, STRATEGY_LABEL } from '../labels.js';
 import * as session from '../session.js';
-import { avatar, btn, pageHead, toast } from '../ui.js';
+import { avatar, btn, pageHead, showError, toast } from '../ui.js';
 import { passwordForm } from './login.js';
 
 function kv(label, value, className = null) {
@@ -57,11 +58,48 @@ export const profileView = {
       pf.form,
     );
 
-    root.append(el('div', { className: 'page narrow' }, pageHead({ title: 'Profil', sub: 'Hesap bilgileriniz ve şifreniz.' }), el('div', { className: 'profile-grid' }, info, pwCard)));
+    // E-mail copies of notifications: the only notification preference (in-app ones always arrive).
+    const mailSwitch = el(
+      'button',
+      { className: 'switch', type: 'button', role: 'switch', id: 'mail-switch', 'aria-checked': 'false', 'aria-labelledby': 'mail-switch-l', 'aria-describedby': 'mail-switch-d' },
+      el('span', { className: 'switch-knob', 'aria-hidden': 'true' }),
+    );
+    const mailMsg = el('p', { className: 'form-msg', role: 'status' });
+    const prefCard = el(
+      'section',
+      { className: 'card', 'aria-labelledby': 'pref-h' },
+      el('h2', { className: 'card-title', id: 'pref-h', text: 'Bildirimler' }),
+      el(
+        'div',
+        { className: 'pref-row' },
+        el('div', {}, el('p', { className: 'pref-label', id: 'mail-switch-l', text: 'Bildirimleri e-posta ile de al' }), el('p', { className: 'muted small', id: 'mail-switch-d', text: 'Uygulama içi bildirimler her zaman gelir; bu ayar yalnızca e-posta kopyasını açar ya da kapatır.' })),
+        mailSwitch,
+      ),
+      mailMsg,
+    );
+    mailSwitch.addEventListener('click', async () => {
+      const next = mailSwitch.getAttribute('aria-checked') !== 'true';
+      mailSwitch.setAttribute('aria-busy', 'true');
+      mailSwitch.disabled = true;
+      mailMsg.textContent = '';
+      const r = await api.updatePreferences({ mailBildirim: next });
+      mailSwitch.removeAttribute('aria-busy');
+      mailSwitch.disabled = false;
+      if (!r.ok) {
+        showError(r);
+        if (!r.unauthorized && !r.aborted) mailMsg.textContent = r.error.mesaj;
+        return;
+      }
+      session.setSession(r.body);
+      toast(next ? 'Bildirimler e-posta ile de gelecek.' : 'E-posta bildirimleri kapatıldı.', 'ok');
+    });
+
+    root.append(el('div', { className: 'page narrow' }, pageHead({ title: 'Profil', sub: 'Hesap bilgileriniz, bildirim tercihiniz ve şifreniz.' }), el('div', { className: 'profile-grid' }, info, el('div', { className: 'profile-side' }, prefCard, pwCard))));
 
     function renderInfo() {
       const u = session.currentUser();
       if (!u) return;
+      if (!mailSwitch.hasAttribute('aria-busy')) mailSwitch.setAttribute('aria-checked', String(u.mailBildirim !== false));
       info.replaceChildren(
         el(
           'section',

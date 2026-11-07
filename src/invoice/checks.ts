@@ -1,6 +1,7 @@
 import type { Invoice } from './schema.ts';
 
-const REQUIRED = [
+/** Header fields every invoice must have, with their Turkish labels. Also the fields a form cannot be sent without. */
+export const REQUIRED = [
   ['faturaNo', 'fatura no'],
   ['faturaTarihi', 'fatura tarihi'],
   ['saticiUnvan', 'satıcı'],

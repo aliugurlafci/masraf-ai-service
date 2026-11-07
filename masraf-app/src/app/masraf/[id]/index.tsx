@@ -10,6 +10,7 @@ import { approveMasraf, rejectMasraf, runMasrafAction, type MasrafIslemi } from 
 import { useMasraf, useMasrafChanged, useOzet } from '@/api/queries';
 import type { MasrafDetay, MasrafFatura } from '@/api/types';
 import { CategoryIcon } from '@/components/expense/CategoryIcon';
+import { InvoiceInfoCard } from '@/components/expense/InvoiceInfoCard';
 import { InvoiceThumb } from '@/components/expense/InvoiceThumb';
 import { StatusBadge } from '@/components/expense/StatusBadge';
 import { ApprovalTimeline, HistoryList } from '@/components/expense/Timeline';
@@ -26,10 +27,14 @@ import { useMotion } from '@/hooks/useMotion';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
 import { invoiceTotalInForm } from '@/lib/invoices';
+import { fieldLabel } from '@/lib/invoiceEdit';
 import { isPdf } from '@/lib/pickers';
 import { amountLargeFor, radius, spacing, statusColors, useTheme } from '@/theme';
 
 type ActionKey = 'duzenle' | 'gonder' | 'geriCek' | 'iptal' | 'onayla' | 'reddet' | 'odendi';
+
+/** Send errors the sender fixes by editing the form. */
+const FIXABLE: readonly string[] = ['karsilik_eksik', 'fatura_eksik', 'fatura_mukerrer'];
 
 /** Width of one invoice in the strip of a form with several invoices. */
 const TILE_W = 144;
@@ -121,10 +126,22 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
   if (izin.reddet) actions.push({ key: 'reddet', title: 'Reddet', icon: 'close-circle-outline', variant: 'dangerSoft', onPress: () => openSheet('reddet') });
   if (izin.onayla) actions.push({ key: 'onayla', title: 'Onayla', icon: 'checkmark-circle-outline', variant: 'success', onPress: () => openSheet('onayla') });
   const openEdit = (): void => router.push({ pathname: '/masraf/[id]/duzenle', params: { id: String(detail.id) } });
-  if (izin.duzenle) {
+  const hasIncomplete = izin.gonder && detail.faturalar.some((f) => f.eksikAlanlar.length > 0);
+  if (izin.duzenle && !hasIncomplete) {
     actions.push({ key: 'duzenle', title: 'Düzenle', icon: 'create-outline', variant: 'outline', onPress: openEdit });
   }
-  if (izin.gonder) {
+  // Sending with missing invoice information is a sure rejection: the way forward is to fill it in.
+  const incompleteInvoices = detail.faturalar.flatMap((f, i) => (f.eksikAlanlar.length > 0 ? [{ f, n: i + 1 }] : []));
+  const firstIncomplete = incompleteInvoices[0];
+  if (izin.gonder && firstIncomplete !== undefined) {
+    actions.push({
+      key: 'duzenle',
+      title: 'Eksikleri tamamla',
+      icon: 'create-outline',
+      variant: 'primary',
+      onPress: () => router.push({ pathname: '/masraf/[id]/duzenle', params: { id: String(detail.id), fatura: firstIncomplete.f.id } }),
+    });
+  } else if (izin.gonder) {
     actions.push({
       key: 'gonder',
       title: 'Onaya gönder',
@@ -132,10 +149,11 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
       variant: 'primary',
       onPress: () =>
         void run('gonder', () => runMasrafAction(detail.id, 'gonder'), 'Masraf onaya gönderildi.', (err) => {
-          // A missing equivalent is fixed on the edit screen; offer to go there instead of a passing toast.
-          if (!(err instanceof ApiError) || err.kod !== 'karsilik_eksik') return false;
+          // A missing equivalent, missing invoice information or a duplicate is fixed on the edit screen;
+          // offer to go there instead of a passing toast.
+          if (!(err instanceof ApiError) || !FIXABLE.includes(err.kod)) return false;
           Alert.alert(
-            `${base} karşılığı eksik`,
+            err.kod === 'karsilik_eksik' ? `${base} karşılığı eksik` : err.kod === 'fatura_eksik' ? 'Fatura bilgisi eksik' : 'Mükerrer fatura',
             err.message,
             izin.duzenle
               ? [
@@ -248,6 +266,19 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
               message={`${missingCount === 1 ? 'Bir faturanın' : `${missingCount} faturanın`} ${base} karşılığı girilmedi. ${
                 izin.duzenle ? `Göndermeden önce düzenleyip ${base} karşılığını girin.` : `Onaya göndermek için ${base} karşılığı gerekir.`
               }`}
+            />
+          </Animated.View>
+        ) : null}
+
+        {incompleteInvoices.length > 0 && izin.gonder ? (
+          <Animated.View entering={motion.enter(1)}>
+            <Banner
+              tone="warning"
+              icon="document-text-outline"
+              message={[
+                'Onaya göndermeden önce eksik fatura bilgilerini tamamlayın',
+                ...incompleteInvoices.map(({ f, n }) => `${n}. fatura: ${f.eksikAlanlar.map((k) => fieldLabel(k).toLowerCase()).join(', ')}`),
+              ].join('\n')}
             />
           </Animated.View>
         ) : null}
@@ -379,6 +410,15 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
             </PressableScale>
           )}
         </Animated.View>
+
+        {faturalar.length > 0 ? (
+          <View style={styles.section}>
+            <SectionTitle>{faturalar.length > 1 ? 'Fatura bilgileri' : 'Fatura detayı'}</SectionTitle>
+            {faturalar.map((f, i) => (
+              <InvoiceInfoCard key={f.id} fatura={f} index={i} count={faturalar.length} currency={detail.paraBirimi} />
+            ))}
+          </View>
+        ) : null}
 
         {detail.onaylar.length > 0 ? (
           <View style={styles.section}>

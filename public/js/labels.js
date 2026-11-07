@@ -163,3 +163,22 @@ export function humanize(code) {
   const s = String(code ?? '').replace(/[_-]+/g, ' ').trim();
   return s ? s.charAt(0).toLocaleUpperCase('tr-TR') + s.slice(1) : '';
 }
+
+/** Notification types (docs/onay-sistemi.md, "Bildirimler"). */
+export const NOTIFICATION_TYPES = {
+  onay_bekliyor: { label: 'Onay bekliyor', tone: 'wait', icon: ICONS.inbox },
+  hatirlatma: { label: 'Hatırlatma', tone: 'wait', icon: ICONS.clock },
+  devredildi: { label: 'Devredildi', tone: 'muted', icon: ICONS.transfer },
+  onaylandi: { label: 'Onaylandı', tone: 'ok', icon: ICONS.checkCircle },
+  reddedildi: { label: 'Reddedildi', tone: 'err', icon: ICONS.xCircle },
+  odendi: { label: 'Ödendi', tone: 'paid', icon: ICONS.cash },
+  odeme_bekliyor: { label: 'Ödeme bekliyor', tone: 'wait', icon: ICONS.cash },
+};
+
+/** Outbox mail states (docs/onay-sistemi.md, section 7). */
+export const MAIL_STATUS = {
+  bekliyor: { label: 'Bekliyor', tone: 'wait', icon: ICONS.clock },
+  gonderildi: { label: 'Gönderildi', tone: 'ok', icon: ICONS.checkCircle },
+  hata: { label: 'Hata', tone: 'err', icon: ICONS.alert },
+  atlandi: { label: 'Atlandı', tone: 'muted', icon: ICONS.ban },
+};

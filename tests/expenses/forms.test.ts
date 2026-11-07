@@ -2,10 +2,12 @@
 // invoices, races and the read models (inbox, summary, preview, export). See docs/onay-sistemi.md.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { execute, p, query, type Db } from '../../src/db/sql.ts';
-import { createExpenseService, type ExpenseService, type FormInput, type MasrafDetay } from '../../src/expenses/forms.ts';
+import { createExpenseService, fillDuplicateKeys, type ExpenseService, type FormInput, type MasrafDetay } from '../../src/expenses/forms.ts';
+import type { Invoice } from '../../src/invoice/schema.ts';
 import type { Izinler } from '../../src/expenses/rules.ts';
 import type { Kullanici } from '../../src/users/users.ts';
 import { assignFlow, chainOf, closeTestDb, defaultFlowId, makeFlow, makeInvoice, makeUser, resetDb, setFlow, testDb } from '../db.ts';
+import { sampleInvoice } from '../helpers.ts';
 
 const PAST = '2025-06-15';
 const form = (over: Partial<FormInput> = {}): FormInput => ({ baslik: 'Müşteri yemeği', kategoriId: 1, masrafTarihi: PAST, tutar: 100, ...over });
@@ -1065,6 +1067,284 @@ describe('expense service', () => {
       await svc.cancel(draft.id, sender);
       const next = await svc.create(sender, form({ faturaIdler: [y, x] }), false);
       expect(next.faturaIdler).toEqual([y, x]);
+    });
+  });
+
+  describe('invoice corrections and send checks', () => {
+    let low: Kullanici;
+    let high: Kullanici;
+    let sender: Kullanici;
+    let other: Kullanici;
+
+    beforeEach(async () => {
+      low = await makeUser(db);
+      high = await makeUser(db);
+      sender = await makeUser(db);
+      other = await makeUser(db);
+      await setFlow(
+        db,
+        [
+          { onayciId: low.id, limit: 5000 },
+          { onayciId: high.id, limit: null },
+        ],
+        'tek',
+      );
+    });
+
+    /** An invoice whose read result is exactly sampleInvoice(fields), and that result. */
+    const invoice = async (owner: Kullanici, fields: Partial<Invoice['fatura']> = {}): Promise<{ id: string; read: Invoice }> => {
+      const all = { saticiVergiNo: `V${Math.random().toString().slice(2, 12)}`, ...fields };
+      return { id: await makeInvoice(db, owner.id, all), read: sampleInvoice(all) };
+    };
+    const fix = (read: Invoice, fields: Partial<Invoice['fatura']>): Invoice => ({ ...read, fatura: { ...read.fatura, ...fields } });
+    const notes = (d: MasrafDetay): Array<string | null> => d.gecmis.filter((g) => g.islem === 'guncellendi').map((g) => g.aciklama);
+    const errorOf = (promise: Promise<unknown>): Promise<any> => promise.then(
+      () => {
+        throw new Error('expected a failure');
+      },
+      (e: unknown) => e,
+    );
+    const stored = (formId: number) =>
+      query<{ kayit_id: string; duzeltme: string | null; mukerrer_anahtari: string | null }>(
+        db,
+        'SELECT kayit_id, duzeltme, mukerrer_anahtari FROM dbo.form_faturalari WHERE form_id = @f ORDER BY sira',
+        { f: p.int(formId) },
+      );
+
+    it('keeps a correction on the form only, shows the read values beside it and writes the trail', async () => {
+      const inv = await invoice(sender, { faturaNo: 'A-1', genelToplam: 1800 });
+      const fixed = fix(inv.read, { faturaNo: 'A-2', genelToplam: 1900 });
+      const d = await svc.create(sender, form({ faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: fixed } }), false);
+      expect(d.faturalar[0]).toMatchObject({
+        faturaNo: 'A-2',
+        genelToplam: 1900,
+        saticiVergiNo: inv.read.fatura.saticiVergiNo,
+        aliciUnvan: 'Deneme Ltd. Şti.',
+        araToplam: 1500,
+        kdvToplam: 300,
+        kalemler: inv.read.kalemler,
+        duzeltildi: true,
+        okunan: inv.read,
+        eksikAlanlar: [],
+      });
+      expect(events(d)).toEqual(['olusturuldu', 'guncellendi']);
+      expect(notes(d)).toEqual(['1. fatura düzeltildi: fatura no, genel toplam.']);
+      expect(JSON.parse((await stored(d.id))[0]?.duzeltme ?? 'null')).toEqual(fixed);
+
+      // The read record itself is untouched.
+      const [record] = await query<{ fatura_no: string; sonuc: string }>(db, 'SELECT fatura_no, sonuc FROM dbo.fatura_kayitlari WHERE id = @i', { i: p.ascii(inv.id, 24) });
+      expect(record?.fatura_no).toBe('A-1');
+      expect(JSON.parse(record?.sonuc ?? 'null')).toEqual(inv.read);
+
+      // Undo: back to the read result.
+      const undone = await svc.update(d.id, sender, { faturaDuzeltmeleri: { [inv.id]: null } });
+      expect(undone.faturalar[0]).toMatchObject({ faturaNo: 'A-1', genelToplam: 1800, duzeltildi: false, okunan: null });
+      expect(notes(undone)).toEqual(['1. fatura düzeltildi: fatura no, genel toplam.', '1. faturanın düzeltmesi geri alındı.']);
+      expect((await stored(d.id))[0]?.duzeltme).toBeNull();
+    });
+
+    it('does not keep a correction equal to the read result, and keeps corrections left out of a request', async () => {
+      const first = await invoice(sender);
+      const second = await invoice(sender);
+      const d = await svc.create(sender, form({ faturaIdler: [first.id, second.id], faturaDuzeltmeleri: { [first.id]: first.read } }), false);
+      expect(d.faturalar.map((x) => x.duzeltildi)).toEqual([false, false]);
+      expect(events(d)).toEqual(['olusturuldu']);
+
+      const fixed = await svc.update(d.id, sender, { faturaDuzeltmeleri: { [second.id]: fix(second.read, { saticiUnvan: 'Doğru Satıcı' }) } });
+      expect(notes(fixed)).toEqual(['2. fatura düzeltildi: satıcı.']);
+      const kept = await svc.update(d.id, sender, { baslik: 'Yeni başlık' });
+      expect(kept.faturalar.map((x) => [x.duzeltildi, x.saticiUnvan])).toEqual([
+        [false, 'Örnek Yazılım A.Ş.'],
+        [true, 'Doğru Satıcı'],
+      ]);
+    });
+
+    it('drops the correction of an invoice taken off the form; added back, it starts from the read result', async () => {
+      const keep = await invoice(sender);
+      const drop = await invoice(sender);
+      const d = await svc.create(sender, form({ faturaIdler: [keep.id, drop.id], faturaDuzeltmeleri: { [drop.id]: fix(drop.read, { faturaNo: 'X' }) } }), false);
+      const removed = await svc.update(d.id, sender, { faturaIdler: [keep.id] });
+      expect(notes(removed).at(-1)).toBe('1 fatura çıkarıldı.');
+      expect(await stored(d.id)).toEqual([expect.objectContaining({ kayit_id: keep.id, duzeltme: null })]);
+      const back = await svc.update(d.id, sender, { faturaIdler: [keep.id, drop.id] });
+      expect(back.faturalar[1]).toMatchObject({ id: drop.id, faturaNo: drop.read.fatura.faturaNo, duzeltildi: false });
+    });
+
+    it('writes list changes and corrections of one request to the history together', async () => {
+      const a = await invoice(sender);
+      const b = await invoice(sender);
+      const d = await svc.create(sender, form({ faturaIdler: [a.id] }), false);
+      const both = await svc.update(d.id, sender, { faturaIdler: [a.id, b.id], faturaDuzeltmeleri: { [b.id]: fix(b.read, { faturaTarihi: '2026-10-01' }) } });
+      expect(notes(both)).toEqual(['1 fatura eklendi. 2. fatura düzeltildi: fatura tarihi.']);
+    });
+
+    it('refuses a correction of an invoice that is not on the form, and corrections of a form that cannot be edited', async () => {
+      const on = await invoice(sender);
+      const off = await invoice(sender);
+      const err = await errorOf(svc.create(sender, form({ faturaIdler: [on.id], faturaDuzeltmeleri: { [off.id]: off.read } }), false));
+      expect(err).toMatchObject({ status: 400, code: 'gecersiz_istek', details: { alanlar: { [`faturaDuzeltmeleri.${off.id}`]: 'Bu fatura masrafta yok.' } } });
+      const d = await svc.create(sender, form({ faturaIdler: [on.id] }), true);
+      await fails(svc.update(d.id, sender, { faturaDuzeltmeleri: { [on.id]: fix(on.read, { faturaNo: 'Z' }) } }), 409, 'gecersiz_durum');
+      await fails(svc.update(d.id, low, { faturaDuzeltmeleri: { [on.id]: null } }), 403, 'yetki_yok');
+    });
+
+    it('saves a draft with missing fields but refuses to send it with 409 fatura_eksik, field by field', async () => {
+      const ok = await invoice(sender);
+      const blank = await invoice(sender, { faturaNo: null, genelToplam: null });
+      const d = await svc.create(sender, form({ faturaIdler: [ok.id, blank.id] }), false);
+      expect(d.faturalar.map((x) => x.eksikAlanlar)).toEqual([[], ['faturaNo', 'genelToplam']]);
+
+      const err = await errorOf(svc.submit(d.id, sender));
+      expect(err).toMatchObject({ status: 409, code: 'fatura_eksik' });
+      expect(err.message).toBe('2. faturada eksik bilgi var: fatura no, genel toplam. Eksik alanları doldurup yeniden gönderin.');
+      expect(err.details.alanlar).toEqual({
+        [`faturalar.${blank.id}.faturaNo`]: 'Bu alan okunamadı; doldurun.',
+        [`faturalar.${blank.id}.genelToplam`]: 'Bu alan okunamadı; doldurun.',
+      });
+      // Sending at creation fails whole: no form is left behind.
+      const before = (await svc.list(sender, { kapsam: 'benim', sayfa: 1, adet: 20 })).toplam;
+      const third = await invoice(sender, { saticiUnvan: null });
+      await fails(svc.create(sender, form({ faturaIdler: [third.id] }), true), 409, 'fatura_eksik');
+      expect((await svc.list(sender, { kapsam: 'benim', sayfa: 1, adet: 20 })).toplam).toBe(before);
+
+      // The correction fills the gap; the form goes.
+      const fixed = await svc.update(d.id, sender, { faturaDuzeltmeleri: { [blank.id]: fix(blank.read, { faturaNo: 'B-1', genelToplam: 100 }) } });
+      expect(fixed.faturalar[1]?.eksikAlanlar).toEqual([]);
+      expect((await svc.submit(d.id, sender)).durum).toBe('onayda');
+    });
+
+    it('checks a correction for missing fields, not the read result', async () => {
+      const inv = await invoice(sender);
+      const d = await svc.create(sender, form({ faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: fix(inv.read, { faturaTarihi: null }) } }), false);
+      expect(d.faturalar[0]?.eksikAlanlar).toEqual(['faturaTarihi']);
+      const err = await errorOf(svc.submit(d.id, sender));
+      expect(err).toMatchObject({ code: 'fatura_eksik', details: { alanlar: { [`faturalar.${inv.id}.faturaTarihi`]: 'Bu alan okunamadı; doldurun.' } } });
+      expect(err.message.startsWith('Faturada eksik bilgi var: fatura tarihi.')).toBe(true);
+    });
+
+    it('refuses to send an invoice already declared on another live form (same seller tax number and invoice number)', async () => {
+      const first = await invoice(sender, { saticiVergiNo: '1234567890', faturaNo: 'ABC-2026/1' });
+      const sent = await svc.create(sender, form({ faturaIdler: [first.id] }), true);
+      // Another upload of the same invoice, written differently.
+      const again = await invoice(sender, { saticiVergiNo: '123 456 7890', faturaNo: 'abc 2026.1', genelToplam: 5 });
+      const draft = await svc.create(sender, form({ faturaIdler: [again.id] }), false);
+      expect(draft.durum).toBe('taslak');
+
+      const err = await errorOf(svc.submit(draft.id, sender));
+      expect(err).toMatchObject({ status: 409, code: 'fatura_mukerrer' });
+      expect(err.message).toBe(`Bu fatura #${sent.id} numaralı masraf formundaki bir faturayla aynı; aynı fatura iki kez beyan edilemez.`);
+      expect(err.details.alanlar).toEqual({ [`faturalar.${again.id}`]: err.message });
+      expect((await stored(draft.id))[0]?.mukerrer_anahtari).toBe('V|1234567890|ABC20261');
+
+      // Someone else's form is not named.
+      const theirs = await invoice(other, { saticiVergiNo: '1234567890', faturaNo: 'ABC20261' });
+      const foreign = await errorOf(svc.create(other, form({ faturaIdler: [theirs.id] }), true));
+      expect(foreign).toMatchObject({ code: 'fatura_mukerrer' });
+      expect(foreign.message).not.toContain('#');
+      expect(foreign.message).toContain('başka bir masraf formundaki');
+    });
+
+    it('compares invoice number, date and total when the seller tax number is unknown', async () => {
+      const base = { saticiVergiNo: null, faturaNo: 'F-77', faturaTarihi: '2026-10-01', genelToplam: 1800 };
+      const first = await invoice(sender, base);
+      await svc.create(sender, form({ faturaIdler: [first.id] }), true);
+      const otherDay = await invoice(sender, { ...base, faturaTarihi: '2026-10-02' });
+      expect((await svc.create(sender, form({ faturaIdler: [otherDay.id] }), true)).durum).toBe('onayda');
+      const otherTotal = await invoice(sender, { ...base, genelToplam: 1800.5 });
+      expect((await svc.create(sender, form({ faturaIdler: [otherTotal.id] }), true)).durum).toBe('onayda');
+      const same = await invoice(sender, { ...base, faturaNo: 'f 77', genelToplam: 1800.001 });
+      await fails(svc.create(sender, form({ faturaIdler: [same.id] }), true), 409, 'fatura_mukerrer');
+    });
+
+    it('refuses two invoices with the same key on one form, naming the second', async () => {
+      const a = await invoice(sender, { saticiVergiNo: '111', faturaNo: 'Q-1' });
+      const b = await invoice(sender, { saticiVergiNo: '222', faturaNo: 'Q-2' });
+      const c = await invoice(sender, { saticiVergiNo: '111', faturaNo: 'q1' });
+      const d = await svc.create(sender, form({ faturaIdler: [a.id, b.id, c.id] }), false);
+      const err = await errorOf(svc.submit(d.id, sender));
+      expect(err).toMatchObject({ status: 409, code: 'fatura_mukerrer' });
+      expect(err.details.alanlar).toEqual({ [`faturalar.${c.id}`]: '3. fatura, 1. faturayla aynı; aynı fatura iki kez beyan edilemez.' });
+    });
+
+    it('lets a cancelled form free the key, and a correction change it', async () => {
+      const first = await invoice(sender, { saticiVergiNo: '555', faturaNo: 'K-1' });
+      const old = await svc.create(sender, form({ faturaIdler: [first.id] }), false);
+      const dup = await invoice(sender, { saticiVergiNo: '555', faturaNo: 'K-1' });
+      const d = await svc.create(sender, form({ faturaIdler: [dup.id] }), false);
+      // The other draft holds the same key: neither may be sent.
+      await fails(svc.submit(d.id, sender), 409, 'fatura_mukerrer');
+      await fails(svc.submit(old.id, sender), 409, 'fatura_mukerrer');
+      await svc.cancel(old.id, sender);
+      expect((await svc.submit(d.id, sender)).durum).toBe('onayda');
+
+      // A misread number corrected on the form gives the invoice its own key.
+      const misread = await invoice(sender, { saticiVergiNo: '555', faturaNo: 'K-1' });
+      const third = await svc.create(sender, form({ faturaIdler: [misread.id] }), false);
+      await fails(svc.submit(third.id, sender), 409, 'fatura_mukerrer');
+      await svc.update(third.id, sender, { faturaDuzeltmeleri: { [misread.id]: fix(misread.read, { faturaNo: 'K-2' }) } });
+      expect((await svc.submit(third.id, sender)).durum).toBe('onayda');
+      expect((await stored(third.id))[0]?.mukerrer_anahtari).toBe('V|555|K2');
+    });
+
+    it('checks in the order fatura_eksik, fatura_mukerrer, karsilik_eksik', async () => {
+      const sent = await invoice(sender, { saticiVergiNo: '777', faturaNo: 'S-1' });
+      await svc.create(sender, form({ faturaIdler: [sent.id] }), true);
+      const dupUsd = await invoice(sender, { saticiVergiNo: '777', faturaNo: 'S-1', paraBirimi: 'USD' });
+      const blank = await invoice(sender, { aliciUnvan: null, faturaTarihi: null });
+      const d = await svc.create(sender, form({ faturaIdler: [dupUsd.id, blank.id] }), false);
+      await fails(svc.submit(d.id, sender), 409, 'fatura_eksik');
+      await svc.update(d.id, sender, { faturaIdler: [dupUsd.id] });
+      await fails(svc.submit(d.id, sender), 409, 'fatura_mukerrer');
+      await svc.update(d.id, sender, { faturaDuzeltmeleri: { [dupUsd.id]: fix(dupUsd.read, { faturaNo: 'S-2' }) } });
+      await fails(svc.submit(d.id, sender), 409, 'karsilik_eksik');
+    });
+
+    it('lets only one of two forms sent at the same time with the same invoice pass', async () => {
+      const a = await invoice(sender, { saticiVergiNo: '999', faturaNo: 'R-1' });
+      const b = await invoice(sender, { saticiVergiNo: '999', faturaNo: 'R-1' });
+      const results = await Promise.allSettled([svc.create(sender, form({ faturaIdler: [a.id] }), true), svc.create(sender, form({ faturaIdler: [b.id] }), true)]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.flatMap((r) => (r.status === 'rejected' ? [(r.reason as { code?: string }).code] : []))).toEqual(['fatura_mukerrer']);
+      expect((await svc.list(sender, { kapsam: 'benim', sayfa: 1, adet: 20 })).toplam).toBe(1);
+    });
+
+    it('routes, previews and compares amounts by the corrected total', async () => {
+      const inv = await invoice(sender, { genelToplam: 1800 });
+      const corrected = fix(inv.read, { genelToplam: 6000 });
+      const preview = await svc.preview(sender, { tutar: 4000, faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: corrected } });
+      expect(preview.onayTutari).toBe(6000);
+      expect((await svc.preview(sender, { tutar: 4000, faturaIdler: [inv.id] })).onayTutari).toBe(4000);
+
+      const d = await svc.create(sender, form({ tutar: 4000, faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: corrected } }), true);
+      expect(d).toMatchObject({ onayTutari: 6000, tutarFarki: { fatura: 6000, beyan: 4000 } });
+      expect(chain(d)).toEqual([{ id: high.id, durum: 'bekliyor' }]);
+    });
+
+    it('asks for an equivalent when a correction puts the invoice in a third currency', async () => {
+      const inv = await invoice(sender, { genelToplam: 100 });
+      const d = await svc.create(sender, form({ faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: fix(inv.read, { paraBirimi: 'USD' }) } }), false);
+      expect(d.faturalar[0]).toMatchObject({ paraBirimi: 'USD', karsilikGerekli: true });
+      await fails(svc.submit(d.id, sender), 409, 'karsilik_eksik');
+      const withEquivalent = await svc.update(d.id, sender, { yerelKarsiliklar: { [inv.id]: 7000 } });
+      expect(withEquivalent.faturalar[0]?.yerelKarsilik).toBe(7000);
+      expect((await svc.submit(d.id, sender)).onayTutari).toBe(7000);
+    });
+
+    it('exports the corrected invoice number', async () => {
+      const accounting = await makeUser(db, { rol: 'muhasebe' });
+      const inv = await invoice(sender, { faturaNo: 'OKUNAN' });
+      await svc.create(sender, form({ faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: fix(inv.read, { faturaNo: 'DOGRU' }) } }), false);
+      expect((await svc.exportRows(accounting, {}))[0]?.faturaNo).toBe('DOGRU');
+    });
+
+    it('fills the keys of links written before the key existed', async () => {
+      const inv = await invoice(sender, { saticiVergiNo: '42', faturaNo: 'old-1' });
+      const fixedInv = await invoice(sender, { saticiVergiNo: '43', faturaNo: 'old-2' });
+      const d = await svc.create(sender, form({ faturaIdler: [inv.id, fixedInv.id], faturaDuzeltmeleri: { [fixedInv.id]: fix(fixedInv.read, { faturaNo: 'new-2' }) } }), false);
+      await execute(db, 'UPDATE dbo.form_faturalari SET mukerrer_anahtari = NULL WHERE form_id = @f', { f: p.int(d.id) });
+      expect(await fillDuplicateKeys(db)).toBe(2);
+      expect((await stored(d.id)).map((r) => r.mukerrer_anahtari)).toEqual(['V|42|OLD1', 'V|43|NEW2']);
+      expect(await fillDuplicateKeys(db)).toBe(0);
     });
   });
 

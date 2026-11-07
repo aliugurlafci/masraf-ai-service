@@ -60,10 +60,11 @@ export interface AttachmentEvents {
 /** Consecutive polling failures tolerated (e.g. a short network drop) before giving up. */
 const MAX_POLL_ERRORS = 3;
 /**
- * Uploads in flight at once. More would wait in the HTTP client's per-host connection pool and could run
- * out their upload timeout there; the rest wait on the device and start as slots free up.
+ * Uploads in flight at once. iOS opens at most 4 connections per host (Android 5) and every request of
+ * the app shares them; more uploads would leave the status polls and the other screens waiting behind
+ * them, running out their timeouts in the queue. The rest wait on the device and start as slots free up.
  */
-const MAX_UPLOADS = 3;
+const MAX_UPLOADS = 2;
 
 interface Run {
   readonly id: number;

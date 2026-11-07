@@ -29,6 +29,15 @@ Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının C
 - `rules.ts`: Saf kurallar. Kim hangi durumda ne yapabilir (`permissions`; yanıttaki `izinler` ve sunucu kontrolü aynı fonksiyondan gelir), onay tutarı (beyan ile fatura toplamından büyüğü).
 - `forms.ts`: Form servisi. Her işlem bir transaction içinde formu kilitler (`UPDLOCK`), izni yeniden kontrol eder ve geçmişe yazar. Bir formun faturaları (en çok 20) `form_faturalari` tablosundadır; iptal edilen formun faturaları serbest kalır (`aktif = 0`).
 - `categories.ts`, `export.ts` (CSV: BOM, `;`, formül enjeksiyonu önlemi).
+- `pdf.ts`: Onay belgesi PDF'i (pdfkit). Türkçe karakterler için `assets/fonts/` içindeki gömülü Noto Sans kullanılır (OFL lisansı aynı klasörde).
+
+`src/notifications/`: Uygulama içi bildirim ve mail (`docs/onay-sistemi.md` bölüm 7).
+
+- `events.ts`, `mail-templates.ts`: Saf kurallar. Olaydan alıcıya, türe ve metne eşleme; düz metin ve HTML şablonlar (bütün değerler kaçışlı, konu tek satır).
+- `store.ts`: Bildirimlerin ve giden mail satırlarının, onları doğuran işlemle aynı transaction'da yazılması; bildirim listesi ve okundu işaretleme.
+- `outbox.ts`: Giden kutusu işi. Satırı sahiplenir, SMTP ile gönderir, artan aralıklarla yeniden dener. Hata kaydına SMTP kimlik bilgisi ve mail gövdesi yazılmaz. Yalnızca `MAIL_GONDERIM=smtp` iken çalışır.
+- `reminders.ts`: Günlük onay hatırlatması (`HATIRLATMA_*`). Mail kapalıyken de uygulama içi bildirim gönderir.
+- `smtp.ts`: nodemailer taşıyıcısı; dosya ve URL eklerine erişim kapalıdır.
 
 `src/claude/`: Claude CLI ile konuşan katman.
 
@@ -39,6 +48,7 @@ Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının C
 `src/invoice/`: Faturanın kendisi.
 
 - `schema.ts`: Çıktı şemasının tek kaynağı. Zod şemasından `--json-schema` üretilir. Alan eklemek veya çıkarmak kullanıcı kararıdır.
+- `effective.ts`: Saf kurallar. Formdaki faturanın geçerli bilgisi (düzeltme varsa düzeltme), eksik zorunlu alanlar, mükerrer anahtarı ve düzeltme birleştirme/geçmiş notları.
 - `checks.ts`: Token harcamayan kontroller (zorunlu alanlar, miktar × birim fiyat, toplamlar). `public/js/invoice.js` içindeki `totalChecks` ile uyumlu tutulur.
 - `file-type.ts`: Dosya türünü ad veya Content-Type'a göre değil, içeriğine (magic bytes) bakarak belirler.
 - `storage.ts`: Okuma kayıtları, orijinal dosyalar ve kimin yüklediği (`fatura_kayitlari`, `fatura_dosyalari`, `fatura_yuklemeleri`). Erişim kontrolü (`canRead`) buradadır.
@@ -54,6 +64,7 @@ Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının C
 - `app.ts`: Express 5 rotaları, Host/Origin koruması, oturum zorunluluğu ve hata eşlemesi.
 - `auth.ts`: Oturumu çerezden (panel) ya da `Authorization: Bearer` başlığından (mobil, API) çözer; `requireSession`, `requireRole`.
 - `account-routes.ts`, `admin-routes.ts`, `expense-routes.ts`: Oturum/profil, yönetim (kullanıcılar, onay akışı, kategoriler, denetim) ve masraf/onay uçları.
+- `notification-routes.ts`: Bildirim uçları ve yöneticinin mail uçları (test maili, giden kutusu, yeniden deneme).
 - `validation.ts`: Zod ile istek doğrulama (Türkçe hata mesajları, `alanlar`).
 - `uploads.ts`: Tekli ve çoklu yüklemeyi çözer (`multipart/form-data` veya ham gövde) ve gönderenin panel mi API mi olduğunu belirler (`X-Panel-Etiket`).
 - `live.ts`: Canlı izleme akışı (`GET /api/izleme/akis`, Server-Sent Events).

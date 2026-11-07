@@ -5,7 +5,7 @@ import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useOzet } from '@/api/queries';
+import { useBen, useOzet } from '@/api/queries';
 import type { MasrafDurum, Ozet } from '@/api/types';
 import { useAuth } from '@/auth/AuthProvider';
 import { ExpenseRow } from '@/components/expense/ExpenseRow';
@@ -41,6 +41,8 @@ export default function HomeScreen() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const ozet = useOzet();
+  const ben = useBen();
+  const unread = ben.data?.okunmamisBildirim ?? 0;
   const name = user?.adSoyad ?? '';
 
   return (
@@ -60,6 +62,24 @@ export default function HomeScreen() {
               {firstName(name)}
             </Text>
           </View>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={unread > 0 ? `Bildirimler, ${unread} okunmamış` : 'Bildirimler'}
+            onPress={() => {
+              haptics.tap();
+              router.push('/bildirimler');
+            }}
+            style={[styles.avatar, { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth }]}
+          >
+            <Ionicons name={unread > 0 ? 'notifications' : 'notifications-outline'} size={22} color={colors.primary} />
+            {unread > 0 ? (
+              <View style={[styles.badge, { backgroundColor: colors.danger }]}>
+                <Text variant="caption" color={colors.onAccent} style={styles.badgeText}>
+                  {unread > 99 ? '99+' : unread}
+                </Text>
+              </View>
+            ) : null}
+          </PressableScale>
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Profil"
@@ -276,6 +296,8 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.xl },
+  badge: { position: 'absolute', top: -4, right: -4, minWidth: 20, height: 20, borderRadius: 10, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center' },
+  badgeText: { fontWeight: '700', fontSize: 11, lineHeight: 14 },
   avatar: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   sections: { gap: spacing.xxl },
   hero: { borderRadius: radius.xxl, padding: spacing.xl, gap: spacing.md },

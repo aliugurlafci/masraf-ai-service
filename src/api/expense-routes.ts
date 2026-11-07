@@ -2,6 +2,7 @@ import express, { type Router } from 'express';
 import { z } from 'zod';
 import { toCsv } from '../expenses/export.ts';
 import type { ExpenseService } from '../expenses/forms.ts';
+import type { Invoice } from '../invoice/schema.ts';
 import { FORM_STATES, MAX_INVOICES, type FormDurum } from '../expenses/rules.ts';
 import { userOf } from './auth.ts';
 import { amount, csvList, currency, id, isoDate, optionalText, parse, rate, recordId, routeId, text } from './validation.ts';
@@ -20,6 +21,88 @@ const equivalents = z
   .record(recordId, amount('Karşılık'), { error: 'Karşılıklar fatura kimliğinden tutara bir eşleme olmalıdır.' })
   .refine((m) => Object.keys(m).length <= MAX_INVOICES, `En fazla ${MAX_INVOICES} karşılık girilebilir.`);
 
+// A correction is the whole invoice as src/invoice/schema.ts defines it; blank text becomes null.
+const blankToNull = (v: unknown): unknown => (typeof v === 'string' && v.trim() === '' ? null : v);
+const invoiceText = (label: string) =>
+  z.preprocess(
+    blankToNull,
+    z
+      .string({ error: `${label} metin ya da null olmalıdır.` })
+      .trim()
+      .max(500, `${label} en fazla 500 karakter olabilir.`)
+      .nullable(),
+  );
+const invoiceNumber = (label: string) =>
+  z.number({ error: `${label} sayı ya da null olmalıdır.` }).finite(`${label} geçerli bir sayı olmalıdır.`).nullable();
+const realDate = (s: string): boolean => {
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+};
+const invoiceDate = z.preprocess(
+  blankToNull,
+  z
+    .string({ error: 'Fatura tarihi YYYY-AA-GG biçiminde ya da null olmalıdır.' })
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Fatura tarihi YYYY-AA-GG biçiminde olmalıdır.')
+    .refine(realDate, 'Fatura tarihi geçerli bir tarih olmalıdır.')
+    .nullable(),
+);
+const invoiceCurrency = z.preprocess(
+  blankToNull,
+  z
+    .string({ error: 'Para birimi üç harfli ISO kodu ya da null olmalıdır.' })
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z]{3}$/, 'Para birimi üç harfli ISO kodu olmalıdır (TRY, USD, EUR).')
+    .nullable(),
+);
+const invoiceCorrection: z.ZodType<Invoice> = z
+  .object(
+    {
+      fatura: z
+        .object(
+          {
+            faturaNo: invoiceText('Fatura no'),
+            faturaTarihi: invoiceDate,
+            saticiUnvan: invoiceText('Satıcı'),
+            saticiVergiNo: invoiceText('Satıcı vergi no'),
+            aliciUnvan: invoiceText('Alıcı'),
+            aliciVergiNo: invoiceText('Alıcı vergi no'),
+            paraBirimi: invoiceCurrency,
+            araToplam: invoiceNumber('Ara toplam'),
+            kdvToplam: invoiceNumber('KDV toplamı'),
+            genelToplam: invoiceNumber('Genel toplam'),
+          },
+          { error: 'Fatura bilgileri eksik ya da geçersiz.' },
+        )
+        .strict(),
+      kalemler: z
+        .array(
+          z
+            .object(
+              {
+                aciklama: invoiceText('Kalem açıklaması'),
+                miktar: invoiceNumber('Miktar'),
+                birim: invoiceText('Birim'),
+                birimFiyat: invoiceNumber('Birim fiyat'),
+                kdvOrani: invoiceNumber('KDV oranı'),
+                tutar: invoiceNumber('Kalem tutarı'),
+              },
+              { error: 'Kalem geçersiz.' },
+            )
+            .strict(),
+          { error: 'Kalemler bir liste olmalıdır.' },
+        )
+        .max(200, 'Bir faturada en fazla 200 kalem olabilir.'),
+    },
+    { error: 'Düzeltme { fatura, kalemler } biçiminde olmalıdır.' },
+  )
+  .strict();
+
+/** Corrections by invoice id; null removes the correction. */
+const corrections = z
+  .record(recordId, invoiceCorrection.nullable(), { error: 'Düzeltmeler fatura kimliğinden faturaya bir eşleme olmalıdır.' })
+  .refine((m) => Object.keys(m).length <= MAX_INVOICES, `En fazla ${MAX_INVOICES} düzeltme gönderilebilir.`);
+
 const formFields = {
   baslik: text('Başlık', 120),
   kategoriId: id('Kategori'),
@@ -31,6 +114,7 @@ const formFields = {
   aciklama: optionalText('Açıklama', 1000),
   faturaIdler: invoiceIds.optional(),
   yerelKarsiliklar: equivalents.optional(),
+  faturaDuzeltmeleri: corrections.optional(),
 };
 
 const NewFormBody = z.object({ ...formFields, gonder: z.boolean().optional() }).strict();
@@ -46,6 +130,7 @@ const FormPatchBody = z
     aciklama: formFields.aciklama,
     faturaIdler: formFields.faturaIdler,
     yerelKarsiliklar: formFields.yerelKarsiliklar,
+    faturaDuzeltmeleri: formFields.faturaDuzeltmeleri,
   })
   .strict();
 
@@ -80,6 +165,7 @@ const PreviewBody = z.object({
   kur: rate.nullable().optional(),
   faturaIdler: invoiceIds.optional(),
   yerelKarsiliklar: equivalents.optional(),
+  faturaDuzeltmeleri: corrections.optional(),
   akisId: id('Onay akışı').optional(),
 });
 const InboxQuery = z.object({ durum: z.enum(['bekleyen', 'karar'], { error: 'Durum bekleyen ya da karar olmalıdır.' }).default('bekleyen') });
@@ -124,6 +210,16 @@ export function expenseRouter(expenses: ExpenseService): Router {
   r.get('/masraflar/:id', async (req, res, next) => {
     try {
       res.json(await expenses.detail(routeId(req.params.id), userOf(res)));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  r.get('/masraflar/:id/pdf', async (req, res, next) => {
+    try {
+      const formId = routeId(req.params.id);
+      const pdf = await expenses.pdf(formId, userOf(res));
+      res.type('application/pdf').set('Content-Disposition', `attachment; filename="masraf-${formId}.pdf"`).send(pdf);
     } catch (err) {
       next(err);
     }

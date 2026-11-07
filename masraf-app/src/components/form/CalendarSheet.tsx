@@ -15,16 +15,18 @@ export interface CalendarSheetProps {
   readonly onChange: (iso: string) => void;
   readonly onClose: () => void;
   readonly title: string;
+  /** Allow days after today (an invoice date may be printed ahead; an expense date may not). */
+  readonly allowFuture?: boolean;
 }
 
-/** Month grid date picker (Monday first). Future days are disabled: an expense cannot be in the future. */
-export function CalendarSheet({ visible, value, onChange, onClose, title }: CalendarSheetProps) {
+/** Month grid date picker (Monday first). Future days are disabled unless `allowFuture` is set. */
+export function CalendarSheet({ visible, value, onChange, onClose, title, allowFuture = false }: CalendarSheetProps) {
   const { colors } = useTheme();
   const selected = parseIsoDate(value) ?? new Date();
   const [cursor, setCursor] = useState({ year: selected.getFullYear(), month: selected.getMonth() });
   const today = todayIso();
   const now = new Date();
-  const atCurrentMonth = cursor.year === now.getFullYear() && cursor.month === now.getMonth();
+  const atCurrentMonth = !allowFuture && cursor.year === now.getFullYear() && cursor.month === now.getMonth();
 
   const first = new Date(cursor.year, cursor.month, 1);
   const lead = (first.getDay() + 6) % 7; // Monday = 0
@@ -76,7 +78,7 @@ export function CalendarSheet({ visible, value, onChange, onClose, title }: Cale
             const iso = toIsoDate(new Date(cursor.year, cursor.month, day));
             const isSelected = iso === value;
             const isToday = iso === today;
-            const future = iso > today;
+            const future = !allowFuture && iso > today;
             return (
               <Pressable
                 key={di}

@@ -6,6 +6,7 @@ import * as api from '../api.js';
 import { el, icon, ICONS } from '../dom.js';
 import { fmtCurrency, fmtDateLong, fmtDateTime, fmtRateInput, fmtRelative } from '../format.js';
 import { invoicesTotal } from '../equivalents.js';
+import { compareView, HEADER_FIELDS, labelOf, missingOf, showValue } from '../invoice-edit.js';
 import { approveDialog, approverChain, chainLead, invoicePreview, rejectDialog } from '../expense-ui.js';
 import { bandText, categoryIcon, HISTORY_LABEL, HISTORY_TONE, humanize, STEP_STATUS, statusBadge } from '../labels.js';
 import * as session from '../session.js';
@@ -36,6 +37,14 @@ function kv(label, value, { wide = false } = {}) {
   if (value === null || value === undefined || value === '') return null;
   return el('div', { className: wide ? 'kv-wide' : null }, el('dt', { text: label }), typeof value === 'string' ? el('dd', { text: value }) : el('dd', {}, value));
 }
+
+/** Invoices with empty required fields: [{ n, f, gone }] (n is the 1-based place on the form). */
+const incompleteOf = (d) =>
+  (Array.isArray(d?.faturalar) ? d.faturalar : [])
+    .map((f, i) => ({ n: i + 1, f, gone: Array.isArray(f.eksikAlanlar) ? f.eksikAlanlar : [] }))
+    .filter((x) => x.gone.length > 0);
+
+const fixHref = (d, faturaId) => `#/masraflar/${d.id}/duzenle?fatura=${encodeURIComponent(faturaId)}`;
 
 const invoicesOf = (d) => (Array.isArray(d?.faturalar) ? d.faturalar : []);
 
@@ -257,24 +266,50 @@ export const expenseDetailView = {
       if (result && result !== true) after(result, 'Onay devredildi.');
     }
 
+    async function downloadPdf(d, button) {
+      button.disabled = true;
+      const r = await api.getExpensePdf(d.id);
+      button.disabled = false;
+      if (!r.ok) {
+        if (!r.unauthorized && !r.aborted) toast(r.error.mesaj, 'err');
+        return;
+      }
+      const url = URL.createObjectURL(r.blob);
+      const a = el('a', { href: url, download: r.filename ?? `masraf-${d.id}-onay-belgesi.pdf`, hidden: true });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    }
+
     function actionBar(d) {
       const iz = d.izinler ?? {};
+      const incomplete = iz.gonder ? incompleteOf(d) : [];
       const buttons = [
         iz.onayla ? btn('Onayla', { icon: ICONS.check, kind: 'ok', onClick: () => doDecision(d, 'onayla') }) : null,
         iz.reddet ? btn('Reddet', { icon: ICONS.close, kind: 'danger', onClick: () => doDecision(d, 'reddet') }) : null,
-        iz.gonder ? btn('Onaya gönder', { icon: ICONS.send, kind: 'primary', onClick: () => doSend(d) }) : null,
+        iz.gonder && incomplete.length === 0 ? btn('Onaya gönder', { icon: ICONS.send, kind: 'primary', onClick: () => doSend(d) }) : null,
         iz.odendi ? btn('Ödendi işaretle', { icon: ICONS.cash, kind: 'primary', onClick: () => doSimple(d, 'odendi') }) : null,
+        iz.gonder && incomplete.length > 0 ? btn('Eksikleri tamamla', { icon: ICONS.edit, kind: 'primary', href: fixHref(d, incomplete[0].f.id) }) : null,
         iz.duzenle ? btn('Düzenle', { icon: ICONS.edit, href: `#/masraflar/${d.id}/duzenle` }) : null,
         iz.geriCek ? btn('Geri çek', { icon: ICONS.undo, onClick: () => doSimple(d, 'geri-cek') }) : null,
         iz.devret ? btn('Devret', { icon: ICONS.transfer, onClick: () => doTransfer(d) }) : null,
         iz.iptal ? btn('İptal et', { icon: ICONS.ban, kind: 'danger-ghost', onClick: () => doSimple(d, 'iptal') }) : null,
+        d.durum === 'onaylandi' || d.durum === 'odendi' ? btn('Onay belgesi (PDF)', { icon: ICONS.download, onClick: (e) => downloadPdf(d, e.currentTarget) }) : null,
       ].filter(Boolean);
       if (buttons.length === 0) return null;
       let lead = null;
+      let warnLead = false;
       const missing = iz.gonder ? missingEquivalents(d).length : 0;
       if (iz.onayla || iz.reddet) lead = 'Sıra sizde: bu masrafı inceleyip onaylayın ya da reddedin.';
       else if (iz.odendi) lead = 'Masraf onaylandı; ödeme yapıldığında işaretleyin.';
-      else if (missing > 0) lead = d.durum === 'reddedildi' ? `Masraf reddedildi. ${missingLead(missing)}` : missingLead(missing);
+      else if (incomplete.length > 0) {
+        // Missing invoice fields come first (the server checks them first); a missing equivalent is said too,
+        // so the user sees everything that stands between the form and sending it.
+        const fields = `Onaya göndermeden önce eksik fatura bilgilerini tamamlayın: ${incomplete.map((x) => `${x.n}. fatura: ${x.gone.map((k) => labelOf(k).toLocaleLowerCase('tr-TR')).join(', ')}`).join('; ')}.`;
+        lead = [d.durum === 'reddedildi' ? 'Masraf reddedildi.' : null, fields, missing > 0 ? missingLead(missing) : null].filter(Boolean).join(' ');
+        warnLead = true;
+      } else if (missing > 0) lead = d.durum === 'reddedildi' ? `Masraf reddedildi. ${missingLead(missing)}` : missingLead(missing);
       else if (iz.gonder && d.durum === 'reddedildi') lead = 'Masraf reddedildi. Düzenleyip yeniden gönderebilirsiniz.';
       else if (iz.gonder) lead = 'Masraf taslak. Hazır olduğunda onaya gönderin.';
       else if (iz.geriCek) {
@@ -283,7 +318,7 @@ export const expenseDetailView = {
           ? `${waiting.onayci.adSoyad} kararını bekliyor. Geri çekerseniz masraf taslağa döner.`
           : 'Masraf onayda. Geri çekerseniz taslağa döner.';
       } else if (iz.devret) lead = 'Onaycı karar veremiyorsa onayı başka birine devredebilirsiniz.';
-      return el('div', { className: `action-bar${iz.onayla ? ' is-turn' : ''}`, role: 'group', 'aria-label': 'İşlemler' }, lead ? el('p', { className: 'action-lead', text: lead }) : null, el('div', { className: 'action-buttons' }, ...buttons));
+      return el('div', { className: `action-bar${iz.onayla ? ' is-turn' : ''}`, role: 'group', 'aria-label': 'İşlemler' }, lead ? el('p', { className: warnLead ? 'action-lead warn' : 'action-lead', text: lead }) : null, el('div', { className: 'action-buttons' }, ...buttons));
     }
 
     // ---------- Sections ----------
@@ -316,16 +351,76 @@ export const expenseDetailView = {
       );
     }
 
+    /** Every header field of the valid data (a correction wins over the read value), then the lines. */
     function invoiceFacts(f, compact) {
+      const gone = Array.isArray(f.eksikAlanlar) ? f.eksikAlanlar : missingOf(f);
+      const rows = HEADER_FIELDS.map((def) => {
+        const missing = gone.includes(def.key);
+        const text = def.key === 'genelToplam' || def.key === 'araToplam' || def.key === 'kdvToplam' ? fmtCurrency(f[def.key], f.paraBirimi) : showValue(def.key, f[def.key], f.paraBirimi);
+        if (!missing && !text) return null;
+        const dd = missing
+          ? detail?.izinler?.duzenle
+            ? el('dd', {}, el('a', { className: 'missing-link', href: fixHref(detail, f.id), text: 'Eksik', 'aria-label': `${def.label} eksik; düzenleyip doldurun` }))
+            : el('dd', { text: 'Eksik' })
+          : el('dd', { text });
+        return el('div', { className: missing ? 'is-missing' : null }, el('dt', { text: def.label }), dd);
+      });
+      return el('dl', { className: compact ? 'kv compact' : 'kv' }, ...rows.filter(Boolean));
+    }
+
+    const LINE_HEADS = [
+      ['aciklama', 'Açıklama', false],
+      ['miktar', 'Miktar', true],
+      ['birim', 'Birim', false],
+      ['birimFiyat', 'Birim fiyat', true],
+      ['kdvOrani', 'KDV %', true],
+      ['tutar', 'Tutar', true],
+    ];
+
+    function linesTable(f) {
+      const lines = Array.isArray(f.kalemler) ? f.kalemler : [];
+      if (lines.length === 0) return null;
       return el(
-        'dl',
-        { className: compact ? 'kv compact' : 'kv' },
-        kv('Fatura no', f.faturaNo ?? 'Okunamadı'),
-        kv('Fatura tarihi', fmtDateLong(f.faturaTarihi)),
-        kv('Satıcı', f.saticiUnvan),
-        kv('Genel toplam', fmtCurrency(f.genelToplam, f.paraBirimi)),
+        'details',
+        { className: 'inv-lines' },
+        el('summary', {}, icon(ICONS.chevronDown), el('span', { text: `Kalemler (${lines.length})` })),
+        el(
+          'div',
+          { className: 'table-scroll' },
+          el(
+            'table',
+            { className: 'data-table lines-table' },
+            el('caption', { className: 'visually-hidden', text: 'Fatura kalemleri' }),
+            el('thead', {}, el('tr', {}, ...LINE_HEADS.map(([, label, num]) => el('th', { scope: 'col', className: num ? 'num' : null, text: label })))),
+            el(
+              'tbody',
+              {},
+              ...lines.map((l) =>
+                el(
+                  'tr',
+                  {},
+                  ...LINE_HEADS.map(([key, label, num]) => el('td', { className: num ? 'num' : null, 'data-label': label, text: showValue(key, l[key], f.paraBirimi) ?? '—' })),
+                ),
+              ),
+            ),
+          ),
+        ),
       );
     }
+
+    /** "Düzeltildi" badge and the differing fields, read value next to valid value. */
+    function correctionBlock(f) {
+      if (!f.duzeltildi) return null;
+      const table = f.okunan ? compareView(f.okunan, { fatura: f, kalemler: f.kalemler }) : null;
+      return el(
+        'details',
+        { className: 'inv-compare', open: true },
+        el('summary', {}, icon(ICONS.chevronDown), el('span', { text: 'Okunan ve düzeltilmiş değerler' })),
+        table ?? el('p', { className: 'muted small', text: 'Okunan değerlerden farklı alan yok.' }),
+      );
+    }
+
+    const correctedTag = (f) => (f.duzeltildi ? el('span', { className: 'tag accent', text: 'Düzeltildi' }) : null);
 
     const filePreview = (f) => invoicePreview({ url: api.invoiceFileUrl(f.id), mime: f.mime, name: f.dosyaAdi });
 
@@ -373,9 +468,11 @@ export const expenseDetailView = {
         return el(
           'section',
           { className: 'card', 'aria-labelledby': 'inv-title' },
-          el('div', { className: 'card-head' }, title, el('a', { className: 'card-link', href: `#/okuma/${encodeURIComponent(f.id)}`, text: 'Okunan faturayı aç' })),
+          el('div', { className: 'card-head' }, el('div', { className: 'head-tags' }, title, correctedTag(f)), el('a', { className: 'card-link', href: `#/okuma/${encodeURIComponent(f.id)}`, text: 'Okunan faturayı aç' })),
           invoiceFacts(f, false),
           invoiceNote(f, d, base),
+          linesTable(f),
+          correctionBlock(f),
           f.dosyaVar ? filePreview(f) : el('p', { className: 'muted', text: 'Bu faturanın orijinal dosyası saklanmamış.' }),
         );
       }
@@ -389,10 +486,13 @@ export const expenseDetailView = {
             { className: 'inv-item-head' },
             el('span', { className: 'inv-n', 'aria-hidden': 'true' }),
             el('p', { className: 'inv-item-title', text: name }),
+            correctedTag(f),
             el('a', { className: 'card-link', href: `#/okuma/${encodeURIComponent(f.id)}`, text: 'Okunan faturayı aç', 'aria-label': `Okunan faturayı aç: ${name}` }),
           ),
           invoiceFacts(f, true),
           invoiceNote(f, d, base),
+          linesTable(f),
+          correctionBlock(f),
           f.dosyaVar ? lazyPreview(f, name) : el('p', { className: 'muted small', text: 'Bu faturanın orijinal dosyası saklanmamış.' }),
         );
       });
@@ -483,6 +583,7 @@ export const expenseDetailView = {
       detail = d;
       const hadFocus = page.contains(document.activeElement) && document.activeElement.tagName === 'H1';
       setPageTitle(d.baslik);
+      window.dispatchEvent(new CustomEvent('nav-highlight', { detail: backFor(d).href.slice(1) }));
       const foreign = d.paraBirimi && d.paraBirimi !== base && d.yerelTutar !== null && d.yerelTutar !== undefined;
 
       let rejection = null;

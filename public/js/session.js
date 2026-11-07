@@ -5,21 +5,23 @@ import * as api from './api.js';
 
 let user = null;
 let pending = 0;
+let unread = 0;
 let baseCurrency = null;
 let currencyLoad = null;
 const listeners = new Set();
 
 function emit() {
-  for (const fn of listeners) fn({ user, pending });
+  for (const fn of listeners) fn({ user, pending, unread });
 }
 
 export const currentUser = () => user;
 export const pendingCount = () => pending;
+export const unreadCount = () => unread;
 export const hasRole = (...roles) => Boolean(user && roles.includes(user.rol));
 export const isManager = () => hasRole('yonetici');
 export const isFinance = () => hasRole('muhasebe', 'yonetici');
 
-/** fn({ user, pending }) after every change; returns an unsubscribe function. */
+/** fn({ user, pending, unread }) after every change; returns an unsubscribe function. */
 export function onSessionChange(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -37,9 +39,17 @@ export function setPending(n) {
   emit();
 }
 
+/** The unread-notification count (GET /api/ben okunmamisBildirim, or a notification list's `okunmamis`). */
+export function setUnread(n) {
+  if (typeof n !== 'number' || n === unread) return;
+  unread = n;
+  emit();
+}
+
 export function clearSession() {
   user = null;
   pending = 0;
+  unread = 0;
   baseCurrency = null;
   currencyLoad = null;
   emit();
@@ -50,6 +60,7 @@ export async function refreshMe(opts) {
   const r = await api.me(opts);
   if (r.ok && r.body?.kullanici) {
     if (typeof r.body.paraBirimi === 'string') setBaseCurrency(r.body.paraBirimi);
+    if (typeof r.body.okunmamisBildirim === 'number') unread = r.body.okunmamisBildirim;
     setSession(r.body.kullanici, typeof r.body.bekleyenOnay === 'number' ? r.body.bekleyenOnay : pending);
   }
   return r;

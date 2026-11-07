@@ -284,13 +284,16 @@ describe('sessions and account endpoints', () => {
           departman: 'Finans',
           aktif: true,
           sifreDegismeli: false,
+          mailBildirim: true,
           onayAkisiId: null,
           onayAkisi: { id: genel, ad: 'Genel', varsayilan: true },
           onaycilik: [{ akis: { id: genel, ad: 'Genel', strateji: 'zincir' }, sira: 1, limit: null, altLimit: 0, ustLimit: null }],
         }),
         bekleyenOnay: 2,
+        // One onay_bekliyor notification per form sent to the approver.
+        okunmamisBildirim: 2,
       });
-      expect((await call('GET', '/api/ben', { token: senderToken })).body.bekleyenOnay).toBe(0);
+      expect((await call('GET', '/api/ben', { token: senderToken })).body).toMatchObject({ bekleyenOnay: 0, okunmamisBildirim: 0 });
     });
 
     it('shows the company figures in GET /api/ozet only to accounting and administrators', async () => {

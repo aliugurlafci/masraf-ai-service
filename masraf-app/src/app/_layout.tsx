@@ -97,6 +97,7 @@ function RootNavigator() {
               name="masraf/yeni"
               options={{ headerShown: true, title: 'Yeni masraf', animation: reduced ? 'none' : 'slide_from_bottom' }}
             />
+            <Stack.Screen name="bildirimler" options={{ headerShown: true, title: 'Bildirimler' }} />
             <Stack.Screen name="masraf/[id]/index" options={{ headerShown: true, title: 'Masraf' }} />
             <Stack.Screen name="masraf/[id]/duzenle" options={{ headerShown: true, title: 'Masrafı düzenle' }} />
             <Stack.Screen

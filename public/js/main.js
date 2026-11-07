@@ -12,12 +12,14 @@ import { approvalsView } from './views/approvals.js';
 import { auditView } from './views/audit.js';
 import { categoriesView } from './views/categories.js';
 import { dashboardView } from './views/dashboard.js';
+import { emailView } from './views/email.js';
 import { expenseDetailView } from './views/expense-detail.js';
 import { expenseFormView } from './views/expense-form.js';
 import { allExpensesView, myExpensesView } from './views/expenses.js';
 import { flowView } from './views/flow.js';
 import { renderLogin, renderPasswordChange } from './views/login.js';
 import { forbiddenView, notFoundView } from './views/misc.js';
+import { notificationsView } from './views/notifications.js';
 import { okumaView, onReadingCount, resetReading, startLive } from './views/okuma.js';
 import { profileView } from './views/profile.js';
 import { usersView } from './views/users.js';
@@ -42,6 +44,8 @@ const ROUTES = [
   { name: 'onay-akisi', path: '/onay-akisi', title: 'Onay akışları', nav: '/onay-akisi', roles: MANAGER, view: flowView },
   { name: 'kategoriler', path: '/kategoriler', title: 'Kategoriler', nav: '/kategoriler', roles: MANAGER, view: categoriesView },
   { name: 'denetim', path: '/denetim', title: 'Denetim kaydı', nav: '/denetim', roles: MANAGER, view: auditView },
+  { name: 'bildirimler', path: '/bildirimler', title: 'Bildirimler', nav: null, view: notificationsView },
+  { name: 'eposta', path: '/eposta', title: 'E-posta', nav: '/eposta', roles: MANAGER, view: emailView },
   { name: 'profil', path: '/profil', title: 'Profil', nav: null, view: profileView },
 ];
 const NOT_FOUND = { name: 'bulunamadi', title: 'Sayfa bulunamadı', nav: null, view: notFoundView };
@@ -65,6 +69,7 @@ const NAV = [
       { path: '/kullanicilar', label: 'Kullanıcılar', icon: ICONS.users },
       { path: '/onay-akisi', label: 'Onay akışları', icon: ICONS.flow },
       { path: '/kategoriler', label: 'Kategoriler', icon: ICONS.tag },
+      { path: '/eposta', label: 'E-posta', icon: ICONS.mail },
       { path: '/denetim', label: 'Denetim kaydı', icon: ICONS.log },
     ],
   },
@@ -148,6 +153,9 @@ function renderNav() {
   updateBadge(session.pendingCount(), false);
   highlightNav(currentRoute()?.def.nav ?? null);
 }
+
+// The expense detail asks for the menu entry its back link points to (Masraflarım, Tüm masraflar, Onaylarım).
+window.addEventListener('nav-highlight', (e) => highlightNav(e.detail));
 
 function highlightNav(path) {
   for (const a of nav.querySelectorAll('.nav-item')) {
@@ -263,6 +271,7 @@ const routerConfig = {
   forbidden: FORBIDDEN,
   canAccess: (roles) => session.hasRole(...roles),
   onRoute,
+  onLeave: closeAllDialogs,
   // Addresses of the old single-screen reader: #<record id> and #a-<activity id>.
   legacy: (raw) => (RECORD_OR_ACTIVITY.test(raw) ? `#/okuma/${raw}` : '#/'),
   onError: () => toast('Bu sayfa açılırken bir hata oluştu.', 'err'),
@@ -316,6 +325,7 @@ function enterApp() {
   updateUserButton(user);
   renderUserMenu();
   renderNav();
+  updateBell(session.unreadCount(), false);
   startLive();
   session.startPolling();
   startRouter(routerConfig);
@@ -356,9 +366,22 @@ async function logout() {
   showLogin({ kind: 'ok', text: 'Çıkış yaptınız.' });
 }
 
-session.onSessionChange(({ user, pending }) => {
+let lastUnread = 0;
+function updateBell(n, animate = true) {
+  const bell = $('bell');
+  const badge = $('bell-badge');
+  if (!bell || !badge) return;
+  badge.hidden = n <= 0;
+  badge.textContent = n > 99 ? '99+' : fmtCount(n);
+  bell.setAttribute('aria-label', n > 0 ? `Bildirimler, ${fmtCount(n)} okunmamış` : 'Bildirimler');
+  if (animate && n > lastUnread) replay(badge, 'bump');
+  lastUnread = n;
+}
+
+session.onSessionChange(({ user, pending, unread }) => {
   if (!user || phase !== 'app') return;
   updateUserButton(user);
+  updateBell(unread);
   if (user.rol !== navRole) {
     renderNav();
     const route = currentRoute();

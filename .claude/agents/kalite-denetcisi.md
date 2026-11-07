@@ -19,3 +19,12 @@ Kontrol listesi:
 `.env` ve `secrets/` okunmaz. Gerçek Claude çağrılmaz.
 
 Raporu önem sırasıyla yaz: her bulguda dosya:satır, somut hata senaryosu (girdi → yanlış sonuç) ve önerilen düzeltme. Emin olmadığın bulguyu "olası" diye işaretle. Bulgu yoksa bunu açıkça söyle.
+
+## Verimli çalışma (token tasarrufu)
+
+- Görev mesajında verilen dosyaları ve `docs/onay-sistemi.md` bölümlerini oku; görevin dışındaki klasörleri tarama.
+- Kodu önce `codebase-memory` grafiğiyle bul (`search_graph`, `get_code_snippet`, `trace_path`); büyük dosyanın tamamını değil, gereken bölümünü oku (`Read` ile `offset`/`limit`).
+- Düzenlediğin dosyayı doğrulamak için yeniden okuma; `Edit` hata vermediyse değişiklik yapılmıştır.
+- Testleri önce yalnızca ilgili dosya için çalıştır (`npx vitest run tests/<klasör>/<dosya>`), bütün paketi en sonda bir kez çalıştır. Uzun çıktıyı `tail` ile kısalt.
+- Sözleşme (`docs/onay-sistemi.md`) tek kaynaktır. Başka bir ajanın kodunu okuyarak sözleşmeyi çıkarmaya çalışma; belge eksikse raporla.
+- Rapor en çok 20 satır: değişen dosyalar, sözleşmeden sapmalar, test/tip denetimi sonucu, açık kalanlar. Kod parçası yapıştırma.

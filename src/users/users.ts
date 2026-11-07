@@ -28,6 +28,8 @@ export interface Kullanici {
   readonly sifreDegismeli: boolean;
   readonly olusturma: string;
   readonly sonGiris: string | null;
+  /** Notifications also come as mail (the user's own choice; in-app notifications cannot be turned off). */
+  readonly mailBildirim: boolean;
   /** The flow the user is assigned to; null = follows the default flow. */
   readonly onayAkisiId: number | null;
   /** The flow the user's expenses go to now. Always set while a default flow exists (the migration creates one). */
@@ -64,6 +66,7 @@ interface UserRow {
   sifre_degismeli: boolean;
   olusturma: Date;
   son_giris: Date | null;
+  mail_bildirim: boolean;
   onay_akisi_id: number | null;
   akis_id: number | null;
   akis_ad: string | null;
@@ -82,7 +85,7 @@ interface PlaceRow {
 export const normalizeEmail = (eposta: string): string => eposta.trim().toLowerCase();
 
 const USER_COLUMNS = `k.id, k.eposta, k.ad_soyad, k.rol, k.departman, k.aktif, k.sifre_degismeli, k.olusturma, k.son_giris,
-  k.onay_akisi_id, ea.id AS akis_id, ea.ad AS akis_ad, ea.varsayilan AS akis_varsayilan`;
+  k.mail_bildirim, k.onay_akisi_id, ea.id AS akis_id, ea.ad AS akis_ad, ea.varsayilan AS akis_varsayilan`;
 // The effective flow: the assigned one, otherwise the default.
 const USER_FROM = `FROM dbo.kullanicilar k
   OUTER APPLY (SELECT TOP (1) a.id, a.ad, a.varsayilan FROM dbo.onay_akislari a
@@ -100,6 +103,7 @@ function toUser(r: UserRow, places: readonly OnayciYeri[]): Kullanici {
     sifreDegismeli: r.sifre_degismeli,
     olusturma: iso(r.olusturma) ?? '',
     sonGiris: iso(r.son_giris),
+    mailBildirim: r.mail_bildirim,
     onayAkisiId: r.onay_akisi_id,
     onayAkisi: r.akis_id === null ? null : { id: r.akis_id, ad: r.akis_ad ?? '', varsayilan: r.akis_varsayilan === true },
     onaycilik: places,
@@ -416,3 +420,11 @@ export async function ensureFirstAdmin(db: Db, admin: FirstAdmin | null): Promis
 }
 
 export const isRole = (v: string): v is Rol => (ROLES as readonly string[]).includes(v);
+
+/** The user's own mail preference (PUT /api/ben/tercihler). */
+export async function setMailPreference(db: Db, userId: number, mailBildirim: boolean): Promise<Kullanici> {
+  await execute(db, 'UPDATE dbo.kullanicilar SET mail_bildirim = @m, guncelleme = SYSUTCDATETIME() WHERE id = @id', { id: p.int(userId), m: p.bit(mailBildirim) });
+  const user = await getUser(db, userId);
+  if (user === null) throw notFound('Kullanıcı bulunamadı.');
+  return user;
+}

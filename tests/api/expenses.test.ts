@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { createApp } from '../../src/api/app.ts';
 import type { ExtractInvoice } from '../../src/claude/extractor.ts';
-import { type Db } from '../../src/db/sql.ts';
+import { execute, p, type Db } from '../../src/db/sql.ts';
 import type { Kullanici } from '../../src/users/users.ts';
 import { PDF_BYTES, PNG_BYTES, sampleExtraction, sampleInvoice, sampleOlcum } from '../helpers.ts';
 import { assignFlow, chainOf, closeTestDb, defaultFlowId, makeFlow, makeInvoice, makeUser, resetDb, setFlow, testDb, tokenFor } from '../db.ts';
@@ -109,8 +109,9 @@ describe('expense, approval and administration API', () => {
 
   /** Uploads a distinct file (the service never reads the same bytes twice) and returns the invoice id. */
   const upload = async (who: Kullanici, kind: 'pdf' | 'png' = 'pdf', fatura: Parameters<typeof sampleInvoice>[0] = {}): Promise<{ id: string; bytes: Buffer }> => {
-    extract.mockResolvedValueOnce({ sonuc: sampleInvoice(fatura), olcum: sampleOlcum() });
     files++;
+    // A seller tax number of its own unless given: otherwise every upload would be the same invoice.
+    extract.mockResolvedValueOnce({ sonuc: sampleInvoice({ saticiVergiNo: String(2_000_000_000 + files), ...fatura }), olcum: sampleOlcum() });
     const bytes = Buffer.concat([kind === 'pdf' ? PDF_BYTES : PNG_BYTES, Buffer.from(`\n% dosya ${files} ${Date.now()}\n`)]);
     const form = new FormData();
     form.append('file', new Blob([new Uint8Array(bytes)]), kind === 'pdf' ? 'Fiş Ekim.pdf' : 'fis.png');
@@ -887,5 +888,234 @@ describe('expense, approval and administration API', () => {
       // The hotel invoice left the form: free for another one.
       expect((await create(owner, { faturaIdler: [hotel.id] }, false)).faturaIdler).toEqual([hotel.id]);
     });
+  });
+
+  describe('invoice corrections and send checks', () => {
+    it('returns the effective data of each invoice with the read values beside a correction', async () => {
+      const inv = await upload(owner, 'pdf', { faturaNo: 'OKUNAN-1', genelToplam: 1800 });
+      const read = (await call(owner, 'GET', `/api/invoices/${inv.id}`)).body;
+      const correction = { fatura: { ...read.fatura, faturaNo: 'DOGRU-1', aliciUnvan: '  ' }, kalemler: read.kalemler };
+      const f = await create(owner, { faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: correction } }, false);
+      expect(Object.keys(f).sort()).toEqual([...DETAIL_KEYS].sort());
+      expect(f.faturalar[0]).toEqual({
+        id: inv.id,
+        dosyaAdi: expect.any(String),
+        dosyaVar: true,
+        mime: 'application/pdf',
+        faturaNo: 'DOGRU-1',
+        faturaTarihi: read.fatura.faturaTarihi,
+        saticiUnvan: read.fatura.saticiUnvan,
+        genelToplam: 1800,
+        paraBirimi: 'TRY',
+        karsilikGerekli: false,
+        yerelKarsilik: null,
+        saticiVergiNo: read.fatura.saticiVergiNo,
+        aliciUnvan: null, // blank text is stored as null
+        aliciVergiNo: read.fatura.aliciVergiNo,
+        araToplam: read.fatura.araToplam,
+        kdvToplam: read.fatura.kdvToplam,
+        kalemler: read.kalemler,
+        duzeltildi: true,
+        okunan: { fatura: read.fatura, kalemler: read.kalemler },
+        eksikAlanlar: [],
+      });
+      // An approver sees the same, read values included.
+      await act(owner, f.id, 'gonder');
+      const seen = await call(admin, 'GET', `/api/masraflar/${f.id}`);
+      expect(seen.body.faturalar[0]).toMatchObject({ faturaNo: 'DOGRU-1', duzeltildi: true, okunan: { fatura: { faturaNo: 'OKUNAN-1' } } });
+      // The invoice itself keeps what was read.
+      expect((await call(owner, 'GET', `/api/invoices/${inv.id}`)).body.fatura.faturaNo).toBe('OKUNAN-1');
+    });
+
+    it('names the faulty field of a correction by its path', async () => {
+      const inv = await upload(owner);
+      const read = (await call(owner, 'GET', `/api/invoices/${inv.id}`)).body;
+      const fixed = (fatura: Record<string, unknown>, kalemler: unknown = read.kalemler) => ({ fatura: { ...read.fatura, ...fatura }, kalemler });
+      const post = (duzeltmeler: unknown, ids: string[] = [inv.id]) => call(owner, 'POST', '/api/masraflar', formBody({ faturaIdler: ids, faturaDuzeltmeleri: duzeltmeler }));
+
+      fieldError(await post({ [inv.id]: fixed({ faturaTarihi: '05.11.2026' }) }), `faturaDuzeltmeleri.${inv.id}.fatura.faturaTarihi`);
+      fieldError(await post({ [inv.id]: fixed({ faturaTarihi: '2026-02-30' }) }), `faturaDuzeltmeleri.${inv.id}.fatura.faturaTarihi`);
+      fieldError(await post({ [inv.id]: fixed({ paraBirimi: 'LIRA' }) }), `faturaDuzeltmeleri.${inv.id}.fatura.paraBirimi`);
+      fieldError(await post({ [inv.id]: fixed({ genelToplam: '1800' }) }), `faturaDuzeltmeleri.${inv.id}.fatura.genelToplam`);
+      fieldError(await post({ [inv.id]: fixed({ fazla: 1 }) }), `faturaDuzeltmeleri.${inv.id}.fatura`);
+      fieldError(await post({ [inv.id]: fixed({}, [{ ...read.kalemler[0], miktar: 'iki' }]) }), `faturaDuzeltmeleri.${inv.id}.kalemler.0.miktar`);
+      fieldError(await post({ [inv.id]: fixed({}, Array.from({ length: 201 }, () => read.kalemler[0])) }), `faturaDuzeltmeleri.${inv.id}.kalemler`);
+      fieldError(await post({ abc: null }), 'faturaDuzeltmeleri.abc');
+      const elsewhere = await upload(owner, 'png');
+      const stray = await post({ [elsewhere.id]: null });
+      expectError(stray, 400, 'gecersiz_istek');
+      expect(stray.body.hata.alanlar).toEqual({ [`faturaDuzeltmeleri.${elsewhere.id}`]: 'Bu fatura masrafta yok.' });
+
+      // The preview takes corrections too.
+      const preview = await call(owner, 'POST', '/api/onay-akisi/onizle', { tutar: 100, faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: fixed({ genelToplam: 2500 }) } });
+      expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+      expect(preview.body.onayTutari).toBe(2500);
+      fieldError(
+        await call(owner, 'POST', '/api/onay-akisi/onizle', { tutar: 100, faturaDuzeltmeleri: { [inv.id]: fixed({ faturaTarihi: 'dün' }) } }),
+        `faturaDuzeltmeleri.${inv.id}.fatura.faturaTarihi`,
+      );
+
+      // PATCH removes a correction with null.
+      const f = await create(owner, { faturaIdler: [inv.id], faturaDuzeltmeleri: { [inv.id]: fixed({ faturaNo: 'X-9' }) } }, false);
+      const undone = await call(owner, 'PATCH', `/api/masraflar/${f.id}`, { faturaDuzeltmeleri: { [inv.id]: null } });
+      expect(undone.status).toBe(200);
+      expect(undone.body.faturalar[0]).toMatchObject({ faturaNo: read.fatura.faturaNo, duzeltildi: false, okunan: null });
+    });
+
+    it('reports missing fields and duplicates by invoice path when sending', async () => {
+      const blank = await upload(owner, 'pdf', { faturaNo: null, saticiUnvan: null });
+      const missing = await call(owner, 'POST', '/api/masraflar', { ...formBody({ faturaIdler: [blank.id] }), gonder: true });
+      expectError(missing, 409, 'fatura_eksik');
+      expect(missing.body.hata.alanlar).toEqual({
+        [`faturalar.${blank.id}.faturaNo`]: 'Bu alan okunamadı; doldurun.',
+        [`faturalar.${blank.id}.saticiUnvan`]: 'Bu alan okunamadı; doldurun.',
+      });
+      const draft = await create(owner, { faturaIdler: [blank.id] }, false);
+      expect(draft.faturalar[0].eksikAlanlar).toEqual(['faturaNo', 'saticiUnvan']);
+      expectError(await act(owner, draft.id, 'gonder'), 409, 'fatura_eksik');
+
+      const first = await upload(owner, 'pdf', { saticiVergiNo: '4444444444', faturaNo: 'M-1' });
+      await create(owner, { faturaIdler: [first.id] });
+      const again = await upload(outsider, 'png', { saticiVergiNo: '4444444444', faturaNo: 'm1' });
+      const dup = await call(outsider, 'POST', '/api/masraflar', { ...formBody({ faturaIdler: [again.id] }), gonder: true });
+      expectError(dup, 409, 'fatura_mukerrer');
+      expect(Object.keys(dup.body.hata.alanlar)).toEqual([`faturalar.${again.id}`]);
+      expect(dup.body.hata.mesaj).not.toMatch(/#\d/);
+    });
+  });
+
+  describe('approval document, notifications and mail', () => {
+    it('gives the approval document to whoever sees the form, only once it is approved or paid', async () => {
+      await setFlow(db, chainOf(a.id));
+      const f = await create(owner);
+      expectError(await call(owner, 'GET', `/api/masraflar/${f.id}/pdf`), 409, 'gecersiz_durum');
+      expect((await act(a, f.id, 'onayla')).status).toBe(200);
+
+      for (const who of [owner, a, accounting, admin]) {
+        const res = await fetch(`${base}/api/masraflar/${f.id}/pdf`, { headers: { Authorization: `Bearer ${tokenOf(who)}` } });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toBe('application/pdf');
+        expect(res.headers.get('content-disposition')).toBe(`attachment; filename="masraf-${f.id}.pdf"`);
+        expect(Buffer.from(await res.arrayBuffer()).subarray(0, 5).toString()).toBe('%PDF-');
+      }
+      expectError(await call(outsider, 'GET', `/api/masraflar/${f.id}/pdf`), 404, 'bulunamadi');
+      expectError(await call(owner, 'GET', '/api/masraflar/999999/pdf'), 404, 'bulunamadi');
+      expect((await act(accounting, f.id, 'odendi')).status).toBe(200);
+      expect((await call(owner, 'GET', `/api/masraflar/${f.id}/pdf`)).status).toBe(200);
+    });
+
+    it('lists only the own notifications, newest first, and marks them read', async () => {
+      await setFlow(db, chainOf(a.id));
+      const first = await create(owner, { baslik: 'Birinci' });
+      const second = await create(owner, { baslik: 'İkinci' });
+      const list = await call(a, 'GET', '/api/bildirimler');
+      expect(list.status).toBe(200);
+      expect(list.body).toMatchObject({ toplam: 2, okunmamis: 2, sayfa: 1, adet: 20 });
+      expect(list.body.kayitlar[0]).toEqual({
+        id: expect.any(Number),
+        tur: 'onay_bekliyor',
+        baslik: 'Onayınızı bekleyen masraf',
+        mesaj: 'Form Sahibi, "İkinci" masrafını (100,00 TRY) onayınıza gönderdi.',
+        form: { id: second.id, baslik: 'İkinci' },
+        olusturma: expect.any(String),
+        okundu: false,
+      });
+      expect(list.body.kayitlar[1].form.id).toBe(first.id);
+      expect((await call(owner, 'GET', '/api/bildirimler')).body.toplam).toBe(0);
+
+      const id = list.body.kayitlar[1].id;
+      expectError(await call(owner, 'POST', `/api/bildirimler/${id}/okundu`), 404, 'bulunamadi');
+      expect((await call(a, 'POST', `/api/bildirimler/${id}/okundu`)).status).toBe(204);
+      const unread = await call(a, 'GET', '/api/bildirimler?okunmamis=1');
+      expect(unread.body).toMatchObject({ toplam: 1, okunmamis: 1 });
+      expect((await call(a, 'GET', '/api/ben')).body.okunmamisBildirim).toBe(1);
+      expect((await call(a, 'POST', '/api/bildirimler/hepsi-okundu')).status).toBe(204);
+      expect((await call(a, 'GET', '/api/bildirimler')).body).toMatchObject({ toplam: 2, okunmamis: 0 });
+      fieldError(await call(a, 'GET', '/api/bildirimler?adet=101'), 'adet');
+    });
+
+    it('lets users turn notification mail off for themselves', async () => {
+      const res = await call(owner, 'PUT', '/api/ben/tercihler', { mailBildirim: false });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ id: owner.id, mailBildirim: false });
+      expect((await call(owner, 'GET', '/api/ben')).body.kullanici.mailBildirim).toBe(false);
+      fieldError(await call(owner, 'PUT', '/api/ben/tercihler', { mailBildirim: 'hayir' }), 'mailBildirim');
+      fieldError(await call(owner, 'PUT', '/api/ben/tercihler', { mailBildirim: true, rol: 'yonetici' }), '_');
+    });
+
+    it('keeps the mail box to administrators, and refuses test mails while mail is off', async () => {
+      for (const who of [owner, accounting]) {
+        expectError(await call(who, 'GET', '/api/eposta'), 403, 'yetki_yok');
+        expectError(await call(who, 'POST', '/api/eposta/deneme', {}), 403, 'yetki_yok');
+        expectError(await call(who, 'POST', '/api/eposta/1/yeniden'), 403, 'yetki_yok');
+      }
+      expectError(await call(admin, 'POST', '/api/eposta/deneme', {}), 409, 'mail_kapali');
+      await setFlow(db, chainOf(a.id));
+      await create(owner);
+      const listed = await call(admin, 'GET', '/api/eposta');
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual([
+        { id: expect.any(Number), alici: a.eposta, konu: expect.stringContaining('Masraf:'), durum: 'atlandi', deneme: 0, sonHata: null, olusturma: expect.any(String), gonderim: null },
+      ]);
+      expect((await call(admin, 'GET', '/api/eposta?durum=hata')).body).toEqual([]);
+    });
+  });
+});
+
+describe('administrators\' mail box with mail on', () => {
+  let db: Db;
+  let server: Server;
+  let base: string;
+
+  beforeAll(async () => {
+    db = await testDb();
+  });
+  afterAll(closeTestDb);
+  beforeEach(async () => {
+    await resetDb(db);
+    server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    base = `http://127.0.0.1:${port}`;
+    server.on('request', createApp({ extract: vi.fn<ExtractInvoice>(), db, maxFileBytes: 1024 * 1024, port, log: () => {}, mail: { mailEnabled: true, appUrl: null } }));
+  });
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('queues a test mail, lists it and puts a failed mail back in the queue, writing the audit log', async () => {
+    const admin = await makeUser(db, { rol: 'yonetici' });
+    const token = await tokenFor(db, admin.id);
+    const call = async (method: string, path: string, body?: unknown) => {
+      const res = await fetch(`${base}${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const text = await res.text();
+      return { status: res.status, body: text === '' ? null : JSON.parse(text) };
+    };
+
+    const own = await call('POST', '/api/eposta/deneme', {});
+    expect(own).toEqual({ status: 202, body: { id: expect.any(Number) } });
+    const typed = await call('POST', '/api/eposta/deneme', { alici: ' Kisi@Firma.test ' });
+    expect(typed.status).toBe(202);
+    expect((await call('POST', '/api/eposta/deneme', { alici: 'adres değil' })).status).toBe(400);
+    const listed = await call('GET', '/api/eposta');
+    expect(listed.body.map((m: { alici: string; durum: string }) => [m.alici, m.durum])).toEqual([
+      ['kisi@firma.test', 'bekliyor'],
+      [admin.eposta, 'bekliyor'],
+    ]);
+    expect(listed.body[0]).not.toHaveProperty('html');
+
+    expect((await call('POST', `/api/eposta/${own.body.id}/yeniden`)).body.hata.kod).toBe('gecersiz_durum');
+    expect((await call('POST', '/api/eposta/999999/yeniden')).status).toBe(404);
+    await execute(db, `UPDATE dbo.eposta_kutusu SET durum = 'hata', deneme = 5, son_hata = N'ECONNREFUSED' WHERE id = @id`, { id: p.int(own.body.id) });
+    expect((await call('POST', `/api/eposta/${own.body.id}/yeniden`)).status).toBe(202);
+    expect((await call('GET', '/api/eposta?durum=bekliyor')).body.find((m: { id: number }) => m.id === own.body.id)).toMatchObject({ deneme: 0, sonHata: null });
+
+    const auditLog = await call('GET', '/api/denetim');
+    expect(auditLog.body.map((x: { islem: string }) => x.islem)).toEqual(['eposta_yeniden', 'eposta_deneme', 'eposta_deneme']);
   });
 });

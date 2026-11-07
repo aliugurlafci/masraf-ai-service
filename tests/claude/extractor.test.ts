@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -213,7 +213,11 @@ describe('createClaudeExtractor (fake CLI)', () => {
     expect(dump.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(FAKE_TOKEN);
     expect(dump.env).not.toHaveProperty('ANTHROPIC_API_KEY');
     expect(dump.env).not.toHaveProperty('GITHUB_TOKEN');
-    expect(dump.env.CLAUDE_CONFIG_DIR?.startsWith(dirname(dump.cwd))).toBe(true);
+    // process.cwd() in the child is the real path; on macOS the temp dir is a symlink
+    // (/var → /private/var), so compare both in their real form.
+    const realTmp = realpathSync(tmpdir());
+    const configDir = dump.env.CLAUDE_CONFIG_DIR?.replace(tmpdir(), realTmp);
+    expect(configDir?.startsWith(dirname(dump.cwd))).toBe(true);
     expect(dump.args).toContain('--json-schema');
     expect(existsSync(dirname(dump.cwd))).toBe(false);
   });

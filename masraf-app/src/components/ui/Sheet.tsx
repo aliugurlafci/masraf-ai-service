@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View, type ScrollViewInstance } from 'react-native';
+import type { RefObject } from 'react';
 import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -16,13 +17,15 @@ export interface SheetProps {
   readonly title: string;
   readonly subtitle?: string;
   readonly children: ReactNode;
+  /** Lets the content scroll to a field (e.g. the first empty required one). */
+  readonly scrollRef?: RefObject<ScrollViewInstance | null>;
 }
 
 /**
  * Bottom sheet on a transparent modal. The content slides in on the UI thread; on close it slides out
  * before the modal is removed. Moves up with the keyboard.
  */
-export function Sheet({ visible, onClose, title, subtitle, children }: SheetProps) {
+export function Sheet({ visible, onClose, title, subtitle, children, scrollRef }: SheetProps) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
@@ -69,7 +72,7 @@ export function Sheet({ visible, onClose, title, subtitle, children }: SheetProp
                 </View>
                 <IconButton icon="close" onPress={onClose} accessibilityLabel="Kapat" tone="soft" />
               </View>
-              <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content} bounces={false}>
+              <ScrollView ref={scrollRef} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content} bounces={false}>
                 {children}
               </ScrollView>
             </Animated.View>

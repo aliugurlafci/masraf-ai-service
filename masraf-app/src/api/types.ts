@@ -88,6 +88,8 @@ export interface Kullanici {
   readonly onayAkisi: AkisOzet | null;
   /** The flows the user approves in; empty when none. */
   readonly onaycilik: readonly OnayciYeri[];
+  /** Whether notifications also come by e-mail (the user's choice; in-app notifications cannot be turned off). */
+  readonly mailBildirim: boolean;
 }
 
 export interface Kategori {
@@ -138,7 +140,22 @@ export interface MasrafFatura {
   readonly karsilikGerekli: boolean;
   /** Base-currency equivalent the sender entered; only set while karsilikGerekli. */
   readonly yerelKarsilik: number | null;
+  // The fields above and below are the invoice's EFFECTIVE information (the correction when there is one).
+  readonly saticiVergiNo: string | null;
+  readonly aliciUnvan: string | null;
+  readonly aliciVergiNo: string | null;
+  readonly araToplam: number | null;
+  readonly kdvToplam: number | null;
+  readonly kalemler: readonly FaturaKalemi[];
+  /** The user corrected this invoice on this form. */
+  readonly duzeltildi: boolean;
+  /** The read result when duzeltildi; null otherwise. */
+  readonly okunan: OkunanFatura | null;
+  /** Required fields empty in the effective information. */
+  readonly eksikAlanlar: readonly ZorunluAlan[];
 }
+
+export type ZorunluAlan = 'faturaNo' | 'faturaTarihi' | 'saticiUnvan' | 'genelToplam';
 
 /**
  * Declared amount vs. invoices, both in the form's own currency (`paraBirimi`). `fatura` is the total of
@@ -224,6 +241,33 @@ export interface OturumYaniti {
 export interface BenYaniti {
   readonly kullanici: Kullanici;
   readonly bekleyenOnay: number;
+  readonly okunmamisBildirim: number;
+}
+
+export interface TercihIstegi {
+  readonly mailBildirim: boolean;
+}
+
+// --- Notifications ---
+
+export type BildirimTuru = 'onay_bekliyor' | 'hatirlatma' | 'devredildi' | 'onaylandi' | 'reddedildi' | 'odendi' | 'odeme_bekliyor';
+
+export interface Bildirim {
+  readonly id: number;
+  readonly tur: BildirimTuru;
+  readonly baslik: string;
+  readonly mesaj: string;
+  readonly form: { readonly id: number; readonly baslik: string } | null;
+  readonly olusturma: string;
+  readonly okundu: boolean;
+}
+
+export interface BildirimListesi {
+  readonly kayitlar: readonly Bildirim[];
+  readonly toplam: number;
+  readonly okunmamis: number;
+  readonly sayfa: number;
+  readonly adet: number;
 }
 
 export interface SifreDegistirIstegi {
@@ -263,6 +307,8 @@ export interface OnizlemeIstegi {
   readonly faturaIdler?: readonly string[];
   /** Base-currency equivalents by invoice id, for invoices in a third currency. */
   readonly yerelKarsiliklar?: Readonly<Record<string, number>>;
+  /** Corrections by invoice id, so the approval amount follows the corrected totals. */
+  readonly faturaDuzeltmeleri?: Readonly<Record<string, OkunanFatura | null>>;
 }
 
 export interface OnizlemeAdimi {
@@ -320,6 +366,11 @@ export interface MasrafAlanlari {
    * PATCH the map replaces every equivalent; leave it out to keep those of the invoices that stay.
    */
   readonly yerelKarsiliklar?: Readonly<Record<string, number>>;
+  /**
+   * Corrections by invoice id: the invoice's whole schema, or null to go back to the read result. Only
+   * listed invoices change; only invoices on the form may be listed.
+   */
+  readonly faturaDuzeltmeleri?: Readonly<Record<string, OkunanFatura | null>>;
 }
 
 export interface MasrafOlusturIstegi extends MasrafAlanlari {

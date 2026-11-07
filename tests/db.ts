@@ -72,7 +72,7 @@ export async function resetDb(db: Db): Promise<void> {
       await transaction(db, (tx) =>
         execute(
           tx,
-          `DELETE FROM dbo.form_gecmisi; DELETE FROM dbo.form_onaylari; DELETE FROM dbo.form_faturalari; DELETE FROM dbo.masraf_formlari;
+          `DELETE FROM dbo.bildirimler; DELETE FROM dbo.eposta_kutusu; DELETE FROM dbo.form_gecmisi; DELETE FROM dbo.form_onaylari; DELETE FROM dbo.form_faturalari; DELETE FROM dbo.masraf_formlari;
            DELETE FROM dbo.fatura_yuklemeleri; DELETE FROM dbo.fatura_dosyalari; DELETE FROM dbo.fatura_kayitlari;
            DELETE FROM dbo.onay_adimlari; UPDATE dbo.onay_akislari SET guncelleyen_id = NULL;
            DELETE FROM dbo.oturumlar; DELETE FROM dbo.denetim_kayitlari;
@@ -138,8 +138,11 @@ export async function tokenFor(db: Db, userId: number): Promise<string> {
 
 /**
  * Stores an invoice record as if `userId` had uploaded it, with its original file unless `dosya` is null.
- * Returns the record id. `fatura` overrides fields of sampleInvoice() (genelToplam 1800 TRY).
+ * Returns the record id. `fatura` overrides fields of sampleInvoice() (genelToplam 1800 TRY); the seller's
+ * tax number is unique per call unless given.
  */
+let invoiceCount = 0;
+
 export async function makeInvoice(
   db: Db,
   userId: number,
@@ -147,7 +150,11 @@ export async function makeInvoice(
   dosya: InvoiceFile | null = { icerik: PDF_BYTES, mime: 'application/pdf' },
 ): Promise<string> {
   const storage = createInvoiceStorage(db);
-  const record = await storage.save({ dosyaAdi: 'fatura.pdf', sonuc: sampleInvoice(fatura), yukleyenId: userId, ...(dosya !== null ? { dosya } : {}) });
+  // Each invoice gets its own seller tax number unless one is given, so two invoices are never
+  // duplicates (same seller tax number and invoice number) by accident.
+  invoiceCount++;
+  const sonuc = sampleInvoice({ saticiVergiNo: String(1_000_000_000 + invoiceCount), ...fatura });
+  const record = await storage.save({ dosyaAdi: 'fatura.pdf', sonuc, yukleyenId: userId, ...(dosya !== null ? { dosya } : {}) });
   await storage.addUpload({ kayitId: record.id, kullaniciId: userId, dosyaAdi: 'fatura.pdf' });
   return record.id;
 }

@@ -303,6 +303,15 @@ Bütün ayarlar kök dizindeki `.env` dosyasındadır (şablon: `env.example`). 
 | `GIRIS_DENEME_SINIRI`, `GIRIS_KILIT_DAKIKA` | `10`, `15` | Bu kadar hatalı girişte e-posta bu kadar dakika kilitlenir |
 | `SIFRE_MIN_UZUNLUK` | `8` | En kısa şifre (8–128) |
 | `PARA_BIRIMI` | `TRY` | Onay limitlerinin ve raporların para birimi; başka para birimindeki masraflarda kur girilir |
+| `MAIL_GONDERIM` | `kapali` | `kapali`: bildirim mailleri gönderilmez, giden kutusuna `atlandi` olarak yazılır (uygulama içi bildirimler yine oluşur). `smtp`: aşağıdaki sunucuyla gönderilir |
+| `SMTP_HOST`, `SMTP_PORT` | (yok), `587` | SMTP sunucusu. `MAIL_GONDERIM=smtp` iken `SMTP_HOST` zorunlu |
+| `SMTP_GUVENLIK` | `starttls` | `starttls` (genelde 587), `tls` (genelde 465) ya da `yok` (yalnızca güvenilir iç ağ) |
+| `SMTP_KULLANICI`, `SMTP_SIFRE` | (yok) | SMTP kimliği; sunucu istemiyorsa boş. Şifre hiçbir kayda ve hata mesajına yazılmaz |
+| `MAIL_GONDEREN` | (yok) | Gönderen adres, örn. `Masraf <masraf@firma.com>`. `MAIL_GONDERIM=smtp` iken zorunlu |
+| `MAIL_DENEME_SAYISI` | `5` | Gönderilemeyen mailin en çok deneme sayısı (1–20); aralıklar 1, 5, 15, 60 dakika, sonra 60 dakika. Sonra mail `hata` olur |
+| `UYGULAMA_ADRESI` | (yok) | Maillerdeki bağlantıların açacağı panel adresi (`http://` ya da `https://`). Boşsa bağlantı konmaz |
+| `HATIRLATMA_BEKLEME_SAAT` | `24` | Bu kadar saatten uzun karar bekleyen onaycıya günde bir kez hatırlatma gider (0 = kapalı, en çok 720) |
+| `HATIRLATMA_SAATI` | `09:00` | Hatırlatmaların gönderileceği saat (`SS:DD`, sunucunun yerel saati) |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI'nin yolu |
 | `CLAUDE_MODEL` | `haiku,opus` | Modeller, en ucuzdan başlayarak virgülle (en çok 4). Sonraki model yalnızca önceki okuma kontrollerden geçmezse çalışır (aşağıda "Kademeli okuma"). Tek model için örneğin `opus` |
 | `CLAUDE_EFFORT` | `low` | Claude'un düşünme düzeyi (`low`, `medium`, `high`, `xhigh`, `max`). `default` CLI'nin kendi ayarını kullanır. Karmaşık faturalarda yanlış okuma görürseniz `medium` deneyin |

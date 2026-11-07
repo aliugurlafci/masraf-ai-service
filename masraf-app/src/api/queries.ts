@@ -3,6 +3,7 @@ import {
   keepPreviousData,
   QueryClient,
   useInfiniteQuery,
+  useMutation,
   useQuery,
   useQueryClient,
   type InfiniteData,
@@ -13,14 +14,18 @@ import { AppState, Platform } from 'react-native';
 import { ApiError } from './client';
 import {
   getBen,
+  getBildirimler,
   getKategoriler,
   getMasraf,
   getMasraflar,
   getOnaylar,
   getOzet,
+  markAllNotificationsRead,
+  markNotificationRead,
   previewFlow,
+  updatePreferences,
 } from './endpoints';
-import type { Kapsam, MasrafDetay, MasrafDurum, MasrafListesi, OnayListeDurumu, OnizlemeIstegi } from './types';
+import type { BenYaniti, BildirimListesi, Kapsam, MasrafDetay, MasrafDurum, MasrafListesi, OnayListeDurumu, OnizlemeIstegi } from './types';
 
 export const PAGE_SIZE = 20;
 
@@ -33,6 +38,7 @@ export const queryKeys = {
   masraf: (id: number) => ['masraf', id] as const,
   onaylarAll: ['onaylar'] as const,
   onaylar: (durum: OnayListeDurumu) => ['onaylar', durum] as const,
+  bildirimler: ['bildirimler'] as const,
   onizle: (body: OnizlemeIstegi) => ['onizle', body] as const,
 };
 
@@ -41,9 +47,12 @@ export function createQueryClient(): QueryClient {
     defaultOptions: {
       queries: {
         staleTime: 20_000,
-        // Client errors (4xx) will not change on retry; network and server errors get two more tries.
+        // Client errors (4xx) will not change on retry. A timeout already waited the full request time;
+        // retrying it would keep the screen loading for minutes, so it shows the error (with retry) at
+        // once. Network and server errors get two more quick tries.
         retry: (failureCount, error) => {
           if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false;
+          if (error instanceof ApiError && error.kod === 'zaman_asimi') return false;
           return failureCount < 2;
         },
         refetchOnWindowFocus: true,
@@ -100,8 +109,9 @@ export function useMasrafList(kapsam: Kapsam, durum: readonly MasrafDurum[], q: 
 export function useMasraf(id: number) {
   return useQuery({
     queryKey: queryKeys.masraf(id),
-    queryFn: ({ signal }) => getMasraf(id, { signal }),
-    enabled: Number.isInteger(id) && id > 0,
+    // A bad id (e.g. a broken link) must end in "not found"; a disabled query would stay pending forever.
+    queryFn: ({ signal }) =>
+      Number.isInteger(id) && id > 0 ? getMasraf(id, { signal }) : Promise.reject(new ApiError(404, 'bulunamadi', 'Kayıt bulunamadı.')),
   });
 }
 
@@ -121,18 +131,72 @@ export function useOnizleme(body: OnizlemeIstegi | null) {
   });
 }
 
-/** After any change to a form: store the fresh detail and refresh every list that may show it. */
+/**
+ * After any change to a form: store the fresh detail and refresh every list that may show it. The lists
+ * refresh in the background: the change is already saved, so a slow or failed list request must not keep
+ * the save button busy or show the save as failed (the user would then save the same form twice).
+ */
 export function useMasrafChanged(): (detail: MasrafDetay) => Promise<void> {
   const client = useQueryClient();
   return async (detail) => {
     client.setQueryData(queryKeys.masraf(detail.id), detail);
-    await Promise.all([
-      client.invalidateQueries({ queryKey: queryKeys.masraflarAll }),
-      client.invalidateQueries({ queryKey: queryKeys.onaylarAll }),
-      client.invalidateQueries({ queryKey: queryKeys.ozet }),
-      client.invalidateQueries({ queryKey: queryKeys.ben }),
-    ]);
+    for (const queryKey of [queryKeys.masraflarAll, queryKeys.onaylarAll, queryKeys.ozet, queryKeys.ben]) {
+      client.invalidateQueries({ queryKey }).catch(() => undefined);
+    }
   };
 }
 
 export const flattenPages = (data: InfiniteData<MasrafListesi> | undefined) => data?.pages.flatMap((p) => p.kayitlar) ?? [];
+
+// --- Notifications ---
+
+export function useBildirimler() {
+  return useInfiniteQuery({
+    queryKey: queryKeys.bildirimler,
+    queryFn: ({ pageParam, signal }) => getBildirimler(pageParam, PAGE_SIZE, { signal }),
+    initialPageParam: 1,
+    getNextPageParam: (last: BildirimListesi) => (last.sayfa * last.adet < last.toplam ? last.sayfa + 1 : undefined),
+  });
+}
+
+/** After a notification was read: the badge (`ben`) and the list are fetched again. */
+function useNotificationsChanged(): () => void {
+  const client = useQueryClient();
+  return () => {
+    for (const queryKey of [queryKeys.ben, queryKeys.bildirimler]) {
+      client.invalidateQueries({ queryKey }).catch(() => undefined);
+    }
+  };
+}
+
+export function useMarkRead() {
+  const changed = useNotificationsChanged();
+  return useMutation({ mutationFn: (id: number) => markNotificationRead(id), onSettled: changed });
+}
+
+export function useMarkAllRead() {
+  const changed = useNotificationsChanged();
+  return useMutation({ mutationFn: () => markAllNotificationsRead(), onSettled: changed });
+}
+
+/** The e-mail preference: the switch moves at once (optimistic) and goes back when the server refuses. */
+export function useMailPreference() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (mailBildirim: boolean) => updatePreferences({ mailBildirim }),
+    onMutate: async (mailBildirim) => {
+      await client.cancelQueries({ queryKey: queryKeys.ben });
+      const previous = client.getQueryData<BenYaniti>(queryKeys.ben);
+      if (previous !== undefined) {
+        client.setQueryData<BenYaniti>(queryKeys.ben, { ...previous, kullanici: { ...previous.kullanici, mailBildirim } });
+      }
+      return { previous };
+    },
+    onError: (_err, _value, context) => {
+      if (context?.previous !== undefined) client.setQueryData(queryKeys.ben, context.previous);
+    },
+    onSuccess: (kullanici) => {
+      client.setQueryData<BenYaniti>(queryKeys.ben, (old) => (old === undefined ? old : { ...old, kullanici }));
+    },
+  });
+}

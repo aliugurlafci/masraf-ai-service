@@ -101,7 +101,7 @@ export function AuthProvider({ children }: { readonly children: ReactNode }) {
     await saveToken(res.token);
     setSessionToken(res.token);
     queryClient.clear();
-    queryClient.setQueryData<BenYaniti>(queryKeys.ben, { kullanici: res.kullanici, bekleyenOnay: 0 });
+    queryClient.setQueryData<BenYaniti>(queryKeys.ben, { kullanici: res.kullanici, bekleyenOnay: 0, okunmamisBildirim: 0 });
     // The badge count is not part of the login answer; fetch it right away.
     void queryClient.invalidateQueries({ queryKey: queryKeys.ben });
     setBaseUser(res.kullanici);

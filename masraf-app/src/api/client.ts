@@ -82,10 +82,8 @@ function queryString(query: Readonly<Record<string, QueryValue>> | undefined): s
 export interface RequestOptions {
   readonly method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   readonly query?: Readonly<Record<string, QueryValue>>;
-  /** JSON body. */
+  /** JSON body. Files go through upload(). */
   readonly body?: unknown;
-  /** Multipart body; sent as is so fetch sets the boundary. */
-  readonly form?: FormData;
   readonly timeoutMs?: number;
   /** Cancellation from the caller (e.g. React Query). */
   readonly signal?: AbortSignal;
@@ -131,10 +129,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const token = session.token;
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (token !== null) headers.Authorization = `Bearer ${token}`;
-  let body: string | FormData | undefined;
-  if (options.form !== undefined) {
-    body = options.form;
-  } else if (options.body !== undefined) {
+  let body: string | undefined;
+  if (options.body !== undefined) {
     headers['Content-Type'] = 'application/json';
     body = JSON.stringify(options.body);
   }
@@ -147,6 +143,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       throw new ApiError(0, 'zaman_asimi', 'Sunucu zamanında yanıt vermedi. Bağlantınızı kontrol edip tekrar deneyin.');
     }
     if (outer?.aborted === true) throw err;
+    // The device's own reason (e.g. "Network request failed") shows in the Metro console while developing.
+    if (__DEV__) console.warn(`[api] ${options.method ?? 'GET'} ${path} ağ hatası:`, err);
     throw new ApiError(0, 'ag_hatasi', 'Sunucuya ulaşılamadı. Bağlantınızı ve sunucu adresini kontrol edin.');
   } finally {
     clearTimeout(timer);
@@ -154,16 +152,55 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   const text = await response.text().catch(() => '');
-  if (!response.ok) {
-    const error = parseErrorBody(response.status, text);
+  return readResponse<T>(response.status, text, token);
+}
+
+/** Turns a server answer into the parsed body or an ApiError; `token` is the one the request carried. */
+function readResponse<T>(status: number, text: string, token: string | null): T {
+  if (status < 200 || status > 299) {
+    const error = parseErrorBody(status, text);
     // A 401 to a request that carried the token means the session is gone (expired or closed elsewhere).
-    if (response.status === 401 && token !== null && token === session.token) session.onUnauthorized?.();
+    if (status === 401 && token !== null && token === session.token) session.onUnauthorized?.();
     throw error;
   }
-  if (response.status === 204 || text === '') return undefined as T;
+  if (status === 204 || text === '') return undefined as T;
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new ApiError(response.status, 'gecersiz_yanit', 'Sunucudan okunamayan bir yanıt geldi.');
+    throw new ApiError(status, 'gecersiz_yanit', 'Sunucudan okunamayan bir yanıt geldi.');
   }
+}
+
+/**
+ * Sends a multipart form with local files (`{uri, name, type}` parts) as a POST. Goes through React
+ * Native's XMLHttpRequest, not fetch: since SDK 58 Expo replaces the global fetch with expo/fetch, which
+ * rejects such parts ("Unsupported FormDataPart implementation"). The XHR streams the file from disk.
+ * Same token, timeout and error handling as request().
+ */
+export function upload<T>(path: string, form: FormData, timeoutMs: number): Promise<T> {
+  const url = apiUrl(path);
+  const token = session.token;
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.setRequestHeader('Accept', 'application/json');
+    if (token !== null) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.timeout = timeoutMs;
+    xhr.onload = () => {
+      try {
+        resolve(readResponse<T>(xhr.status, typeof xhr.responseText === 'string' ? xhr.responseText : '', token));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    xhr.onerror = () => {
+      if (__DEV__) console.warn(`[api] POST ${path} ağ hatası (yükleme)`);
+      reject(new ApiError(0, 'ag_hatasi', 'Sunucuya ulaşılamadı. Bağlantınızı ve sunucu adresini kontrol edin.'));
+    };
+    xhr.ontimeout = () => {
+      reject(new ApiError(0, 'zaman_asimi', 'Sunucu zamanında yanıt vermedi. Bağlantınızı kontrol edip tekrar deneyin.'));
+    };
+    // No Content-Type header: the XHR sets multipart/form-data with its boundary.
+    xhr.send(form);
+  });
 }

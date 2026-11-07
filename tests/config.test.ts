@@ -165,7 +165,64 @@ describe('loadServiceConfig', () => {
       auth: { sessionTtlMs: 168 * 3_600_000, loginMaxAttempts: 10, loginLockMs: 15 * 60_000, passwordMinLength: 8 },
       baseCurrency: 'TRY',
       firstAdmin: null,
+      mail: { enabled: false, smtp: null, gonderen: null, maxAttempts: 5, appUrl: null },
+      reminder: { waitHours: 24, hour: 9, minute: 0 },
     });
+  });
+
+  it('reads the SMTP settings only when mail is on', () => {
+    const smtp = {
+      MAIL_GONDERIM: 'smtp',
+      SMTP_HOST: 'smtp.firma.com',
+      SMTP_PORT: '465',
+      SMTP_GUVENLIK: 'tls',
+      SMTP_KULLANICI: 'masraf',
+      SMTP_SIFRE: 'GizliSmtp1',
+      MAIL_GONDEREN: 'Masraf <masraf@firma.com>',
+      MAIL_DENEME_SAYISI: '3',
+      UYGULAMA_ADRESI: 'http://192.168.1.10:4000/',
+    };
+    expect(loadServiceConfig(smtp).mail).toEqual({
+      enabled: true,
+      smtp: { host: 'smtp.firma.com', port: 465, guvenlik: 'tls', kullanici: 'masraf', sifre: 'GizliSmtp1' },
+      gonderen: 'Masraf <masraf@firma.com>',
+      maxAttempts: 3,
+      appUrl: 'http://192.168.1.10:4000',
+    });
+    // Off, the SMTP values are not used at all.
+    expect(loadServiceConfig({ ...smtp, MAIL_GONDERIM: 'kapali' }).mail).toMatchObject({ enabled: false, smtp: null, gonderen: null });
+    expect(loadServiceConfig({ MAIL_GONDERIM: 'smtp', SMTP_HOST: 'smtp.firma.com', MAIL_GONDEREN: 'm@f.com' }).mail.smtp).toMatchObject({
+      port: 587,
+      guvenlik: 'starttls',
+      kullanici: null,
+      sifre: null,
+    });
+  });
+
+  it.each([
+    [{ MAIL_GONDERIM: 'smtp', MAIL_GONDEREN: 'm@f.com' }, /SMTP_HOST/],
+    [{ MAIL_GONDERIM: 'smtp', SMTP_HOST: 'smtp.firma.com' }, /MAIL_GONDEREN/],
+    [{ MAIL_GONDERIM: 'acik' }, /MAIL_GONDERIM/],
+    [{ SMTP_GUVENLIK: 'ssl' }, /SMTP_GUVENLIK/],
+    [{ SMTP_HOST: 'smtp.firma.com\r\nX' }, /SMTP_HOST/],
+    [{ MAIL_GONDEREN: 'masraf@firma.com\r\nBcc: x@y.z' }, /MAIL_GONDEREN/],
+    [{ MAIL_DENEME_SAYISI: '0' }, /MAIL_DENEME_SAYISI/],
+    [{ MAIL_DENEME_SAYISI: '21' }, /MAIL_DENEME_SAYISI/],
+    [{ UYGULAMA_ADRESI: 'javascript:alert(1)' }, /UYGULAMA_ADRESI/],
+    [{ UYGULAMA_ADRESI: 'ftp://firma' }, /UYGULAMA_ADRESI/],
+    [{ HATIRLATMA_BEKLEME_SAAT: '721' }, /HATIRLATMA_BEKLEME_SAAT/],
+    [{ HATIRLATMA_SAATI: '24:00' }, /HATIRLATMA_SAATI/],
+    [{ HATIRLATMA_SAATI: '9' }, /HATIRLATMA_SAATI/],
+  ])('rejects invalid mail or reminder settings %j', (env, pattern) => {
+    expect(() => loadServiceConfig(env)).toThrow(pattern);
+  });
+
+  it('never echoes the SMTP password', () => {
+    expect(() => loadServiceConfig({ MAIL_GONDERIM: 'smtp', SMTP_SIFRE: 'GizliSmtp1', MAIL_GONDEREN: 'm@f.com' })).toThrow(/^(?!.*GizliSmtp1)/);
+  });
+
+  it('reads the reminder time, and 0 hours turns reminders off', () => {
+    expect(loadServiceConfig({ HATIRLATMA_SAATI: '18:45', HATIRLATMA_BEKLEME_SAAT: '0' }).reminder).toEqual({ waitHours: 0, hour: 18, minute: 45 });
   });
 
   it('reads the first administrator, e-mail in lower case', () => {

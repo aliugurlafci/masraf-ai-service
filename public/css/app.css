@@ -6538,6 +6538,38 @@ fieldset[aria-invalid='true'] .cat-option {
   width: min(380px, calc(100vw - 36px));
   pointer-events: none;
 }
+/* The box is a manual popover so it can sit above an open modal dialog (top layer); undo the UA
+   popover box styles. Without popover support it stays a plain fixed box as before. */
+.toasts[popover] {
+  /* right/bottom come from .toasts (and its narrow-screen rule); only the UA's top/left need undoing. */
+  top: auto;
+  left: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+}
+.toasts[popover]:not(:popover-open) {
+  display: grid;
+}
+/* While a modal dialog is open its buttons sit bottom right, where toasts appear: move the toasts to the
+   free bottom-left corner (top on narrow screens) and never let them take a click meant for the dialog. */
+body:has(dialog[open]) .toasts {
+  right: auto;
+  left: 18px;
+}
+body:has(dialog[open]) .toast {
+  pointer-events: none;
+}
+@media (max-width: 760px) {
+  body:has(dialog[open]) .toasts {
+    left: 12px;
+    top: calc(12px + env(safe-area-inset-top));
+    bottom: auto;
+  }
+}
 
 .toast {
   display: flex;
@@ -7312,4 +7344,502 @@ fieldset[aria-invalid='true'] .cat-option {
     border-color: var(--spin);
     border-right-color: transparent;
   }
+}
+
+/* ---------- Invoice details and corrections ---------- */
+
+.is-missing dt {
+  color: var(--err);
+}
+
+.is-missing dd {
+  color: var(--err);
+}
+
+.inv-missing {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.inv-missing svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.inv-status .tag {
+  margin-left: 8px;
+}
+
+.head-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.inv-item-head .tag {
+  flex: none;
+}
+
+.inv-lines,
+.inv-compare {
+  margin-top: 12px;
+}
+
+.inv-lines > summary,
+.inv-compare > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.inv-lines > summary svg,
+.inv-compare > summary svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.2s var(--ease-out);
+}
+
+.inv-lines[open] > summary svg,
+.inv-compare[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.inv-lines .table-scroll {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.lines-table th,
+.lines-table td {
+  padding: 8px 10px;
+}
+
+.compare-wrap {
+  margin-top: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.compare th,
+.compare td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.compare thead th {
+  background: var(--surface-2);
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.compare tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.compare tbody th {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.compare .was {
+  color: var(--ink-3);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.compare .now {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* The editor dialog */
+
+.dlg.dlg-inv {
+  width: min(880px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+}
+
+.inv-revert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.inv-edit-group {
+  min-width: 0;
+  margin: 0 0 18px;
+  padding: 0;
+  border: 0;
+}
+
+.inv-edit-group > legend,
+.line-h {
+  margin: 0 0 10px;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.inv-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+  gap: 12px 16px;
+}
+
+.inv-edit-grid .field {
+  margin: 0;
+}
+
+.input.upper {
+  text-transform: uppercase;
+}
+
+.line-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.line-bar .line-h {
+  margin: 0;
+}
+
+.line-bar .btn {
+  margin-left: auto;
+}
+
+.line-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.line-row {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.line-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.line-title {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.line-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.line-grid .field {
+  margin: 0;
+}
+
+.line-grid .line-aciklama {
+  grid-column: span 3;
+}
+
+.line-grid .line-birim {
+  grid-column: span 1;
+}
+
+@media (max-width: 720px) {
+  .line-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .line-grid .line-aciklama {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ---------- Bell and notifications ---------- */
+
+.bell {
+  position: relative;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.bell svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bell-badge {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 2px solid var(--surface);
+  box-sizing: content-box;
+  font-size: 11px;
+}
+
+.bell-badge[hidden] {
+  display: none;
+}
+
+.notif-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notif {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.notif.unread {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--accent-soft);
+}
+
+.notif-main {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.notif-main:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.notif-glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--tone-soft);
+  color: var(--tone);
+}
+
+.notif-glyph svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.notif-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notif-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.notif.unread .notif-title strong {
+  font-weight: 800;
+}
+
+.notif-msg {
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.notif-time {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.notif-mark {
+  align-self: center;
+  flex: none;
+  margin-right: 12px;
+}
+
+@media (max-width: 560px) {
+  .notif {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .notif-mark {
+    align-self: flex-start;
+    margin: 0 14px 12px 60px;
+  }
+}
+
+/* ---------- Profile preference, mail page ---------- */
+
+.profile-side {
+  display: grid;
+  gap: 16px;
+}
+
+.pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.pref-label {
+  margin: 0 0 2px;
+  font-weight: 700;
+}
+
+.pref-row .muted {
+  margin: 0;
+}
+
+.form-msg {
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+
+.form-msg:empty {
+  display: none;
+}
+
+.form-msg.err {
+  color: var(--err);
+  font-weight: 600;
+}
+
+.form-msg.ok {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.mail-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.mail-test {
+  display: grid;
+  gap: 12px;
+  max-width: 520px;
+}
+
+.mail-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mail-err {
+  display: block;
+  margin-top: 2px;
+  color: var(--err);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.mail-table td.act {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mail-note {
+  margin: 10px 0 0;
+}
+
+@media (max-width: 760px) {
+  .profile-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- Missing invoice data: links and prompts ---------- */
+
+.action-lead.warn {
+  color: var(--wait);
+}
+
+.missing-link {
+  color: var(--err);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.inv-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--wait-soft);
+  color: var(--wait);
+  font-weight: 600;
+}
+
+.inv-next p {
+  flex: 1 1 200px;
+  margin: 0;
 }

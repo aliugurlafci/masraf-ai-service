@@ -1,8 +1,10 @@
 import { config } from '@/config';
 
-import { apiUrl, request } from './client';
+import { apiUrl, request, upload } from './client';
 import type {
   BenYaniti,
+  BildirimListesi,
+  Kullanici,
   Kategori,
   Kuyruk,
   MasrafDetay,
@@ -17,6 +19,7 @@ import type {
   OturumYaniti,
   Ozet,
   SifreDegistirIstegi,
+  TercihIstegi,
 } from './types';
 
 type Signal = { readonly signal?: AbortSignal };
@@ -32,6 +35,9 @@ export const getBen = (opts: Signal = {}): Promise<BenYaniti> => request<BenYani
 
 export const changePassword = (body: SifreDegistirIstegi): Promise<void> =>
   request<void>('/api/ben/sifre', { method: 'PUT', body });
+
+export const updatePreferences = (body: TercihIstegi): Promise<Kullanici> =>
+  request<Kullanici>('/api/ben/tercihler', { method: 'PUT', body });
 
 export const getOzet = (opts: Signal = {}): Promise<Ozet> => request<Ozet>('/api/ozet', opts);
 
@@ -77,6 +83,15 @@ export const rejectMasraf = (id: number, aciklama: string): Promise<MasrafDetay>
 export const getOnaylar = (durum: OnayListeDurumu, opts: Signal = {}): Promise<MasrafOzet[]> =>
   request<MasrafOzet[]>('/api/onaylar', { query: { durum }, ...opts });
 
+// --- Notifications ---
+
+export const getBildirimler = (sayfa: number, adet: number, opts: Signal = {}): Promise<BildirimListesi> =>
+  request<BildirimListesi>('/api/bildirimler', { query: { sayfa, adet }, ...opts });
+
+export const markNotificationRead = (id: number): Promise<void> => request<void>(`/api/bildirimler/${id}/okundu`, { method: 'POST' });
+
+export const markAllNotificationsRead = (): Promise<void> => request<void>('/api/bildirimler/hepsi-okundu', { method: 'POST' });
+
 // --- Invoice reading ---
 
 export interface PickedFile {
@@ -93,7 +108,7 @@ export function uploadInvoice(file: PickedFile): Promise<Kuyruk> {
   const form = new FormData();
   // React Native's FormData takes a {uri, name, type} descriptor for a local file.
   form.append('files', { uri: file.uri, name: file.name, type: file.mimeType } as unknown as Blob);
-  return request<Kuyruk>('/api/invoices/toplu', { method: 'POST', form, timeoutMs: config.uploadTimeoutMs });
+  return upload<Kuyruk>('/api/invoices/toplu', form, config.uploadTimeoutMs);
 }
 
 export const getQueue = (id: string, opts: Signal = {}): Promise<Kuyruk> =>

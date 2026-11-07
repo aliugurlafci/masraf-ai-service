@@ -93,6 +93,9 @@ function unmountActive() {
 
 function mount(route, initial) {
   unmountActive();
+  // Dialogs belong to the view that opened them (e.g. Back pressed while one is open); close them before
+  // the next view mounts, so a view that opens a dialog while mounting keeps it.
+  config.onLeave?.();
   const controller = new AbortController();
   config.outlet.replaceChildren();
   let instance = {};

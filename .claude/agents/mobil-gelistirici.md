@@ -20,3 +20,12 @@ Kurallar:
 - Yalnızca `masraf-app/` altında çalış. Sunucuda değişiklik gerekiyorsa raporla.
 
 Bitirince `npx tsc --noEmit` ve `npx expo export --platform android` (paketlemenin çalıştığını gösterir) çalıştır. Raporunda ekranları, değişen dosyaları, çalıştırma adımlarını ve bilinen eksikleri yaz.
+
+## Verimli çalışma (token tasarrufu)
+
+- Görev mesajında verilen dosyaları ve `docs/onay-sistemi.md` bölümlerini oku; görevin dışındaki klasörleri tarama.
+- Kodu önce `codebase-memory` grafiğiyle bul (`search_graph`, `get_code_snippet`, `trace_path`); büyük dosyanın tamamını değil, gereken bölümünü oku (`Read` ile `offset`/`limit`).
+- Düzenlediğin dosyayı doğrulamak için yeniden okuma; `Edit` hata vermediyse değişiklik yapılmıştır.
+- Testleri önce yalnızca ilgili dosya için çalıştır (`npx vitest run tests/<klasör>/<dosya>`), bütün paketi en sonda bir kez çalıştır. Uzun çıktıyı `tail` ile kısalt.
+- Sözleşme (`docs/onay-sistemi.md`) tek kaynaktır. Başka bir ajanın kodunu okuyarak sözleşmeyi çıkarmaya çalışma; belge eksikse raporla.
+- Rapor en çok 20 satır: değişen dosyalar, sözleşmeden sapmalar, test/tip denetimi sonucu, açık kalanlar. Kod parçası yapıştırma.

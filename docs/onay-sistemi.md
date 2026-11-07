@@ -92,6 +92,22 @@ Ek kurallar:
 - Aynı adım için iki karar aynı anda gelirse yalnızca biri geçer, diğeri `409 onay_beklemiyor` alır.
 - Her işlem form geçmişine (`gecmis`) yazılır. Yönetici işlemleri (kullanıcı, akış, kategori) denetim kaydına yazılır.
 
+### Fatura bilgileri, düzeltme ve gönderim kontrolleri
+
+- Okunan fatura kaydı (`fatura_kayitlari.sonuc`) hiç değişmez: aynı dosyayı yükleyen herkes aynı kaydı paylaşır. Kullanıcının düzeltmesi faturanın formdaki bağına (`form_faturalari.duzeltme`) yazılır ve yalnızca o formu etkiler.
+- Formdaki bir faturanın **geçerli bilgisi** düzeltme varsa düzeltme, yoksa okunan sonuçtur. Formla ilgili her hesap (yerel tutar, onay tutarı, `tutarFarki`, karşılık gereksinimi, eksik alan, mükerrer kontrolü, PDF, listelerdeki özet alanlar) geçerli bilgiyle yapılır.
+- Düzeltme, faturanın JSON şemasının tamamıdır (`{ fatura: {10 alan}, kalemler: [...] }`, `src/invoice/schema.ts`). Okunan sonuçla aynı olan düzeltme saklanmaz (düzeltme yok sayılır).
+- Düzeltmeyi yalnızca formu düzenleyebilen kişi yapar (sahibi, `taslak` ya da `reddedildi`). Formdan çıkarılan faturanın düzeltmesi silinir; fatura yeniden eklenirse okunan sonuçla başlar.
+- **Düzeltme izi:** Her düzeltme form geçmişine `guncellendi` olarak, değişen alanların adlarıyla yazılır: "2. fatura düzeltildi: fatura no, genel toplam." ya da "2. faturanın düzeltmesi geri alındı." Formu görebilen herkes yanıtta okunan değerleri (`okunan`) de görür.
+- **Zorunlu alanlar:** Her faturanın geçerli bilgisinde `faturaNo`, `faturaTarihi`, `saticiUnvan` ve `genelToplam` dolu olmalıdır. Eksik alanlar yanıtta `eksikAlanlar` ile döner. Taslak kaydetmek serbesttir; gönderim `409 fatura_eksik` döner.
+- **Mükerrer fatura:** Gönderilen formdaki her faturanın anahtarı, aktif bağı olan (`form_faturalari.aktif = 1`) başka bir faturanın anahtarıyla aynıysa gönderim `409 fatura_mukerrer` döner. Aynı formdaki iki farklı faturanın anahtarı aynıysa da aynı hata döner. Anahtar geçerli bilgiden hesaplanır. Önce alanlar normalleştirilir: boşluk, `-`, `/` ve `.` silinir, ASCII kurallarıyla büyük harfe çevrilir. Satıcı vergi no varsa anahtar `V|<vergiNo>|<faturaNo>`, yoksa `T|<faturaNo>|<faturaTarihi>|<genelToplam, 2 ondalık>` olur. `faturaNo` boşsa anahtar yoktur (zaten `fatura_eksik`). Hata mesajı başka kullanıcının formunun numarasını vermez.
+  - Normalleştirme yalnızca vergi no ile fatura no'ya uygulanır ("ASCII büyük harf" yalnızca a–z; Türkçe harfler olduğu gibi kalır). Tarih `YYYY-MM-DD`, toplam iki ondalıkla yazılır: `T|F1|2026-11-05|1800.00`.
+  - Taslaklar da sayılır: aynı anahtarlı iki taslaktan hiçbiri, öteki iptal edilmeden ya da düzeltilmeden gönderilemez.
+  - Aynı formda aynı anahtarlı iki fatura varsa `alanlar` içinde yalnızca sonraki fatura döner ("3. fatura, 1. faturayla aynı…").
+  - Mükerrer fatura kullanıcının kendi formundaysa mesaj form numarasını verir (`fatura_kullaniliyor` ile aynı davranış).
+- Düzeltmenin doğrulaması: metin alanları en çok 500 karakterdir, tarih takvimde var olan bir gün olmalıdır, para birimi büyük harfe çevrilir, bilinmeyen alan `400` döner. Önizleme listede olmayan faturaların düzeltmesini hata vermeden yok sayar.
+- Gönderim kontrollerinin sırası: `fatura_eksik`, `fatura_mukerrer`, `karsilik_eksik`, `onaylayan_yok`. Liste değişikliği ve düzeltme notları tek bir `guncellendi` satırında birleşir ("1 fatura eklendi. 2. fatura düzeltildi: fatura tarihi.").
+
 ## 4. Veritabanı (MSSQL)
 
 Docker'daki SQL Server 2022 kullanılır (`docker compose up -d`). Sunucu açılışta veritabanını yoksa oluşturur ve `src/db/migrations/*.sql` dosyalarını sırayla uygular.
@@ -103,7 +119,7 @@ Docker'daki SQL Server 2022 kullanılır (`docker compose up -d`). Sunucu açıl
 | `masraf_kategorileri` | ad, simge, sıra, aktif |
 | `onay_akislari` | Akış adı (benzersiz), varsayılan mı (en fazla biri, filtreli benzersiz indeks), son değişiklik ve yapan |
 | `onay_adimlari` | Akışın adımları: akış, sıra, onaycı, onay limiti (`NULL` = sınırsız). Sıra ve onaycı akış içinde benzersizdir. Akışın stratejisi `onay_akislari.strateji` alanındadır |
-| `form_faturalari` | Formun faturaları: form, fatura kaydı, sıra, `aktif` (form iptal edilince 0), girilen yerel karşılık (`yerel_karsilik`). Bir fatura en fazla bir aktif bağda bulunur |
+| `form_faturalari` | Formun faturaları: form, fatura kaydı, sıra, `aktif` (form iptal edilince 0), girilen yerel karşılık (`yerel_karsilik`), kullanıcının düzeltmesi (`duzeltme`, JSON, `NULL` = düzeltme yok), mükerrer anahtarı (`mukerrer_anahtari`, geçerli bilgiden; `aktif = 1` satırlarda indeksli). Bir fatura en fazla bir aktif bağda bulunur |
 | `fatura_kayitlari` | Okunan fatura (JSON), ölçüm (JSON), dosya özeti, liste için özet alanlar |
 | `fatura_dosyalari` | Orijinal dosya (`VARBINARY(MAX)`) ve MIME türü |
 | `fatura_yuklemeleri` | Hangi kullanıcı hangi faturayı ne zaman yükledi. Erişim yetkisi buradan gelir |
@@ -111,7 +127,11 @@ Docker'daki SQL Server 2022 kullanılır (`docker compose up -d`). Sunucu açıl
 | `form_onaylari` | Formun her turdaki onay adımları (akıştan kopya) |
 | `form_gecmisi` | Formun zaman çizelgesi |
 | `denetim_kayitlari` | Yönetici işlemleri |
+| `bildirimler` | Uygulama içi bildirim: kullanıcı, tür, form (`NULL` olabilir), başlık, mesaj, oluşturma, okunma zamanı (`NULL` = okunmadı) |
+| `eposta_kutusu` | Giden mail kutusu: alıcı kullanıcı (`NULL` = test maili), adres, konu, düz metin ve HTML gövde, ek türü (`masraf_pdf` ya da `NULL`), form, durum (`bekliyor`, `gonderildi`, `hata`, `atlandi`), deneme sayısı, son hata, sonraki deneme, oluşturma, gönderim |
 | `sema_surumleri` | Uygulanan migration'lar |
+
+`kullanicilar.mail_bildirim` (varsayılan 1) kullanıcının mail isteyip istemediğini, `form_onaylari.son_hatirlatma` bir adım için gönderilen son hatırlatmanın zamanını tutar. Bildirimdeki form başlığı, bildirim yazıldığı andaki başlıktır; form sonradan değişse de bildirimde değişmez.
 
 Tutarlar `DECIMAL(18,2)`, kur `DECIMAL(18,6)`, zamanlar UTC `DATETIME2(3)`'tür. Ad, başlık ve satıcı gibi metinler `Turkish_100_CI_AS` sıralamasıyla saklanır.
 
@@ -139,6 +159,7 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
 // Kullanici
 { "id": 3, "eposta": "ayse@firma.com", "adSoyad": "Ayşe Kaya", "rol": "calisan", "departman": "Satış",
   "aktif": true, "sifreDegismeli": false, "olusturma": "2026-11-06T09:00:00.000Z", "sonGiris": null,
+  "mailBildirim": true,                                       // bildirimler mail olarak da gelsin mi (kullanıcının tercihi)
   "onayAkisiId": null,                                        // atanmış akış; null = varsayılan akışı kullanır
   "onayAkisi": { "id": 1, "ad": "Genel", "varsayilan": true }, // masraflarının şu an gittiği akış (her zaman dolu)
   "onaycilik": [                                              // onaycı olduğu akışlar (varsayılan önce, sonra ada göre); yoksa []
@@ -169,7 +190,13 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
     { "id": "…", "dosyaAdi": "fis.jpg", "dosyaVar": true, "mime": "image/jpeg", "faturaNo": "…",
       "faturaTarihi": "2026-11-05", "saticiUnvan": "…", "genelToplam": 1800, "paraBirimi": "TRY",
       "karsilikGerekli": false,  // fatura üçüncü bir para biriminde: gönderim için yerelKarsilik gerekir
-      "yerelKarsilik": null } ],  // gönderenin girdiği yerel karşılık; yalnızca karsilikGerekli iken dolu
+      "yerelKarsilik": null,     // gönderenin girdiği yerel karşılık; yalnızca karsilikGerekli iken dolu
+      // Yukarıdaki okunan alanlar ve aşağıdakiler faturanın GEÇERLİ bilgisidir (düzeltme varsa düzeltme).
+      "saticiVergiNo": "…", "aliciUnvan": "…", "aliciVergiNo": "…", "araToplam": 1525.42, "kdvToplam": 274.58,
+      "kalemler": [ { "aciklama": "…", "miktar": 2, "birim": "adet", "birimFiyat": 762.71, "kdvOrani": 18, "tutar": 1525.42 } ],
+      "duzeltildi": false,       // kullanıcı bu formda faturayı düzeltti mi
+      "okunan": null,            // duzeltildi iken okunan sonuç ({ fatura, kalemler }), değilse null
+      "eksikAlanlar": [] } ],    // geçerli bilgide boş olan zorunlu alanlar: faturaNo, faturaTarihi, saticiUnvan, genelToplam
   "tutarFarki": null,            // ya da { "fatura": 1800, "beyan": 1500 } (fatura: toplama giren faturaların toplamı)
   "onaylar": [                   // yalnızca son tur, sıraya göre
     { "id": 10, "tur": 1, "sira": 1, "onayci": { "id": 2, "adSoyad": "Mehmet Demir" }, "altLimit": 0, "ustLimit": null, // onaycının akıştaki tutar aralığı (gönderimdeki kopya)
@@ -190,8 +217,9 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
 |---|---|---|
 | `POST /api/oturum` | `{ eposta, sifre, istemci?: "panel"\|"mobil"\|"api" }` | `200 { token?, bitis, kullanici }` · `401 hatali_giris` · `403 hesap_pasif` · `429 cok_fazla_deneme` |
 | `DELETE /api/oturum` | | `204` |
-| `GET /api/ben` | | `{ kullanici, bekleyenOnay }` (rozet sayacı için hafif uç) |
+| `GET /api/ben` | | `{ kullanici, bekleyenOnay, okunmamisBildirim }` (rozet sayaçları için hafif uç) |
 | `PUT /api/ben/sifre` | `{ mevcutSifre, yeniSifre }` | `204` · `400 hatali_sifre` · `400 gecersiz_istek` |
+| `PUT /api/ben/tercihler` | `{ mailBildirim: boolean }` | `Kullanici` (uygulama içi bildirim kapatılamaz) |
 | `GET /api/ozet` | | Gösterge (aşağıda) |
 
 ```jsonc
@@ -260,10 +288,11 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
 | İstek | Gövde | Yanıt |
 |---|---|---|
 | `GET /api/masraflar?kapsam=benim\|tumu&durum=onayda,taslak&q=&sayfa=1&adet=20` | | `{ kayitlar: MasrafOzet[], toplam, sayfa, adet }` (`tumu` yalnızca muhasebe/yonetici) |
-| `POST /api/masraflar` | `{ baslik, kategoriId, masrafTarihi, tutar, paraBirimi?, kur?, satici?, aciklama?, faturaIdler?, yerelKarsiliklar?, gonder? }` | `201 MasrafDetay` · `409 fatura_kullaniliyor` · `409 karsilik_eksik` (`gonder: true` iken) |
+| `POST /api/masraflar` | `{ baslik, kategoriId, masrafTarihi, tutar, paraBirimi?, kur?, satici?, aciklama?, faturaIdler?, yerelKarsiliklar?, faturaDuzeltmeleri?, gonder? }` | `201 MasrafDetay` · `409 fatura_kullaniliyor` · `409 fatura_eksik`, `409 fatura_mukerrer`, `409 karsilik_eksik` (`gonder: true` iken) |
 | `GET /api/masraflar/:id` | | `MasrafDetay` (sahibi, onaycıları, muhasebe, yonetici) |
 | `PATCH /api/masraflar/:id` | POST ile aynı alanlar, hepsi isteğe bağlı (`gonder` hariç) | `MasrafDetay` · `409 fatura_kullaniliyor` |
-| `POST /api/masraflar/:id/gonder` | | `MasrafDetay` · `409 onaylayan_yok` · `409 karsilik_eksik` |
+| `POST /api/masraflar/:id/gonder` | | `MasrafDetay` · `409 fatura_eksik` · `409 fatura_mukerrer` · `409 karsilik_eksik` · `409 onaylayan_yok` |
+| `GET /api/masraflar/:id/pdf` | | `application/pdf` onay belgesi (formu görebilen herkes; yalnızca `onaylandi` ve `odendi` durumunda, diğerlerinde `409 gecersiz_durum`) |
 | `POST /api/masraflar/:id/geri-cek` | | `MasrafDetay` |
 | `POST /api/masraflar/:id/iptal` | | `MasrafDetay` |
 | `POST /api/masraflar/:id/onayla` | `{ aciklama? }` | `MasrafDetay` · `409 onay_beklemiyor` |
@@ -274,6 +303,8 @@ Bütün gövdeler JSON'dur. Hata gövdesi `{"hata": {"kod": "...", "mesaj": "...
 | `GET /api/onaylar?durum=bekleyen\|karar` | | `MasrafOzet[]`: benim kararımı bekleyenler (eskiden yeniye) ya da karar verdiklerim (yeniden eskiye) |
 
 Alan kuralları: `baslik` 1–120 karakter. `masrafTarihi` gelecekte olamaz. `tutar` 0'dan büyük, en çok 2 ondalık. `paraBirimi` ISO 4217 (varsayılan `PARA_BIRIMI`). `kur` para birimi farklıysa zorunlu. `faturaIdler` en çok 20 farklı fatura kimliğidir; her biri kullanıcının yüklediği bir fatura olmalı ve iptal edilmemiş başka bir formda kullanılmamalıdır. Yüklemediği fatura `400 gecersiz_istek` ve `alanlar["faturaIdler.<sıra>"]` döner; başka formdaki fatura `409 fatura_kullaniliyor` döner, hangi faturanın sorunlu olduğu yine `alanlar["faturaIdler.<sıra>"]` içindedir (sıra 0'dan başlar). İki istek aynı faturayı aynı anda alırsa ikincisi `alanlar` olmadan `409 fatura_kullaniliyor` alabilir. Fatura başka bir kullanıcının formundaysa mesaj o formun numarasını vermez. `yerelKarsiliklar` fatura kimliğinden yerel para birimindeki tutara bir eşlemedir (`{ "<faturaId>": 6500 }`, tutar 0'dan büyük, en çok 2 ondalık). Yalnızca formdaki faturalar için verilebilir (`400`, `alanlar["yerelKarsiliklar.<faturaId>"]`). Karşılığa ihtiyacı olmayan faturanın karşılığı saklanmaz. Gönderimde eksik karşılık `409 karsilik_eksik` döner; eksik her fatura `alanlar["yerelKarsiliklar.<faturaId>"]` içindedir. Durumu uygun olmayan işlem `409 gecersiz_durum` döner.
+
+`faturaDuzeltmeleri` fatura kimliğinden düzeltmeye bir eşlemedir (`{ "<faturaId>": { fatura, kalemler } | null }`). Yalnızca listelenen faturalar değişir; `null` düzeltmeyi kaldırır (okunan sonuca döner); listelenmeyenlerin düzeltmesi korunur. Değer faturanın şemasının tamamıdır (`src/invoice/schema.ts`; metin boşsa `null`, tarih `YYYY-MM-DD`, para birimi ISO 4217, en çok 200 kalem). Yalnızca formda (bu istekteki `faturaIdler` uygulandıktan sonra) bulunan faturalar için verilebilir. Hatalar `400 gecersiz_istek` ve `alanlar["faturaDuzeltmeleri.<faturaId>.fatura.faturaTarihi"]` gibi yollarla döner. `409 fatura_eksik` her eksik alanı `alanlar["faturalar.<faturaId>.<alan>"]` ("Bu alan okunamadı; doldurun.") ile döner. `409 fatura_mukerrer` sorunlu faturayı `alanlar["faturalar.<faturaId>"]` ile döner. Fatura okunur okunmaz (form oluşmadan) düzeltilebilir: istemci okunan sonucu gösterir, kullanıcı düzeltir ve düzeltmeyi `POST /api/masraflar` ile gönderir. `POST /api/onay-akisi/onizle` de `faturaDuzeltmeleri` alır, böylece önizlemedeki onay tutarı düzeltilmiş toplamlarla hesaplanır.
 
 Doğrulama hatası: `400 gecersiz_istek`, `alanlar` her alanın Türkçe hata mesajını taşır.
 
@@ -292,6 +323,33 @@ Ayrıntılar:
 - Para birimi değiştirilip yeni `kur` verilmezse eski kur taşınmaz: yeni para birimi temel para birimi değilse `400` ve `alanlar.kur` döner.
 - `alanlar` anahtarları alan adlarıdır; dizi ve iç içe alanlarda yol olarak yazılır (`adimlar.0.limit`, `durum.0`). Belirli bir alana bağlanamayan hata (ör. bilinmeyen alan) `_` anahtarındadır. Devretme yalnızca yönetici işidir ve kullanıcı listesi gerektirdiği için panelden yapılır.
 
+### Bildirimler
+
+| İstek | Gövde | Yanıt |
+|---|---|---|
+| `GET /api/bildirimler?okunmamis=1&sayfa=1&adet=20` | | `{ kayitlar: Bildirim[], toplam, okunmamis, sayfa, adet }` (en yeni önce; yalnızca kendi bildirimleri; `adet` en çok 100) |
+| `POST /api/bildirimler/:id/okundu` | | `204` (başkasının bildirimi `404`) |
+| `POST /api/bildirimler/hepsi-okundu` | | `204` |
+
+```jsonc
+// Bildirim
+{ "id": 41, "tur": "onay_bekliyor", "baslik": "Onayınızı bekleyen masraf",
+  "mesaj": "Ayşe Kaya, \"Müşteri yemeği\" masrafını (1.800,00 TRY) onayınıza gönderdi.",
+  "form": { "id": 1001, "baslik": "Müşteri yemeği" },   // null olabilir
+  "olusturma": "…", "okundu": false }
+// tur: onay_bekliyor | hatirlatma | devredildi | onaylandi | reddedildi | odendi | odeme_bekliyor
+```
+
+### E-posta (yonetici)
+
+| İstek | Gövde | Yanıt |
+|---|---|---|
+| `POST /api/eposta/deneme` | `{ alici? }` (boşsa yöneticinin kendi adresi) | `202 { id }` · `409 mail_kapali` (`MAIL_GONDERIM=kapali`) |
+| `GET /api/eposta?durum=hata&adet=50` | | `[{ id, alici, konu, durum, deneme, sonHata, olusturma, gonderim }]` (en yeni önce; gövde ve ek dönmez) |
+| `POST /api/eposta/:id/yeniden` | | `202` (yalnızca `hata` durumundaki mail; deneme sayısı sıfırlanır) · `409 gecersiz_durum` (mail `hata` durumunda değil) · `409 mail_kapali` |
+
+`durum` süzgeci `bekliyor`, `gonderildi`, `hata` ya da `atlandi` olur. Test maili ve yeniden deneme denetim kaydına `eposta_deneme` ve `eposta_yeniden` olarak yazılır.
+
 ### Faturalar (mevcut uçlar, artık oturum ister)
 
 | İstek | Değişiklik |
@@ -305,6 +363,25 @@ Ayrıntılar:
 
 Mobil için önerilen okuma akışı: dosyayı `POST /api/invoices/toplu` ile gönder (`202`), `GET /api/invoices/toplu/:id` ile birkaç saniyede bir sor. Dosya `bitti` olunca `kayitId` ve `sonuc` gelir. Formu `sonuc.fatura` ile doldur (`genelToplam` → tutar, `paraBirimi`, `faturaTarihi` → masraf tarihi, `saticiUnvan` → satıcı), `faturaIdler: [kayitId]` ile kaydet. Birden çok fiş için her dosyanın `kayitId` değeri listeye eklenir ve tutar, aynı para birimindeki genel toplamların toplamıyla doldurulur. Formun ve yerel para biriminin dışındaki bir fişin yerel karşılığı kullanıcıdan istenir ve `yerelKarsiliklar` ile gönderilir. Okuma sırasında kullanıcı kategori ve açıklama girebilir.
 
-## 7. Ayarlar (`.env`)
+## 7. Bildirimler ve e-posta
+
+Bildirimler ve mailler, onları doğuran işlemle **aynı transaction'da** `bildirimler` ve `eposta_kutusu` tablolarına yazılır. İşlem geri alınırsa bildirim de oluşmaz. Uygulama içi bildirim her zaman oluşur (pasif kullanıcıya da). Mail yalnızca alıcı aktifse ve `mail_bildirim = 1` ise kuyruğa girer. `odeme_bekliyor` yalnızca aktif muhasebe kullanıcılarına gider. İşlemi yapan kişiye kendi işlemi için bildirim gitmez. Maildeki bağlantı `<UYGULAMA_ADRESI>/#/masraflar/<id>` biçimindedir (yalnızca http/https adres kabul edilir). Maildeki tutar formun tutarı ve para birimidir. PDF'teki zamanlar sunucunun yerel saatiyle yazılır; düzeltilen faturalar `*` ile işaretlenir. `MAIL_GONDERIM=smtp` iken `SMTP_HOST` ve `MAIL_GONDEREN` zorunludur; giden kutusu işi yalnızca bu modda çalışır. Hatırlatma işi mail kapalıyken de çalışır (uygulama içi bildirim gider, mail `atlandi` yazılır).
+
+| Olay | Alıcı | Tür | Mail eki |
+|---|---|---|---|
+| Gönderim (ilk `bekliyor` adım) ya da bir onaydan sonra sıradaki adım `bekliyor` oldu | O adımın onaycısı | `onay_bekliyor` | |
+| Devret | Yeni onaycı (adım `bekliyor` ise `onay_bekliyor`, `sirada` ise bilgi olarak `devredildi`) | `onay_bekliyor` / `devredildi` | |
+| Son onay (form `onaylandi`) | Form sahibi | `onaylandi` | Onay belgesi PDF |
+| Son onay (form `onaylandi`) | Aktif `muhasebe` kullanıcıları | `odeme_bekliyor` | |
+| Ret | Form sahibi (mesajda ret gerekçesi) | `reddedildi` | |
+| Ödendi | Form sahibi | `odendi` | |
+| Hatırlatma | `HATIRLATMA_BEKLEME_SAAT` saatten uzun `bekliyor` duran adımın onaycısı | `hatirlatma` | |
+
+- **Giden kutusu:** Sunucu içindeki bir iş `bekliyor` mailleri SMTP ile gönderir. Başarısız mail artan aralıklarla (1, 5, 15, 60 dakika…) en çok `MAIL_DENEME_SAYISI` kez denenir, sonra `hata` olur. `MAIL_GONDERIM=kapali` iken mailler `atlandi` olarak yazılır ve hiç gönderilmez; sonradan açmak eski mailleri göndermez. SMTP şifresi ve mail gövdeleri hiçbir kayda yazılmaz.
+- **Mail içeriği:** Düz metin ve HTML (bütün değerler HTML'e kaçışlı yazılır). Form başlığı, sahibi, tutarı ve durumu yazılır. `UYGULAMA_ADRESI` doluysa panelde formun bağlantısı eklenir. Fatura dosyaları eklenmez.
+- **Onay belgesi (PDF):** Form numarası, başlık, sahip ve departman, kategori, masraf tarihi, tutar, para birimi, kur, onay tutarı. Faturalar tablosu (fatura no, tarih, satıcı, vergi no, genel toplam; düzeltilen faturalar işaretli). Son turun onay adımları (sıra, onaycı, karar, karar zamanı, açıklama, yedek). Belgenin oluşturulma zamanı. Türkçe karakterler için depodaki gömülü yazı tipi kullanılır. Aynı belge `GET /api/masraflar/:id/pdf` ile indirilir.
+- **Hatırlatma:** Sunucu her gün `HATIRLATMA_SAATI`'nden (sunucunun yerel saati) sonra bir kez çalışır. `bekliyor` adımı `HATIRLATMA_BEKLEME_SAAT` saatten uzun beklemiş ve o gün hatırlatılmamış (`son_hatirlatma`) her onaycıya, adım başına bir bildirim ve mail gönderir. `HATIRLATMA_BEKLEME_SAAT=0` hatırlatmayı kapatır. Adımın bekleme süresi, formun gönderimi ile aynı turdaki son karardan hangisi daha yeniyse ondan sayılır; devretme bu süreyi sıfırlamaz.
+
+## 8. Ayarlar (`.env`)
 
 Bütün ayarlar kök dizindeki `.env` dosyasından okunur (`env.example` şablondur: `copy env.example .env`). Sunucu `node --env-file-if-exists=.env` ile başlar. `docker compose` de aynı dosyayı kullanır. Mobil uygulamanın ayarları `masraf-app/.env` içindedir (`EXPO_PUBLIC_*`).
