@@ -72,6 +72,23 @@ export interface OnayciYeri {
   readonly ustLimit: number | null;
 }
 
+/** The organisation an admin assigned to the user; a form carries its owner's (contract section 3). */
+export interface OrganizasyonOzet {
+  readonly id: number;
+  readonly kod: string;
+  readonly ad: string;
+  readonly aktif: boolean;
+}
+
+/** A cost centre. `gosterim` is what the user sees ("kod – açıklama", or just the code). */
+export interface MasrafMerkeziOzet {
+  readonly id: number;
+  readonly kod: string;
+  readonly aciklama: string | null;
+  readonly gosterim: string;
+  readonly aktif: boolean;
+}
+
 export interface Kullanici {
   readonly id: number;
   readonly eposta: string;
@@ -90,7 +107,85 @@ export interface Kullanici {
   readonly onaycilik: readonly OnayciYeri[];
   /** Whether notifications also come by e-mail (the user's choice; in-app notifications cannot be turned off). */
   readonly mailBildirim: boolean;
+  /** Null when the admin assigned none. */
+  readonly organizasyon: OrganizasyonOzet | null;
+  /** Cost centres assigned to the user, by code; empty when none. Only active ones can be picked on a form. */
+  readonly masrafMerkezleri: readonly MasrafMerkeziOzet[];
 }
+
+// --- Receipt fields (contract section 3, "Fiş alanları"; section 6, "Fiş alanları") ---
+
+/**
+ * kategori and masraf_merkezi are the form fields; fatura are the read invoice's header fields (their
+ * keys are FaturaBasligi keys); the rest are receipt fields the sender fills for each receipt.
+ */
+export type AlanTuru = 'kategori' | 'masraf_merkezi' | 'fatura' | 'liste' | 'metin' | 'uzun_metin' | 'sayi' | 'tarih';
+
+export interface AlanTanimi {
+  readonly id: number;
+  /** Stable key: what `fisAlanlari`, `alanlar`, `eksikAlanlar` and the rules use. */
+  readonly anahtar: string;
+  readonly ad: string;
+  /** form: kategori and masrafMerkezi; fis: everything filled per receipt (invoice header fields too). */
+  readonly duzey: 'form' | 'fis';
+  readonly tur: AlanTuru;
+  readonly zorunlu: boolean;
+  readonly aktif: boolean;
+  readonly sira: number;
+  readonly sistem: boolean;
+  /** Help text shown beside the field. */
+  readonly aciklama: string | null;
+  /** Only for liste: active option count; null otherwise. */
+  readonly secenekSayisi: number | null;
+}
+
+/** "When the condition field has this value, these fields are required." */
+export interface AlanKurali {
+  readonly id: number;
+  /** `kategori`, `masrafMerkezi` or the key of a liste receipt field. */
+  readonly kosulAlan: string;
+  readonly kosulDeger: { readonly id: number; readonly gosterim: string; readonly aktif: boolean };
+  /** Field keys (only active ones in GET /api/alanlar). */
+  readonly hedefler: readonly string[];
+}
+
+/** GET /api/alanlar (without tumu): active fields only, rules reduced to active fields. */
+export interface AlanlarYaniti {
+  readonly alanlar: readonly AlanTanimi[];
+  readonly kurallar: readonly AlanKurali[];
+}
+
+/** One option of a liste field. */
+export interface Secenek {
+  readonly id: number;
+  readonly kod: string;
+  readonly ad: string | null;
+  readonly gosterim: string;
+  readonly aktif: boolean;
+  readonly sira: number;
+}
+
+export interface SecenekListesi {
+  readonly kayitlar: readonly Secenek[];
+  readonly toplam: number;
+  readonly sayfa: number;
+  readonly adet: number;
+}
+
+/**
+ * A receipt field's value as the server returns it. `deger` goes back in requests: the option id for
+ * liste, a number for sayi, text otherwise (tarih YYYY-AA-GG). `gosterim` is what the user sees.
+ */
+export interface AlanDegeri {
+  readonly deger: number | string;
+  readonly gosterim: string;
+}
+
+/** Receipt field values by field key (only active fields; fatura header fields are not among them). */
+export type AlanDegerleri = Readonly<Record<string, AlanDegeri>>;
+
+/** A value as a request carries it in `fisAlanlari`; null (or empty text) deletes it. */
+export type FisDegeri = number | string | null;
 
 export interface Kategori {
   readonly id: number;
@@ -107,15 +202,25 @@ export interface KategoriOzet {
   readonly simge: string | null;
 }
 
+/** Background reading of a form's invoice files (contract section 3, "Arka planda okuma"). */
+export interface OkumaOzeti {
+  /** Files queued or being read. */
+  readonly bekleyen: number;
+  /** Files that could not be read. */
+  readonly hatali: number;
+}
+
 export interface MasrafOzet {
   readonly id: number;
   readonly baslik: string;
   readonly kategori: KategoriOzet;
   readonly masrafTarihi: string;
   readonly satici: string | null;
-  readonly tutar: number;
+  /** Null only on a draft whose amount was left empty; the server fills it once the invoices are read. */
+  readonly tutar: number | null;
   readonly paraBirimi: string;
-  readonly yerelTutar: number;
+  /** Null exactly when tutar is. */
+  readonly yerelTutar: number | null;
   readonly durum: MasrafDurum;
   readonly olusturan: KisiOzet;
   readonly olusturma: string;
@@ -124,10 +229,48 @@ export interface MasrafOzet {
   readonly siradakiOnayci: KisiOzet | null;
   /** The form's invoices in the order they were added; empty for a form without an invoice. */
   readonly faturaIdler: readonly string[];
+  /** Null when the form has no pending invoice file. */
+  readonly okuma: OkumaOzeti | null;
+  /** Null when none was chosen. */
+  readonly masrafMerkezi: MasrafMerkeziOzet | null;
+  /** The owner's organisation (updated on every save of the owner until the form is sent); null when none. */
+  readonly organizasyon: OrganizasyonOzet | null;
+}
+
+/** Where a pending invoice file stands: queued for a reader, being read, or failed. */
+export type BekleyenDurum = 'sirada' | 'okunuyor' | 'hata';
+
+/**
+ * An invoice file saved on the form but not read (yet). The server reads it in the background and, once
+ * read, moves it to the form's invoices (contract section 3).
+ */
+export interface BekleyenFatura {
+  /** SHA-256 of the file, 64 lowercase hex characters; what `bekleyenFaturalar` carries. */
+  readonly dosyaOzeti: string;
+  readonly dosyaAdi: string;
+  readonly mime: string;
+  readonly boyut: number;
+  readonly eklenme: string;
+  readonly durum: BekleyenDurum;
+  /** Place among the files waiting for Claude (1 = next); only while sirada and known, else null. */
+  readonly kuyrukSirasi: number | null;
+  /** Files read before this one, including those being read now; set together with kuyrukSirasi. */
+  readonly onundeki: number | null;
+  /** Set while durum is hata. */
+  readonly hata: { readonly kod: string; readonly mesaj: string } | null;
+  /** Receipt field values entered for this file; they move to the invoice once it is read. */
+  readonly alanlar: AlanDegerleri;
+  /** Required receipt fields that are empty (invoice header fields are not known before reading). */
+  readonly eksikAlanlar: readonly string[];
 }
 
 export interface MasrafFatura {
   readonly id: string;
+  /**
+   * SHA-256 (lowercase hex) of the file the invoice was read from: the same value as a pending invoice's
+   * `dosyaOzeti`, so it tells which pending file became this invoice. Null only for old records.
+   */
+  readonly dosyaOzeti: string | null;
   readonly dosyaAdi: string | null;
   readonly dosyaVar: boolean;
   readonly mime: string | null;
@@ -151,10 +294,16 @@ export interface MasrafFatura {
   readonly duzeltildi: boolean;
   /** The read result when duzeltildi; null otherwise. */
   readonly okunan: OkunanFatura | null;
-  /** Required fields empty in the effective information. */
-  readonly eksikAlanlar: readonly ZorunluAlan[];
+  /** Receipt field values (active fields, header fields excluded); {} when none. */
+  readonly alanlar: AlanDegerleri;
+  /**
+   * Required fields that are empty: first the header fields empty in the effective information (schema
+   * order), then the receipt fields (by order). Keys of AlanTanimi.
+   */
+  readonly eksikAlanlar: readonly string[];
 }
 
+/** The invoice header fields required out of the box (the admin can change the set). */
 export type ZorunluAlan = 'faturaNo' | 'faturaTarihi' | 'saticiUnvan' | 'genelToplam';
 
 /**
@@ -213,6 +362,12 @@ export interface MasrafDetay extends MasrafOzet {
   readonly sonuclanma: string | null;
   readonly odeme: string | null;
   readonly guncelleme: string;
+  /** The server sends the form to approval by itself once no pending invoice is left. */
+  readonly okununcaGonder: boolean;
+  /** Required form fields that are empty; for now only "masrafMerkezi". */
+  readonly eksikAlanlar: readonly string[];
+  /** Invoice files not read yet, in the order they were added; empty when none. */
+  readonly bekleyenFaturalar: readonly BekleyenFatura[];
   /** In the order they were added (same order as faturaIdler); empty for a form without an invoice. */
   readonly faturalar: readonly MasrafFatura[];
   readonly tutarFarki: TutarFarki | null;
@@ -250,7 +405,22 @@ export interface TercihIstegi {
 
 // --- Notifications ---
 
-export type BildirimTuru = 'onay_bekliyor' | 'hatirlatma' | 'devredildi' | 'onaylandi' | 'reddedildi' | 'odendi' | 'odeme_bekliyor';
+export type BildirimTuru =
+  | 'onay_bekliyor'
+  | 'hatirlatma'
+  | 'devredildi'
+  | 'onaylandi'
+  | 'reddedildi'
+  | 'odendi'
+  | 'odeme_bekliyor'
+  /** Background reading of the form's invoices finished; all were read. */
+  | 'okuma_bitti'
+  /** Background reading finished; some files could not be read. */
+  | 'okuma_hatasi'
+  /** "Okununca gönder": the server sent the form to approval. */
+  | 'onaya_gonderildi'
+  /** "Okununca gönder": a send check failed; the message says why. */
+  | 'onaya_gonderilemedi';
 
 export interface Bildirim {
   readonly id: number;
@@ -351,7 +521,11 @@ export interface MasrafAlanlari {
   readonly baslik: string;
   readonly kategoriId: number;
   readonly masrafTarihi: string;
-  readonly tutar: number;
+  /**
+   * Required to send. A draft may leave it out (POST) or clear it with null (PATCH, only a `taslak`); the
+   * server fills it from the invoices once they are read.
+   */
+  readonly tutar?: number | null;
   readonly paraBirimi?: string;
   readonly kur?: number | null;
   readonly satici?: string | null;
@@ -371,6 +545,26 @@ export interface MasrafAlanlari {
    * listed invoices change; only invoices on the form may be listed.
    */
   readonly faturaDuzeltmeleri?: Readonly<Record<string, OkunanFatura | null>>;
+  /**
+   * SHA-256 of the files still being read (`dosyaOzeti`), each once. Replaces the form's pending invoices
+   * entirely; leave it out to keep them. Whenever faturaIdler goes, this goes too, so an invoice read
+   * meanwhile is not dropped from the list (contract section 6, rule 3).
+   */
+  readonly bekleyenFaturalar?: readonly string[];
+  /** Send the form to approval once no pending invoice is left. Never together with `gonder: true`. */
+  readonly okununcaGonder?: boolean;
+  /**
+   * An active cost centre assigned to the owner, or null. Only while the masrafMerkezi field is active
+   * (else 400). The form's stored value may be sent again even if it became inactive. PATCH: leave it
+   * out to keep it; POST: left out, the owner's single active cost centre is chosen.
+   */
+  readonly masrafMerkeziId?: number | null;
+  /**
+   * Receipt field values by receipt: an invoice id for a read invoice, a file's SHA-256 for a file still
+   * being read (it also finds the invoice that file became). Each listed receipt's values are replaced
+   * as a whole (active fields left out are deleted); receipts not listed keep theirs.
+   */
+  readonly fisAlanlari?: Readonly<Record<string, Readonly<Record<string, FisDegeri>>>>;
 }
 
 export interface MasrafOlusturIstegi extends MasrafAlanlari {
@@ -415,7 +609,13 @@ export interface OkunanFatura {
 export interface KuyrukDosyasi {
   readonly sira: number;
   readonly dosyaAdi: string;
+  /** SHA-256 of the file; null for a file the server rejected. Saved as a pending invoice by this value. */
+  readonly dosyaOzeti: string | null;
   readonly durum: OkumaDurumu;
+  /** Place among the files waiting for Claude (1 = next) while sirada; else null. */
+  readonly kuyrukSirasi: number | null;
+  /** Files read before this one, including those being read now; set together with kuyrukSirasi. */
+  readonly onundeki: number | null;
   readonly kayitId: string | null;
   readonly onbellek: boolean;
   readonly hata: { readonly kod: string; readonly mesaj: string } | null;

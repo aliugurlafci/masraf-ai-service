@@ -7,7 +7,7 @@ import { el, icon, ICONS } from '../dom.js';
 import { downloadObjectUrl } from '../files.js';
 import { fmtCount, fmtCurrency, fmtDateShort, todayIso } from '../format.js';
 import { expenseHref } from '../expense-ui.js';
-import { amountTexts, categoryIcon, EXPENSE_STATUS, STATUS_ORDER, statusBadge } from '../labels.js';
+import { amountTexts, categoryIcon, EXPENSE_STATUS, readingTags, STATUS_ORDER, statusBadge } from '../labels.js';
 import { navigate } from '../router.js';
 import * as session from '../session.js';
 import {
@@ -200,7 +200,7 @@ function createListView(kapsam) {
         );
         const tbody = el('tbody', { className: 'stagger' });
         for (const m of rows) {
-          const { main, local } = amountTexts(m, base);
+          const { main, local, empty } = amountTexts(m, base);
           tbody.append(
             el(
               'tr',
@@ -231,8 +231,8 @@ function createListView(kapsam) {
               ),
               all ? el('td', { className: 't-owner', 'data-label': 'Oluşturan', text: m.olusturan?.adSoyad ?? '—' }) : null,
               el('td', { className: 't-date', 'data-label': 'Tarih', text: fmtDateShort(m.masrafTarihi) ?? '—' }),
-              el('td', { className: 'num t-amount', 'data-label': 'Tutar' }, el('span', { className: 'amount', text: main ?? '—' }), local ? el('span', { className: 'cell-sub', text: `≈ ${local}` }) : null),
-              el('td', { className: 't-status', 'data-label': 'Durum' }, statusBadge(m.durum)),
+              el('td', { className: 'num t-amount', 'data-label': 'Tutar' }, el('span', { className: `amount${empty ? ' is-empty' : ''}`, text: main ?? '—' }), local ? el('span', { className: 'cell-sub', text: `≈ ${local}` }) : null),
+              el('td', { className: 't-status', 'data-label': 'Durum' }, statusBadge(m.durum), readingTags(m.okuma)),
               el('td', { className: `t-next${m.siradakiOnayci ? '' : ' is-empty'}`, 'data-label': 'Sıradaki onaycı', text: m.siradakiOnayci?.adSoyad ?? '—' }),
             ),
           );

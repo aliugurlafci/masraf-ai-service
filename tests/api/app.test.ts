@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
@@ -319,11 +320,15 @@ describe('HTTP API', () => {
       expect(batch.dosyalar[0]).toEqual({
         sira: 1,
         dosyaAdi: 'a.pdf',
+        dosyaOzeti: createHash('sha256').update(pdf(1)).digest('hex'),
         durum: 'bitti',
         kayitId: first.headers.get('x-fatura-id'),
         onbellek: true,
         hata: null,
         sonuc: sampleInvoice(),
+        // Answered from the record: never in the queue.
+        kuyrukSirasi: null,
+        onundeki: null,
       });
       expect(batch.dosyalar[1]).toMatchObject({ durum: 'bitti', onbellek: true, sonuc: sampleInvoice() });
       expect(extract).toHaveBeenCalledTimes(2);

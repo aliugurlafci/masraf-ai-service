@@ -18,7 +18,22 @@ import {
   updateUser,
   type Kullanici,
 } from '../../src/users/users.ts';
-import { assignFlow, chainOf, closeTestDb, defaultFlowId, makeFlow, makeUser, resetDb, setFlow, testDb, TEST_PASSWORD } from '../db.ts';
+import { COST_CENTERS, deleteRecord, ORGANIZATIONS } from '../../src/definitions/lists.ts';
+import {
+  assignDefinitions,
+  assignFlow,
+  chainOf,
+  closeTestDb,
+  defaultFlowId,
+  makeCostCenter,
+  makeFlow,
+  makeOrganization,
+  makeUser,
+  resetDb,
+  setFlow,
+  testDb,
+  TEST_PASSWORD,
+} from '../db.ts';
 
 const MIN = 8;
 const TTL = 3_600_000;
@@ -68,6 +83,8 @@ describe('users and the approval flow', () => {
         onayAkisiId: null,
         onayAkisi: { id: await defaultFlowId(db), ad: 'Genel', varsayilan: true },
         onaycilik: [],
+        organizasyon: null,
+        masrafMerkezleri: [],
         olusturma: expect.any(String),
       });
       expect(user).not.toHaveProperty('sifreOzeti');
@@ -602,6 +619,94 @@ describe('users and the approval flow', () => {
       expect((await updateUser(db, admin, a.id, { aktif: false })).aktif).toBe(false);
       expect((await listAudit(db, 10)).find((e) => e.islem === 'onay_akisi_silindi')?.ayrinti).toBe('Satış (1 kullanıcı varsayılan akışa geçti)');
       await fails(deleteFlow(db, admin, satis), 404, 'bulunamadi');
+    });
+  });
+  describe('organisation and cost centres', () => {
+    let admin: Kullanici;
+
+    beforeEach(async () => {
+      admin = await makeUser(db, { rol: 'yonetici', adSoyad: 'Yönetici' });
+    });
+
+    const centreIds = (u: Kullanici | null): number[] => (u?.masrafMerkezleri ?? []).map((m) => m.id);
+
+    it('creates a user with them and lists the cost centres by code', async () => {
+      const org = await makeOrganization(db, '1000', 'Şenpiliç');
+      const z = await makeCostCenter(db, 'Z-9', 'Son');
+      const a = await makeCostCenter(db, 'A-1');
+      const user = await createUser(db, admin, { eposta: 'ayse@firma.com', adSoyad: 'Ayşe', rol: 'calisan', sifre: 'GizliSifre1', organizasyonId: org, masrafMerkeziIdler: [z, a] }, MIN);
+      expect(user.organizasyon).toEqual({ id: org, kod: '1000', ad: 'Şenpiliç', aktif: true });
+      expect(user.masrafMerkezleri).toEqual([
+        { id: a, kod: 'A-1', aciklama: null, gosterim: 'A-1', aktif: true },
+        { id: z, kod: 'Z-9', aciklama: 'Son', gosterim: 'Z-9 – Son', aktif: true },
+      ]);
+      expect((await listUsers(db)).find((u) => u.id === user.id)).toEqual(user);
+      expect((await findLoginUser(db, 'ayse@firma.com'))?.kullanici).toEqual(user);
+    });
+
+    it('replaces the cost centres only when given, and leaves the organisation when not given', async () => {
+      const user = await makeUser(db);
+      const org = await makeOrganization(db, '1000');
+      const [a, b, c] = [await makeCostCenter(db, 'A'), await makeCostCenter(db, 'B'), await makeCostCenter(db, 'C')];
+      await assignDefinitions(db, user.id, org, [a, b]);
+      expect(centreIds(await updateUser(db, admin, user.id, { departman: 'Satış' }))).toEqual([a, b]);
+      const changed = await updateUser(db, admin, user.id, { masrafMerkeziIdler: [c, b] });
+      expect(changed.organizasyon?.id).toBe(org);
+      expect(centreIds(changed)).toEqual([b, c]);
+      expect(centreIds(await updateUser(db, admin, user.id, { masrafMerkeziIdler: [] }))).toEqual([]);
+      expect((await updateUser(db, admin, user.id, { organizasyonId: null })).organizasyon).toBeNull();
+    });
+
+    it('refuses records that do not exist and inactive ones the user does not have yet', async () => {
+      const user = await makeUser(db);
+      const passiveOrg = await makeOrganization(db, '9000', 'Kapalı', false);
+      const passive = await makeCostCenter(db, 'PASIF', null, false);
+      const active = await makeCostCenter(db, 'AKTIF');
+      await expect(updateUser(db, admin, user.id, { organizasyonId: passiveOrg })).rejects.toMatchObject({
+        status: 400,
+        code: 'gecersiz_istek',
+        details: { alanlar: { organizasyonId: 'Organizasyon pasif; kullanıcıya tanımlanamaz.' } },
+      });
+      await expect(updateUser(db, admin, user.id, { organizasyonId: 999_999, masrafMerkeziIdler: [active, 999_999, passive] })).rejects.toMatchObject({
+        details: {
+          alanlar: {
+            organizasyonId: 'Organizasyon bulunamadı.',
+            'masrafMerkeziIdler.1': 'Masraf merkezi bulunamadı.',
+            'masrafMerkeziIdler.2': 'Masraf merkezi pasif; kullanıcıya tanımlanamaz.',
+          },
+        },
+      });
+      expect(centreIds(await getUser(db, user.id))).toEqual([]);
+      // Already assigned, then deactivated: may stay.
+      await assignDefinitions(db, user.id, passiveOrg, [passive]);
+      const kept = await updateUser(db, admin, user.id, { organizasyonId: passiveOrg, masrafMerkeziIdler: [passive, active] });
+      expect(kept.organizasyon).toMatchObject({ id: passiveOrg, aktif: false });
+      expect(centreIds(kept)).toEqual([active, passive]);
+    });
+
+    it('keeps an assigned organisation or cost centre from being deleted', async () => {
+      const user = await makeUser(db);
+      const org = await makeOrganization(db, '1000');
+      const centre = await makeCostCenter(db, 'MM');
+      await updateUser(db, admin, user.id, { organizasyonId: org, masrafMerkeziIdler: [centre] });
+      await fails(deleteRecord(db, admin, ORGANIZATIONS, org), 409, 'kullaniliyor');
+      await fails(deleteRecord(db, admin, COST_CENTERS, centre), 409, 'kullaniliyor');
+      await updateUser(db, admin, user.id, { organizasyonId: null, masrafMerkeziIdler: [] });
+      await deleteRecord(db, admin, ORGANIZATIONS, org);
+      await deleteRecord(db, admin, COST_CENTERS, centre);
+      expect(await getUser(db, user.id)).toMatchObject({ organizasyon: null, masrafMerkezleri: [] });
+    });
+
+    it('writes the changes to the audit log', async () => {
+      const user = await makeUser(db, { adSoyad: 'Mehmet' });
+      const [o1, o2] = [await makeOrganization(db, '1000'), await makeOrganization(db, '2000')];
+      const [a, b] = [await makeCostCenter(db, 'A'), await makeCostCenter(db, 'B')];
+      await updateUser(db, admin, user.id, { organizasyonId: o1, masrafMerkeziIdler: [a] });
+      await updateUser(db, admin, user.id, { organizasyonId: o2, masrafMerkeziIdler: [b] });
+      expect((await listAudit(db, 2)).map((e) => e.ayrinti)).toEqual([
+        'Mehmet: organizasyon 1000 → 2000, masraf merkezleri +B -A',
+        'Mehmet: organizasyon - → 1000, masraf merkezleri +A',
+      ]);
     });
   });
 });

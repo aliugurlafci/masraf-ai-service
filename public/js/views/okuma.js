@@ -407,7 +407,7 @@ function onEvent(event) {
       state.fresh = true;
       setUrl(a.kayitId, false);
       routeTarget(true);
-    } else if (!before || before.durum !== a.durum || before.model !== a.model) {
+    } else if (!before || before.durum !== a.durum || before.model !== a.model || before.kuyrukSirasi !== a.kuyrukSirasi || before.onundeki !== a.onundeki) {
       renderDetail(false);
     }
   }

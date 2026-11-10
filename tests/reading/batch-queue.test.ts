@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { createBatchQueue, toItemError, type BatchInput } from '../../src/reading/batch-queue.ts';
 import { ExtractionError, type Extraction, type ExtractInvoice } from '../../src/claude/extractor.ts';
@@ -118,6 +119,54 @@ describe('batch queue', () => {
     const { record } = await single;
     await vi.waitFor(() => expect(queue.get(batch.id)?.dosyalar[0]).toMatchObject({ durum: 'bitti', kayitId: record.id }));
     expect(extract).toHaveBeenCalledTimes(1);
+  });
+
+  it('names each file by its SHA-256 and shows its place while it waits', async () => {
+    const pending = held();
+    const queue = createBatchQueue(createInvoiceReader(extract, storage, 1), { esZamanli: 1 });
+    const refused: BatchInput = { name: 'not.txt', hata: { kod: 'desteklenmeyen_dosya', mesaj: 'PDF değil.' } };
+    const batch = await queue.add([input(1), input(2), refused, input(3)], false);
+    const sha = (i: number): string => createHash('sha256').update(pdf(i)).digest('hex');
+
+    expect(batch.dosyalar.map(({ durum, dosyaOzeti, kuyrukSirasi, onundeki }) => ({ durum, dosyaOzeti, kuyrukSirasi, onundeki }))).toEqual([
+      { durum: 'okunuyor', dosyaOzeti: sha(1), kuyrukSirasi: null, onundeki: null },
+      { durum: 'sirada', dosyaOzeti: sha(2), kuyrukSirasi: 1, onundeki: 1 },
+      { durum: 'hata', dosyaOzeti: null, kuyrukSirasi: null, onundeki: null },
+      { durum: 'sirada', dosyaOzeti: sha(3), kuyrukSirasi: 2, onundeki: 2 },
+    ]);
+
+    pending.shift()?.();
+    await vi.waitFor(() => expect(queue.get(batch.id)?.dosyalar[1]?.durum).toBe('okunuyor'));
+    expect(queue.get(batch.id)?.dosyalar).toEqual([
+      expect.objectContaining({ durum: 'bitti', kuyrukSirasi: null, onundeki: null, dosyaOzeti: sha(1) }),
+      expect.objectContaining({ durum: 'okunuyor', kuyrukSirasi: null, onundeki: null }),
+      expect.objectContaining({ durum: 'hata', kuyrukSirasi: null, onundeki: null }),
+      expect.objectContaining({ durum: 'sirada', kuyrukSirasi: 1, onundeki: 1 }),
+    ]);
+
+    // The last file fails: its place is cleared as well.
+    extract.mockRejectedValueOnce(new ExtractionError('claude_failed', 'Claude faturayı okuyamadı.'));
+    pending.shift()?.();
+    await vi.waitFor(() => expect(queue.get(batch.id)?.bitti).toBe(true));
+    expect(queue.get(batch.id)?.dosyalar.map(({ durum, kuyrukSirasi, onundeki }) => [durum, kuyrukSirasi, onundeki])).toEqual([
+      ['bitti', null, null],
+      ['bitti', null, null],
+      ['hata', null, null],
+      ['hata', null, null],
+    ]);
+  });
+
+  it('names a file answered from the records by its SHA-256, with no place', async () => {
+    const reader = createInvoiceReader(extract, storage, 1);
+    await reader({ buffer: pdf(1), type: PDF, name: 'eski.pdf', force: false });
+    const batch = await createBatchQueue(reader, { esZamanli: 1 }).add([input(1)], false);
+    expect(batch.dosyalar[0]).toMatchObject({
+      durum: 'bitti',
+      onbellek: true,
+      dosyaOzeti: createHash('sha256').update(pdf(1)).digest('hex'),
+      kuyrukSirasi: null,
+      onundeki: null,
+    });
   });
 
   it('hides the details of unexpected errors', () => {

@@ -12,10 +12,12 @@ import { approvalsView } from './views/approvals.js';
 import { auditView } from './views/audit.js';
 import { categoriesView } from './views/categories.js';
 import { dashboardView } from './views/dashboard.js';
+import { costCentresView, optionListsView, organizationsView } from './views/definitions.js';
 import { emailView } from './views/email.js';
 import { expenseDetailView } from './views/expense-detail.js';
 import { expenseFormView } from './views/expense-form.js';
 import { allExpensesView, myExpensesView } from './views/expenses.js';
+import { fieldsAdminView } from './views/fields-admin.js';
 import { flowView } from './views/flow.js';
 import { renderLogin, renderPasswordChange } from './views/login.js';
 import { forbiddenView, notFoundView } from './views/misc.js';
@@ -42,7 +44,11 @@ const ROUTES = [
   { name: 'okuma-kayit', path: '/okuma/:target', params: { target: RECORD_OR_ACTIVITY }, title: 'Fatura okuma', nav: '/okuma', view: okumaView },
   { name: 'kullanicilar', path: '/kullanicilar', title: 'Kullanıcılar', nav: '/kullanicilar', roles: MANAGER, view: usersView },
   { name: 'onay-akisi', path: '/onay-akisi', title: 'Onay akışları', nav: '/onay-akisi', roles: MANAGER, view: flowView },
+  { name: 'organizasyonlar', path: '/organizasyonlar', title: 'Organizasyonlar', nav: '/organizasyonlar', roles: MANAGER, view: organizationsView },
+  { name: 'masraf-merkezleri', path: '/masraf-merkezleri', title: 'Masraf merkezleri', nav: '/masraf-merkezleri', roles: MANAGER, view: costCentresView },
   { name: 'kategoriler', path: '/kategoriler', title: 'Kategoriler', nav: '/kategoriler', roles: MANAGER, view: categoriesView },
+  { name: 'fis-listeleri', path: '/fis-listeleri', title: 'Fiş listeleri', nav: '/fis-listeleri', roles: MANAGER, view: optionListsView },
+  { name: 'alanlar', path: '/alanlar', title: 'Alan yönetimi', nav: '/alanlar', roles: MANAGER, view: fieldsAdminView },
   { name: 'denetim', path: '/denetim', title: 'Denetim kaydı', nav: '/denetim', roles: MANAGER, view: auditView },
   { name: 'bildirimler', path: '/bildirimler', title: 'Bildirimler', nav: null, view: notificationsView },
   { name: 'eposta', path: '/eposta', title: 'E-posta', nav: '/eposta', roles: MANAGER, view: emailView },
@@ -68,9 +74,19 @@ const NAV = [
     items: [
       { path: '/kullanicilar', label: 'Kullanıcılar', icon: ICONS.users },
       { path: '/onay-akisi', label: 'Onay akışları', icon: ICONS.flow },
-      { path: '/kategoriler', label: 'Kategoriler', icon: ICONS.tag },
       { path: '/eposta', label: 'E-posta', icon: ICONS.mail },
       { path: '/denetim', label: 'Denetim kaydı', icon: ICONS.log },
+    ],
+  },
+  {
+    title: 'Tanımlar',
+    roles: MANAGER,
+    items: [
+      { path: '/organizasyonlar', label: 'Organizasyonlar', icon: ICONS.building },
+      { path: '/masraf-merkezleri', label: 'Masraf merkezleri', icon: ICONS.target },
+      { path: '/kategoriler', label: 'Kategoriler', icon: ICONS.tag },
+      { path: '/fis-listeleri', label: 'Fiş listeleri', icon: ICONS.list },
+      { path: '/alanlar', label: 'Alan yönetimi', icon: ICONS.sliders },
     ],
   },
 ];

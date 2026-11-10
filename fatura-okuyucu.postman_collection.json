@@ -50,6 +50,34 @@
       "key": "akisId",
       "value": "1",
       "type": "string"
+    },
+    {
+      "key": "organizasyonId",
+      "value": ""
+    },
+    {
+      "key": "masrafMerkeziId",
+      "value": ""
+    },
+    {
+      "key": "kategoriId",
+      "value": "1"
+    },
+    {
+      "key": "alanId",
+      "value": ""
+    },
+    {
+      "key": "alanAnahtari",
+      "value": "etiket"
+    },
+    {
+      "key": "secenekId",
+      "value": ""
+    },
+    {
+      "key": "kuralId",
+      "value": ""
     }
   ],
   "item": [
@@ -311,9 +339,51 @@
                 }
               ]
             },
-            "description": "`kapsam=tumu` yalnızca muhasebe ve yönetici içindir. `durum` virgülle birden çok değer alır: taslak, onayda, onaylandi, reddedildi, odendi, iptal."
+            "description": "`kapsam=tumu` yalnızca muhasebe ve yönetici içindir. `durum` virgülle birden çok değer alır: taslak, onayda, onaylandi, reddedildi, odendi, iptal. Okuması bitmemiş faturası olan taslakta `okuma` `{bekleyen, hatali}` sayılarını verir (yoksa `null`); tutarı henüz girilmemiş taslakta `tutar` ve `yerelTutar` `null` olur."
           },
-          "response": []
+          "response": [
+            {
+              "name": "Liste",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/masraflar?kapsam=benim&sayfa=1&adet=20",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "masraflar"
+                  ],
+                  "query": [
+                    {
+                      "key": "kapsam",
+                      "value": "benim"
+                    },
+                    {
+                      "key": "sayfa",
+                      "value": "1"
+                    },
+                    {
+                      "key": "adet",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"kayitlar\": [\n    {\n      \"id\": 1002,\n      \"baslik\": \"Havalimanı taksisi\",\n      \"kategori\": {\n        \"id\": 2,\n        \"ad\": \"Ulaşım\",\n        \"simge\": \"ulasim\"\n      },\n      \"masrafTarihi\": \"2026-11-08\",\n      \"satici\": null,\n      \"tutar\": null,\n      \"paraBirimi\": \"TRY\",\n      \"yerelTutar\": null,\n      \"durum\": \"taslak\",\n      \"olusturan\": {\n        \"id\": 3,\n        \"adSoyad\": \"Ayşe Kaya\"\n      },\n      \"olusturma\": \"2026-11-09T08:14:03.512Z\",\n      \"gonderim\": null,\n      \"siradakiOnayci\": null,\n      \"faturaIdler\": [],\n      \"okuma\": {\n        \"bekleyen\": 1,\n        \"hatali\": 0\n      }\n    },\n    {\n      \"id\": 1003,\n      \"baslik\": \"Kasım yazılım giderleri\",\n      \"kategori\": {\n        \"id\": 5,\n        \"ad\": \"Ofis\",\n        \"simge\": \"ofis\"\n      },\n      \"masrafTarihi\": \"2026-11-05\",\n      \"satici\": null,\n      \"tutar\": null,\n      \"paraBirimi\": \"TRY\",\n      \"yerelTutar\": null,\n      \"durum\": \"taslak\",\n      \"olusturan\": {\n        \"id\": 3,\n        \"adSoyad\": \"Ayşe Kaya\"\n      },\n      \"olusturma\": \"2026-11-09T07:52:40.118Z\",\n      \"gonderim\": null,\n      \"siradakiOnayci\": null,\n      \"faturaIdler\": [\n        \"20261105-163012-0b9c44d1\"\n      ],\n      \"okuma\": {\n        \"bekleyen\": 0,\n        \"hatali\": 1\n      }\n    },\n    {\n      \"id\": 1001,\n      \"baslik\": \"Müşteri yemeği\",\n      \"kategori\": {\n        \"id\": 1,\n        \"ad\": \"Yemek\",\n        \"simge\": \"yemek\"\n      },\n      \"masrafTarihi\": \"2026-11-05\",\n      \"satici\": \"Örnek Lokanta\",\n      \"tutar\": 1800,\n      \"paraBirimi\": \"TRY\",\n      \"yerelTutar\": 1800,\n      \"durum\": \"onayda\",\n      \"olusturan\": {\n        \"id\": 3,\n        \"adSoyad\": \"Ayşe Kaya\"\n      },\n      \"olusturma\": \"2026-11-09T08:10:12.304Z\",\n      \"gonderim\": \"2026-11-09T08:11:30.920Z\",\n      \"siradakiOnayci\": {\n        \"id\": 2,\n        \"adSoyad\": \"Mehmet Demir\"\n      },\n      \"faturaIdler\": [],\n      \"okuma\": null\n    }\n  ],\n  \"toplam\": 3,\n  \"sayfa\": 1,\n  \"adet\": 20\n}"
+            }
+          ]
         },
         {
           "name": "Masraf oluştur",
@@ -340,7 +410,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"baslik\": \"Müşteri yemeği\",\n  \"kategoriId\": 1,\n  \"masrafTarihi\": \"2026-11-05\",\n  \"tutar\": 1800,\n  \"paraBirimi\": \"TRY\",\n  \"satici\": \"Örnek Lokanta\",\n  \"aciklama\": \"\",\n  \"faturaIdler\": [],\n  \"gonder\": false\n}",
+              "raw": "{\n  \"baslik\": \"Müşteri yemeği\",\n  \"kategoriId\": 1,\n  \"masrafTarihi\": \"2026-11-05\",\n  \"tutar\": 1800,\n  \"paraBirimi\": \"TRY\",\n  \"satici\": \"Örnek Lokanta\",\n  \"aciklama\": \"\",\n  \"faturaIdler\": [],\n  \"masrafMerkeziId\": null,\n  \"fisAlanlari\": {},\n  \"gonder\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -357,9 +427,92 @@
                 "masraflar"
               ]
             },
-            "description": "`faturaIdler` sizin yüklediğiniz faturaların kimlikleridir (en çok 20, eklenme sırasıyla), örneğin `[\"{{faturaId}}\"]`. Bir fatura iptal edilmemiş yalnızca bir formda kullanılabilir (`409 fatura_kullaniliyor`). Düzenlemede (`PATCH`) gönderilen liste, formun faturalarının tamamı yerine geçer. Formun ve yerel para biriminin dışındaki bir faturanın yerel karşılığı `yerelKarsiliklar` ile verilir, örneğin `{\"{{faturaId}}\": 6500}`; karşılığı eksik form onaya gönderilemez (`409 karsilik_eksik`). `gonder: true` formu kaydedip hemen onaya gönderir."
+            "description": "`faturaIdler` sizin yüklediğiniz faturaların kimlikleridir (en çok 20, eklenme sırasıyla), örneğin `[\"{{faturaId}}\"]`. Bir fatura iptal edilmemiş yalnızca bir formda kullanılabilir (`409 fatura_kullaniliyor`). Düzenlemede (`PATCH`) gönderilen liste, formun faturalarının tamamı yerine geçer. Formun ve yerel para biriminin dışındaki bir faturanın yerel karşılığı `yerelKarsiliklar` ile verilir, örneğin `{\"{{faturaId}}\": 6500}`; karşılığı eksik form onaya gönderilemez (`409 karsilik_eksik`). `gonder: true` formu kaydedip hemen onaya gönderir.\n\nOkumayı beklemeden kaydetmek için (\"Okunmadan taslak kaydet\" örneği): okunmuş dosyaların kayıt kimlikleri `faturaIdler`, okunmakta olan dosyaların `dosyaOzeti` değerleri (`POST /api/invoices/toplu` yanıtından, 64 küçük harf onaltılık) `bekleyenFaturalar` ile gönderilir. Taslakta `tutar` gönderilmeyebilir ya da `null` olabilir; faturaların hepsi okununca sunucu boş tutarı ve satıcıyı faturalardan doldurur. `okununcaGonder: true` ise bekleyen fatura kalmadığında sunucu formu sizin adınıza onaya göndermeyi dener. `gonder: true` ile `okununcaGonder: true` birlikte gönderilemez (`400`); `gonder: true` iken bekleyen fatura kalırsa `409 okuma_suruyor` döner ve form oluşturulmaz. Sunucuda bulunamayan özet `400 gecersiz_istek` ve `alanlar[\"bekleyenFaturalar.<sıra>\"]` döner. Fatura listesi ile bekleyen faturaların toplamı en çok 20'dir.\n\n`masrafMerkeziId` size tanımlı aktif bir masraf merkezidir (`GET /api/ben` yanıtındaki `kullanici.masrafMerkezleri`); gönderilmezse ve tek masraf merkeziniz varsa o seçilir. `fisAlanlari` her fiş için alan değerleridir: anahtar fatura kimliği ya da okunmakta olan dosyanın `dosyaOzeti`, değer `{ \"<alanAnahtari>\": seçenek kimliği | metin | sayı | null }`. Örnek: `{\"{{faturaId}}\": {\"etiket\": 33, \"not\": \"Araç yıkama\"}}`. Alanlar `GET /api/alanlar` ile gelir. Eksik zorunlu alanla gönderim `409 alan_eksik` döner; taslak kaydı serbesttir."
           },
-          "response": []
+          "response": [
+            {
+              "name": "Taslak kaydedildi",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"baslik\": \"Müşteri yemeği\",\n  \"kategoriId\": 1,\n  \"masrafTarihi\": \"2026-11-05\",\n  \"tutar\": 1800,\n  \"paraBirimi\": \"TRY\",\n  \"satici\": \"Örnek Lokanta\",\n  \"aciklama\": \"\",\n  \"faturaIdler\": [],\n  \"gonder\": false\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/masraflar",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "masraflar"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"id\": 1001,\n  \"baslik\": \"Müşteri yemeği\",\n  \"kategori\": {\n    \"id\": 1,\n    \"ad\": \"Yemek\",\n    \"simge\": \"yemek\"\n  },\n  \"masrafTarihi\": \"2026-11-05\",\n  \"satici\": \"Örnek Lokanta\",\n  \"tutar\": 1800,\n  \"paraBirimi\": \"TRY\",\n  \"yerelTutar\": 1800,\n  \"durum\": \"taslak\",\n  \"olusturan\": {\n    \"id\": 3,\n    \"adSoyad\": \"Ayşe Kaya\"\n  },\n  \"olusturma\": \"2026-11-09T08:10:12.304Z\",\n  \"gonderim\": null,\n  \"siradakiOnayci\": null,\n  \"faturaIdler\": [],\n  \"okuma\": null,\n  \"aciklama\": null,\n  \"kur\": null,\n  \"onayTutari\": null,\n  \"tur\": 0,\n  \"sonuclanma\": null,\n  \"odeme\": null,\n  \"guncelleme\": \"2026-11-09T08:10:12.304Z\",\n  \"okununcaGonder\": false,\n  \"bekleyenFaturalar\": [],\n  \"faturalar\": [],\n  \"tutarFarki\": null,\n  \"onaylar\": [],\n  \"gecmis\": [\n    {\n      \"islem\": \"olusturuldu\",\n      \"kullanici\": {\n        \"id\": 3,\n        \"adSoyad\": \"Ayşe Kaya\"\n      },\n      \"aciklama\": null,\n      \"tarih\": \"2026-11-09T08:10:12.304Z\"\n    }\n  ],\n  \"izinler\": {\n    \"duzenle\": true,\n    \"gonder\": true,\n    \"geriCek\": false,\n    \"iptal\": true,\n    \"onayla\": false,\n    \"reddet\": false,\n    \"odendi\": false,\n    \"devret\": false\n  }\n}"
+            },
+            {
+              "name": "Okunmadan taslak kaydet",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"baslik\": \"Havalimanı taksisi\",\n  \"kategoriId\": 2,\n  \"masrafTarihi\": \"2026-11-08\",\n  \"paraBirimi\": \"TRY\",\n  \"aciklama\": \"\",\n  \"faturaIdler\": [],\n  \"bekleyenFaturalar\": [\n    \"91175a111b7211c7aee37bd71b81a6bbc3c78beaa44d587bf32656b006c7ccaa\"\n  ],\n  \"okununcaGonder\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/masraflar",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "masraflar"
+                  ]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"id\": 1002,\n  \"baslik\": \"Havalimanı taksisi\",\n  \"kategori\": {\n    \"id\": 2,\n    \"ad\": \"Ulaşım\",\n    \"simge\": \"ulasim\"\n  },\n  \"masrafTarihi\": \"2026-11-08\",\n  \"satici\": null,\n  \"tutar\": null,\n  \"paraBirimi\": \"TRY\",\n  \"yerelTutar\": null,\n  \"durum\": \"taslak\",\n  \"olusturan\": {\n    \"id\": 3,\n    \"adSoyad\": \"Ayşe Kaya\"\n  },\n  \"olusturma\": \"2026-11-09T08:14:03.512Z\",\n  \"gonderim\": null,\n  \"siradakiOnayci\": null,\n  \"faturaIdler\": [],\n  \"okuma\": {\n    \"bekleyen\": 1,\n    \"hatali\": 0\n  },\n  \"aciklama\": null,\n  \"kur\": null,\n  \"onayTutari\": null,\n  \"tur\": 0,\n  \"sonuclanma\": null,\n  \"odeme\": null,\n  \"guncelleme\": \"2026-11-09T08:14:03.512Z\",\n  \"okununcaGonder\": true,\n  \"bekleyenFaturalar\": [\n    {\n      \"dosyaOzeti\": \"91175a111b7211c7aee37bd71b81a6bbc3c78beaa44d587bf32656b006c7ccaa\",\n      \"dosyaAdi\": \"fis.jpg\",\n      \"mime\": \"image/jpeg\",\n      \"boyut\": 391022,\n      \"eklenme\": \"2026-11-09T08:14:03.512Z\",\n      \"durum\": \"sirada\",\n      \"kuyrukSirasi\": 3,\n      \"onundeki\": 4,\n      \"hata\": null\n    }\n  ],\n  \"faturalar\": [],\n  \"tutarFarki\": null,\n  \"onaylar\": [],\n  \"gecmis\": [\n    {\n      \"islem\": \"olusturuldu\",\n      \"kullanici\": {\n        \"id\": 3,\n        \"adSoyad\": \"Ayşe Kaya\"\n      },\n      \"aciklama\": \"1 fatura okunmayı bekliyor.\",\n      \"tarih\": \"2026-11-09T08:14:03.512Z\"\n    }\n  ],\n  \"izinler\": {\n    \"duzenle\": true,\n    \"gonder\": true,\n    \"geriCek\": false,\n    \"iptal\": true,\n    \"onayla\": false,\n    \"reddet\": false,\n    \"odendi\": false,\n    \"devret\": false\n  }\n}"
+            }
+          ]
         },
         {
           "name": "Masrafı getir",
@@ -376,9 +529,39 @@
                 "masraflar",
                 "{{masrafId}}"
               ]
-            }
+            },
+            "description": "Sahibi, onaycıları, muhasebe ve yönetici görebilir. Okuması bitmemiş faturalar `bekleyenFaturalar` listesindedir (`durum`: `sirada`, `okunuyor` ya da `hata`); `sirada` iken `kuyrukSirasi` ve `onundeki` sıradaki yeri verir. Okunan dosya fatura olarak `faturalar` listesinin sonuna eklenir; `faturalar[].dosyaOzeti` hangi bekleyen dosyanın bu faturaya dönüştüğünü gösterir. Kaydedilmiş formda okumaları izlemek için bu isteği birkaç saniyede bir çalıştırın."
           },
-          "response": []
+          "response": [
+            {
+              "name": "Okunamayan fatura var",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/masraflar/1003",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "masraflar",
+                    "1003"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"id\": 1003,\n  \"baslik\": \"Kasım yazılım giderleri\",\n  \"kategori\": {\n    \"id\": 5,\n    \"ad\": \"Ofis\",\n    \"simge\": \"ofis\"\n  },\n  \"masrafTarihi\": \"2026-11-05\",\n  \"satici\": null,\n  \"tutar\": null,\n  \"paraBirimi\": \"TRY\",\n  \"yerelTutar\": null,\n  \"durum\": \"taslak\",\n  \"olusturan\": {\n    \"id\": 3,\n    \"adSoyad\": \"Ayşe Kaya\"\n  },\n  \"olusturma\": \"2026-11-09T07:52:40.118Z\",\n  \"gonderim\": null,\n  \"siradakiOnayci\": null,\n  \"faturaIdler\": [\n    \"20261105-163012-0b9c44d1\"\n  ],\n  \"okuma\": {\n    \"bekleyen\": 0,\n    \"hatali\": 1\n  },\n  \"aciklama\": null,\n  \"kur\": null,\n  \"onayTutari\": null,\n  \"tur\": 0,\n  \"sonuclanma\": null,\n  \"odeme\": null,\n  \"guncelleme\": \"2026-11-09T07:55:02.731Z\",\n  \"okununcaGonder\": true,\n  \"bekleyenFaturalar\": [\n    {\n      \"dosyaOzeti\": \"0bca368d50b7895df42b62755a0780ee220695935467d2bbdff8aebbe29ff168\",\n      \"dosyaAdi\": \"aralik.pdf\",\n      \"mime\": \"application/pdf\",\n      \"boyut\": 62340,\n      \"eklenme\": \"2026-11-09T07:52:40.118Z\",\n      \"durum\": \"hata\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"hata\": {\n        \"kod\": \"claude_limit\",\n        \"mesaj\": \"Claude abonelik kullanım limitine ulaşıldı; bir süre sonra tekrar deneyin. (usage limit reached)\"\n      }\n    }\n  ],\n  \"faturalar\": [\n    {\n      \"id\": \"20261105-163012-0b9c44d1\",\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"dosyaVar\": true,\n      \"mime\": \"application/pdf\",\n      \"faturaNo\": \"ABC2026000000123\",\n      \"dosyaOzeti\": \"affea583920e1fb7a12c7c78ae6e67f8f342ca027176ba8c3493700aa427d9f4\",\n      \"faturaTarihi\": \"2026-11-05\",\n      \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n      \"genelToplam\": 1800,\n      \"paraBirimi\": \"TRY\",\n      \"karsilikGerekli\": false,\n      \"yerelKarsilik\": null,\n      \"saticiVergiNo\": \"1234567890\",\n      \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n      \"aliciVergiNo\": \"9876543210\",\n      \"araToplam\": 1500,\n      \"kdvToplam\": 300,\n      \"kalemler\": [\n        {\n          \"aciklama\": \"Danışmanlık\",\n          \"miktar\": 2,\n          \"birim\": \"saat\",\n          \"birimFiyat\": 500,\n          \"kdvOrani\": 20,\n          \"tutar\": 1000\n        },\n        {\n          \"aciklama\": \"Lisans\",\n          \"miktar\": 1,\n          \"birim\": \"adet\",\n          \"birimFiyat\": 500,\n          \"kdvOrani\": 20,\n          \"tutar\": 500\n        }\n      ],\n      \"duzeltildi\": false,\n      \"okunan\": null,\n      \"eksikAlanlar\": []\n    }\n  ],\n  \"tutarFarki\": null,\n  \"onaylar\": [],\n  \"gecmis\": [\n    {\n      \"islem\": \"olusturuldu\",\n      \"kullanici\": {\n        \"id\": 3,\n        \"adSoyad\": \"Ayşe Kaya\"\n      },\n      \"aciklama\": \"2 fatura okunmayı bekliyor.\",\n      \"tarih\": \"2026-11-09T07:52:40.118Z\"\n    },\n    {\n      \"islem\": \"guncellendi\",\n      \"kullanici\": null,\n      \"aciklama\": \"Faturaların okunması bitti; bir fatura okunamadı.\",\n      \"tarih\": \"2026-11-09T07:55:02.731Z\"\n    }\n  ],\n  \"izinler\": {\n    \"duzenle\": true,\n    \"gonder\": true,\n    \"geriCek\": false,\n    \"iptal\": true,\n    \"onayla\": false,\n    \"reddet\": false,\n    \"odendi\": false,\n    \"devret\": false\n  }\n}"
+            }
+          ]
         },
         {
           "name": "Masrafı güncelle",
@@ -409,7 +592,8 @@
                 "masraflar",
                 "{{masrafId}}"
               ]
-            }
+            },
+            "description": "Oluşturmadaki alanların hepsi isteğe bağlıdır (`gonder` hariç); gönderilmeyen alan değişmez. `bekleyenFaturalar` gönderilirse formun bekleyen faturalarının tamamı yerine geçer; listeden çıkarılan dosyanın okuması sürer, okununca fatura listenize düşer. `faturaIdler` gönderirken ekranda okunmakta olan dosyaların özetlerini de `bekleyenFaturalar` ile gönderin. `okununcaGonder` gönderilmezse değişmez. `reddedildi` durumundaki formun tutarı boşaltılamaz (`400`, `alanlar.tutar`)."
           },
           "response": []
         },
@@ -463,9 +647,177 @@
                 "{{masrafId}}",
                 "gonder"
               ]
-            }
+            },
+            "description": "Yalnızca sahibi, `taslak` ya da `reddedildi` durumunda. Kontroller şu sırayla yapılır ve ilk tutmayan döner (hepsi `409`):\n\n- `okuma_suruyor`: formda okunması süren bekleyen fatura var.\n- `okuma_hatali`: okunamayan bekleyen fatura var; \"Yeniden oku\" ile yeniden okutun ya da formdan çıkarın.\n- `tutar_eksik`: tutar girilmemiş; `alanlar.tutar` alanın mesajını taşır.\n- `fatura_eksik`, `fatura_mukerrer`, `karsilik_eksik`, `onaylayan_yok`.\n\nElle gönderim okununca gönder seçeneğini kapatır."
           },
-          "response": []
+          "response": [
+            {
+              "name": "Okuma sürüyor",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/masraflar/1002/gonder",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "masraflar",
+                    "1002",
+                    "gonder"
+                  ]
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"okuma_suruyor\",\n    \"mesaj\": \"Bir fatura henüz okunuyor; okumalar bitince gönderebilirsiniz.\"\n  }\n}"
+            },
+            {
+              "name": "Okunamayan fatura",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/masraflar/1003/gonder",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "masraflar",
+                    "1003",
+                    "gonder"
+                  ]
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"okuma_hatali\",\n    \"mesaj\": \"Bir fatura okunamadı. Yeniden okutun ya da masraftan çıkarın.\"\n  }\n}"
+            },
+            {
+              "name": "Tutar eksik",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/masraflar/1002/gonder",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "masraflar",
+                    "1002",
+                    "gonder"
+                  ]
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"hata\": {\n    \"kod\": \"tutar_eksik\",\n    \"mesaj\": \"Onaya göndermek için tutarı girin.\",\n    \"alanlar\": {\n      \"tutar\": \"Onaya göndermek için tutarı girin.\"\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Yeniden oku",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraflar/{{masrafId}}/yeniden-oku",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraflar",
+                "{{masrafId}}",
+                "yeniden-oku"
+              ]
+            },
+            "description": "Formun okunamayan (`hata` durumundaki) bekleyen faturalarını yeniden okuma sırasına koyar; yanıt `MasrafDetay` olur ve bu dosyalar `sirada` görünür. Okunamayan fatura yoksa form değişmez. Yalnızca formun sahibi, `taslak` ya da `reddedildi` durumunda çalıştırabilir. Okumalar arka planda yapılır (canlı izlemede `kaynak: arka_plan`); ilerlemeyi \"Masrafı getir\" ile izleyin."
+          },
+          "response": [
+            {
+              "name": "Yeniden sıraya girdi",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/masraflar/1003/yeniden-oku",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "masraflar",
+                    "1003",
+                    "yeniden-oku"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"id\": 1003,\n  \"baslik\": \"Kasım yazılım giderleri\",\n  \"kategori\": {\n    \"id\": 5,\n    \"ad\": \"Ofis\",\n    \"simge\": \"ofis\"\n  },\n  \"masrafTarihi\": \"2026-11-05\",\n  \"satici\": null,\n  \"tutar\": null,\n  \"paraBirimi\": \"TRY\",\n  \"yerelTutar\": null,\n  \"durum\": \"taslak\",\n  \"olusturan\": {\n    \"id\": 3,\n    \"adSoyad\": \"Ayşe Kaya\"\n  },\n  \"olusturma\": \"2026-11-09T07:52:40.118Z\",\n  \"gonderim\": null,\n  \"siradakiOnayci\": null,\n  \"faturaIdler\": [\n    \"20261105-163012-0b9c44d1\"\n  ],\n  \"okuma\": {\n    \"bekleyen\": 1,\n    \"hatali\": 0\n  },\n  \"aciklama\": null,\n  \"kur\": null,\n  \"onayTutari\": null,\n  \"tur\": 0,\n  \"sonuclanma\": null,\n  \"odeme\": null,\n  \"guncelleme\": \"2026-11-09T09:30:11.046Z\",\n  \"okununcaGonder\": true,\n  \"bekleyenFaturalar\": [\n    {\n      \"dosyaOzeti\": \"0bca368d50b7895df42b62755a0780ee220695935467d2bbdff8aebbe29ff168\",\n      \"dosyaAdi\": \"aralik.pdf\",\n      \"mime\": \"application/pdf\",\n      \"boyut\": 62340,\n      \"eklenme\": \"2026-11-09T07:52:40.118Z\",\n      \"durum\": \"sirada\",\n      \"kuyrukSirasi\": 1,\n      \"onundeki\": 2,\n      \"hata\": null\n    }\n  ],\n  \"faturalar\": [\n    {\n      \"id\": \"20261105-163012-0b9c44d1\",\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"dosyaVar\": true,\n      \"mime\": \"application/pdf\",\n      \"faturaNo\": \"ABC2026000000123\",\n      \"dosyaOzeti\": \"affea583920e1fb7a12c7c78ae6e67f8f342ca027176ba8c3493700aa427d9f4\",\n      \"faturaTarihi\": \"2026-11-05\",\n      \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n      \"genelToplam\": 1800,\n      \"paraBirimi\": \"TRY\",\n      \"karsilikGerekli\": false,\n      \"yerelKarsilik\": null,\n      \"saticiVergiNo\": \"1234567890\",\n      \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n      \"aliciVergiNo\": \"9876543210\",\n      \"araToplam\": 1500,\n      \"kdvToplam\": 300,\n      \"kalemler\": [\n        {\n          \"aciklama\": \"Danışmanlık\",\n          \"miktar\": 2,\n          \"birim\": \"saat\",\n          \"birimFiyat\": 500,\n          \"kdvOrani\": 20,\n          \"tutar\": 1000\n        },\n        {\n          \"aciklama\": \"Lisans\",\n          \"miktar\": 1,\n          \"birim\": \"adet\",\n          \"birimFiyat\": 500,\n          \"kdvOrani\": 20,\n          \"tutar\": 500\n        }\n      ],\n      \"duzeltildi\": false,\n      \"okunan\": null,\n      \"eksikAlanlar\": []\n    }\n  ],\n  \"tutarFarki\": null,\n  \"onaylar\": [],\n  \"gecmis\": [\n    {\n      \"islem\": \"olusturuldu\",\n      \"kullanici\": {\n        \"id\": 3,\n        \"adSoyad\": \"Ayşe Kaya\"\n      },\n      \"aciklama\": \"2 fatura okunmayı bekliyor.\",\n      \"tarih\": \"2026-11-09T07:52:40.118Z\"\n    },\n    {\n      \"islem\": \"guncellendi\",\n      \"kullanici\": null,\n      \"aciklama\": \"Faturaların okunması bitti; bir fatura okunamadı.\",\n      \"tarih\": \"2026-11-09T07:55:02.731Z\"\n    }\n  ],\n  \"izinler\": {\n    \"duzenle\": true,\n    \"gonder\": true,\n    \"geriCek\": false,\n    \"iptal\": true,\n    \"onayla\": false,\n    \"reddet\": false,\n    \"odendi\": false,\n    \"devret\": false\n  }\n}"
+            }
+          ]
         },
         {
           "name": "Geri çek",
@@ -752,7 +1104,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"eposta\": \"ayse@firma.com\",\n  \"adSoyad\": \"Ayşe Kaya\",\n  \"rol\": \"calisan\",\n  \"departman\": \"Satış\",\n  \"sifre\": \"Gecici1234\"\n}",
+              "raw": "{\n  \"eposta\": \"ayse@firma.com\",\n  \"adSoyad\": \"Ayşe Kaya\",\n  \"rol\": \"calisan\",\n  \"departman\": \"Satış\",\n  \"sifre\": \"Gecici1234\",\n  \"organizasyonId\": null,\n  \"masrafMerkeziIdler\": []\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -785,7 +1137,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"departman\": \"Pazarlama\",\n  \"aktif\": true\n}",
+              "raw": "{\n  \"departman\": \"Pazarlama\",\n  \"aktif\": true,\n  \"organizasyonId\": null,\n  \"masrafMerkeziIdler\": []\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -802,7 +1154,8 @@
                 "kullanicilar",
                 "{{kullaniciId}}"
               ]
-            }
+            },
+            "description": "`organizasyonId` bir organizasyon ya da `null`; `masrafMerkeziIdler` kullanıcının masraf merkezlerinin tamamıdır (`[]` hepsini kaldırır). Gönderilmeyen alan değişmez."
           },
           "response": []
         },
@@ -1055,6 +1408,940 @@
                   "key": "adet",
                   "value": "50"
                 }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Tanımlar ve alanlar",
+      "description": "Yönetici uçları: organizasyonlar, masraf merkezleri, kategoriler ve liste alanlarının seçenekleri (Excel içe/dışa aktarma dahil), fiş alanları ve koşullu zorunluluk kuralları. Sözleşme: docs/onay-sistemi.md, bölüm 3 \"Fiş alanları, masraf merkezi ve zorunluluk kuralları\" ve bölüm 6.",
+      "item": [
+        {
+          "name": "Organizasyonlar: listele",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/organizasyonlar?q=&aktif=&sayfa=1&adet=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "organizasyonlar"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "key": "aktif",
+                  "value": ""
+                },
+                {
+                  "key": "sayfa",
+                  "value": "1"
+                },
+                {
+                  "key": "adet",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Sayfalı liste (koda göre). `q` kodda ve adda arar; `aktif` 1 ya da 0 (boşsa hepsi)."
+          },
+          "response": []
+        },
+        {
+          "name": "Organizasyonlar: ekle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('organizasyonId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kod\": \"1000\",\n  \"ad\": \"Örnek Gıda A.Ş.\",\n  \"paraBirimi\": \"TRY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/organizasyonlar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "organizasyonlar"
+              ]
+            },
+            "description": "`409 kod_kullaniliyor`: kod listede var (büyük/küçük harf ayrımı yok)."
+          },
+          "response": []
+        },
+        {
+          "name": "Organizasyonlar: güncelle",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aktif\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/organizasyonlar/{{organizasyonId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "organizasyonlar",
+                "{{organizasyonId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Organizasyonlar: sil",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/organizasyonlar/{{organizasyonId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "organizasyonlar",
+                "{{organizasyonId}}"
+              ]
+            },
+            "description": "Kullanılan kayıt silinmez (`409 kullaniliyor`); pasifleştirin."
+          },
+          "response": []
+        },
+        {
+          "name": "Organizasyonlar: Excel'e aktar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/organizasyonlar/disa-aktar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "organizasyonlar",
+                "disa-aktar"
+              ]
+            },
+            "description": "Bütün kayıtları (pasifler dahil) .xlsx olarak indirir. Postman'da Send and Download ile kaydedin. Boş listenin dosyası içe aktarma şablonudur."
+          },
+          "response": []
+        },
+        {
+          "name": "Organizasyonlar: Excel'den içe aktar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              }
+            ],
+            "body": {
+              "mode": "file",
+              "file": {
+                "src": ""
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/organizasyonlar/ice-aktar?onizleme=1&eksikleriPasiflestir=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "organizasyonlar",
+                "ice-aktar"
+              ],
+              "query": [
+                {
+                  "key": "onizleme",
+                  "value": "1",
+                  "description": "1: hiçbir şey yazılmaz, yazılsaydı ne olacağı döner. Gerçekten içe aktarmak için devre dışı bırakın."
+                },
+                {
+                  "key": "eksikleriPasiflestir",
+                  "value": "0",
+                  "description": "1: dosyada anahtarı geçmeyen aktif kayıtlar pasifleşir."
+                }
+              ]
+            },
+            "description": "Excel dosyasını (.xlsx, en çok 5 MB, 20.000 satır) Body > binary ile seçin; `multipart/form-data` içinde `dosya` alanı da olur. İlk satır başlıktır; masraff.io dışa aktarımlarının sütun adları tanınır. Yanıt `IceAktarim`: eklenen, güncellenen, değişmeyen, pasifleştirilen sayıları, hatalı satırlar (Excel satır numarasıyla), hangi sütunun hangi alana okunduğu ve yok sayılan sütunlar. Hatalı satırlar atlanır. Önce `onizleme=1` ile deneyin."
+          },
+          "response": []
+        },
+        {
+          "name": "Masraf merkezleri: listele",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraf-merkezleri?q=&aktif=&sayfa=1&adet=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraf-merkezleri"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "key": "aktif",
+                  "value": ""
+                },
+                {
+                  "key": "sayfa",
+                  "value": "1"
+                },
+                {
+                  "key": "adet",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Sayfalı liste (koda göre). `q` kodda ve adda arar; `aktif` 1 ya da 0 (boşsa hepsi)."
+          },
+          "response": []
+        },
+        {
+          "name": "Masraf merkezleri: ekle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('masrafMerkeziId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kod\": \"11033106\",\n  \"aciklama\": \"Satış İstanbul\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraf-merkezleri",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraf-merkezleri"
+              ]
+            },
+            "description": "`409 kod_kullaniliyor`: kod listede var (büyük/küçük harf ayrımı yok)."
+          },
+          "response": []
+        },
+        {
+          "name": "Masraf merkezleri: güncelle",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aciklama\": \"Satış İstanbul\",\n  \"aktif\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraf-merkezleri/{{masrafMerkeziId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraf-merkezleri",
+                "{{masrafMerkeziId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Masraf merkezleri: sil",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraf-merkezleri/{{masrafMerkeziId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraf-merkezleri",
+                "{{masrafMerkeziId}}"
+              ]
+            },
+            "description": "Kullanılan kayıt silinmez (`409 kullaniliyor`); pasifleştirin."
+          },
+          "response": []
+        },
+        {
+          "name": "Masraf merkezleri: Excel'e aktar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/masraf-merkezleri/disa-aktar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraf-merkezleri",
+                "disa-aktar"
+              ]
+            },
+            "description": "Bütün kayıtları (pasifler dahil) .xlsx olarak indirir. Postman'da Send and Download ile kaydedin. Boş listenin dosyası içe aktarma şablonudur."
+          },
+          "response": []
+        },
+        {
+          "name": "Masraf merkezleri: Excel'den içe aktar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              }
+            ],
+            "body": {
+              "mode": "file",
+              "file": {
+                "src": ""
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/masraf-merkezleri/ice-aktar?onizleme=1&eksikleriPasiflestir=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "masraf-merkezleri",
+                "ice-aktar"
+              ],
+              "query": [
+                {
+                  "key": "onizleme",
+                  "value": "1",
+                  "description": "1: hiçbir şey yazılmaz, yazılsaydı ne olacağı döner. Gerçekten içe aktarmak için devre dışı bırakın."
+                },
+                {
+                  "key": "eksikleriPasiflestir",
+                  "value": "0",
+                  "description": "1: dosyada anahtarı geçmeyen aktif kayıtlar pasifleşir."
+                }
+              ]
+            },
+            "description": "Excel dosyasını (.xlsx, en çok 5 MB, 20.000 satır) Body > binary ile seçin; `multipart/form-data` içinde `dosya` alanı da olur. İlk satır başlıktır; masraff.io dışa aktarımlarının sütun adları tanınır. Yanıt `IceAktarim`: eklenen, güncellenen, değişmeyen, pasifleştirilen sayıları, hatalı satırlar (Excel satır numarasıyla), hangi sütunun hangi alana okunduğu ve yok sayılan sütunlar. Hatalı satırlar atlanır. Önce `onizleme=1` ile deneyin."
+          },
+          "response": []
+        },
+        {
+          "name": "Kategoriler (tümü)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/kategoriler?tumu=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kategoriler"
+              ]
+            },
+            "description": "Pasifler dahil bütün kategoriler; `kod`, `kdvOranlari`, `hesapKodu` alanlarıyla."
+          },
+          "response": []
+        },
+        {
+          "name": "Kategori sil",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/kategoriler/{{kategoriId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kategoriler",
+                "{{kategoriId}}"
+              ]
+            },
+            "description": "Bir formda kullanılan kategori silinmez (`409 kullaniliyor`); pasifleştirin. Onu koşul olarak kullanan kurallar da silinir."
+          },
+          "response": []
+        },
+        {
+          "name": "Kategoriler: Excel'e aktar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/kategoriler/disa-aktar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kategoriler",
+                "disa-aktar"
+              ]
+            },
+            "description": "Bütün kayıtları (pasifler dahil) .xlsx olarak indirir. Postman'da Send and Download ile kaydedin. Boş listenin dosyası içe aktarma şablonudur."
+          },
+          "response": []
+        },
+        {
+          "name": "Kategoriler: Excel'den içe aktar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              }
+            ],
+            "body": {
+              "mode": "file",
+              "file": {
+                "src": ""
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/kategoriler/ice-aktar?onizleme=1&eksikleriPasiflestir=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "kategoriler",
+                "ice-aktar"
+              ],
+              "query": [
+                {
+                  "key": "onizleme",
+                  "value": "1",
+                  "description": "1: hiçbir şey yazılmaz, yazılsaydı ne olacağı döner. Gerçekten içe aktarmak için devre dışı bırakın."
+                },
+                {
+                  "key": "eksikleriPasiflestir",
+                  "value": "0",
+                  "description": "1: dosyada anahtarı geçmeyen aktif kayıtlar pasifleşir."
+                }
+              ]
+            },
+            "description": "Excel dosyasını (.xlsx, en çok 5 MB, 20.000 satır) Body > binary ile seçin; `multipart/form-data` içinde `dosya` alanı da olur. İlk satır başlıktır; masraff.io dışa aktarımlarının sütun adları tanınır. Yanıt `IceAktarim`: eklenen, güncellenen, değişmeyen, pasifleştirilen sayıları, hatalı satırlar (Excel satır numarasıyla), hangi sütunun hangi alana okunduğu ve yok sayılan sütunlar. Hatalı satırlar atlanır. Önce `onizleme=1` ile deneyin."
+          },
+          "response": []
+        },
+        {
+          "name": "Alanlar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar?tumu=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar"
+              ]
+            },
+            "description": "Alan tanımları ve zorunluluk kuralları. `tumu=1` yalnızca yöneticide pasifleri ve `kullanim` sayısını da döndürür; diğer kullanıcılar aktif alanları görür."
+          },
+          "response": []
+        },
+        {
+          "name": "Alan ekle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('alanId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ad\": \"Araç Plakası\",\n  \"tur\": \"liste\",\n  \"zorunlu\": false,\n  \"aciklama\": \"Araç giderlerinde plaka\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar"
+              ]
+            },
+            "description": "`tur`: liste, metin, uzun_metin, sayi, tarih. Anahtar addan üretilir (ör. `aracPlakasi`) ve değişmez. `409 alan_adi_kullaniliyor`, `409 alan_siniri` (en çok 40 fiş alanı)."
+          },
+          "response": []
+        },
+        {
+          "name": "Alanı güncelle",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"zorunlu\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar/{{alanId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar",
+                "{{alanId}}"
+              ]
+            },
+            "description": "Fiş alanlarında `ad`, `zorunlu`, `aktif`, `sira`, `aciklama`; fatura bilgilerinde `zorunlu`, `aciklama`; masraf merkezinde `zorunlu`, `aktif`, `aciklama` değişir."
+          },
+          "response": []
+        },
+        {
+          "name": "Alanı sil",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar/{{alanId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar",
+                "{{alanId}}"
+              ]
+            },
+            "description": "Değer girilmiş alan silinmez (`409 alan_kullaniliyor`); pasifleştirin. Sistem alanları silinmez (`409 sistem_alani`)."
+          },
+          "response": []
+        },
+        {
+          "name": "Seçenekleri listele",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar/{{alanAnahtari}}/secenekler?q=&aktif=&sayfa=1&adet=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar",
+                "{{alanAnahtari}}",
+                "secenekler"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "key": "aktif",
+                  "value": ""
+                },
+                {
+                  "key": "sayfa",
+                  "value": "1"
+                },
+                {
+                  "key": "adet",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Liste türündeki alanın seçenekleri. Çalışan da çağırabilir; yalnızca aktif seçenekleri görür."
+          },
+          "response": []
+        },
+        {
+          "name": "Seçenek ekle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('secenekId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kod\": \"P34ABC123\",\n  \"ad\": \"Servis aracı\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar/{{alanAnahtari}}/secenekler",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar",
+                "{{alanAnahtari}}",
+                "secenekler"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Seçeneği güncelle",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aktif\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar/{{alanAnahtari}}/secenekler/{{secenekId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar",
+                "{{alanAnahtari}}",
+                "secenekler",
+                "{{secenekId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Seçeneği sil",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar/{{alanAnahtari}}/secenekler/{{secenekId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar",
+                "{{alanAnahtari}}",
+                "secenekler",
+                "{{secenekId}}"
+              ]
+            },
+            "description": "Bir fişte seçili seçenek silinmez (`409 kullaniliyor`)."
+          },
+          "response": []
+        },
+        {
+          "name": "Seçenekler: Excel'e aktar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar/{{alanAnahtari}}/secenekler/disa-aktar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar",
+                "{{alanAnahtari}}",
+                "secenekler",
+                "disa-aktar"
+              ]
+            },
+            "description": "Bütün kayıtları (pasifler dahil) .xlsx olarak indirir. Postman'da Send and Download ile kaydedin. Boş listenin dosyası içe aktarma şablonudur."
+          },
+          "response": []
+        },
+        {
+          "name": "Seçenekler: Excel'den içe aktar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              }
+            ],
+            "body": {
+              "mode": "file",
+              "file": {
+                "src": ""
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alanlar/{{alanAnahtari}}/secenekler/ice-aktar?onizleme=1&eksikleriPasiflestir=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alanlar",
+                "{{alanAnahtari}}",
+                "secenekler",
+                "ice-aktar"
+              ],
+              "query": [
+                {
+                  "key": "onizleme",
+                  "value": "1",
+                  "description": "1: hiçbir şey yazılmaz, yazılsaydı ne olacağı döner. Gerçekten içe aktarmak için devre dışı bırakın."
+                },
+                {
+                  "key": "eksikleriPasiflestir",
+                  "value": "0",
+                  "description": "1: dosyada anahtarı geçmeyen aktif kayıtlar pasifleşir."
+                }
+              ]
+            },
+            "description": "Excel dosyasını (.xlsx, en çok 5 MB, 20.000 satır) Body > binary ile seçin; `multipart/form-data` içinde `dosya` alanı da olur. İlk satır başlıktır; masraff.io dışa aktarımlarının sütun adları tanınır. Yanıt `IceAktarim`: eklenen, güncellenen, değişmeyen, pasifleştirilen sayıları, hatalı satırlar (Excel satır numarasıyla), hangi sütunun hangi alana okunduğu ve yok sayılan sütunlar. Hatalı satırlar atlanır. Önce `onizleme=1` ile deneyin."
+          },
+          "response": []
+        },
+        {
+          "name": "Kural ekle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('kuralId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kosulAlan\": \"kategori\",\n  \"kosulDegerId\": 1,\n  \"hedefler\": [\n    \"etiket\",\n    \"projeKodu\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alan-kurallari",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alan-kurallari"
+              ]
+            },
+            "description": "\"Koşul alanı şu değerdeyse şu alanlar zorunludur.\" `kosulAlan`: kategori, masrafMerkezi ya da liste türünde bir fiş alanının anahtarı; `kosulDegerId` o listenin bir kaydı. `409 kural_var`: aynı koşul değeri için kural var."
+          },
+          "response": []
+        },
+        {
+          "name": "Kuralı güncelle",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kosulAlan\": \"kategori\",\n  \"kosulDegerId\": 1,\n  \"hedefler\": [\n    \"etiket\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alan-kurallari/{{kuralId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alan-kurallari",
+                "{{kuralId}}"
+              ]
+            },
+            "description": "Kuralın tamamı yerine geçer."
+          },
+          "response": []
+        },
+        {
+          "name": "Kuralı sil",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/alan-kurallari/{{kuralId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alan-kurallari",
+                "{{kuralId}}"
               ]
             }
           },
@@ -1477,7 +2764,7 @@
                 }
               ]
             },
-            "description": "Birden fazla faturayı tek istekte gönderir. Sunucu Claude okumasını beklemeden yanıt verir; dosyalar arka planda, gönderildikleri sırayla okunur.\n\n- Daha önce okunmuş dosyalar yanıtta hemen `bitti` olarak, faturalarıyla (`sonuc`: `fatura` ve `kalemler`) gelir.\n- Dosyaların hepsi daha önce okunmuşsa (ya da reddedildiyse) durum `200` ve `bitti: true` olur; başka istek gerekmez.\n- Claude'un okuması gereken dosya varsa durum `202` olur. İlerlemeyi \"Kuyruk durumu\" isteğiyle izleyin; bu isteğin testi kuyruk kimliğini `kuyrukId` değişkenine yazar.\n\nAynı anda kaç dosyanın okunacağını sunucudaki `CLAUDE_MAX_CONCURRENT` ayarı belirler (1–4, varsayılan 2). Yanıttaki `esZamanli` alanı bu değeri gösterir.\n\nAlan adı önemli değildir; formdaki her dosya alınır. Hatalı ya da büyük bir dosya yalnızca kendisini etkiler. Bir istekte en fazla 50 dosya ve toplam 200 MB gönderilebilir. Daha önce okunmuş dosyaları yeniden okutmak için Params sekmesindeki `yenile` parametresini etkinleştirin."
+            "description": "Birden fazla faturayı tek istekte gönderir. Sunucu Claude okumasını beklemeden yanıt verir; dosyalar arka planda, gönderildikleri sırayla okunur.\n\n- Daha önce okunmuş dosyalar yanıtta hemen `bitti` olarak, faturalarıyla (`sonuc`: `fatura` ve `kalemler`) gelir.\n- Dosyaların hepsi daha önce okunmuşsa (ya da reddedildiyse) durum `200` ve `bitti: true` olur; başka istek gerekmez.\n- Claude'un okuması gereken dosya varsa durum `202` olur; bu dosyalar `sirada` ya da `okunuyor` görünür. İlerlemeyi \"Kuyruk durumu\" isteğiyle izleyin; bu isteğin testi kuyruk kimliğini `kuyrukId` değişkenine yazar.\n\nHer dosyada okuma sırası alanları bulunur:\n\n- `dosyaOzeti`: dosyanın SHA-256 özeti (64 küçük harf onaltılık). Okuması bitmeden kaydedilen masraf formu bu dosyayı `bekleyenFaturalar` içinde bu değerle anar. Sunucunun reddettiği dosyada (ör. desteklenmeyen tür) `null`.\n- `kuyrukSirasi`: `sirada` olan dosyanın, bütün kullanıcıların dosyalarıyla ortak sıradaki yeri (1 = sıradaki).\n- `onundeki`: ondan önce okunacak ya da şu an okunmakta olan dosya sayısı. Örnekteki `fis.jpg` için \"Sırada 3. · önünde 4 fatura var\".\n- Dosya `sirada` değilse ya da yeri henüz belli değilse `kuyrukSirasi` ve `onundeki` `null` olur.\n\nAynı anda kaç dosyanın okunacağını sunucudaki `CLAUDE_MAX_CONCURRENT` ayarı belirler (1–4, varsayılan 2). Yanıttaki `esZamanli` alanı bu değeri gösterir.\n\nAlan adı önemli değildir; formdaki her dosya alınır. Hatalı ya da büyük bir dosya yalnızca kendisini etkiler. Bir istekte en fazla 50 dosya ve toplam 200 MB gönderilebilir. Daha önce okunmuş dosyaları yeniden okutmak için Params sekmesindeki `yenile` parametresini etkinleştirin."
           },
           "event": [
             {
@@ -1538,7 +2825,7 @@
                   "value": "/api/invoices/toplu/20261106-113040-4e0d9b12"
                 }
               ],
-              "body": "{\n  \"id\": \"20261106-113040-4e0d9b12\",\n  \"olusturulma\": \"2026-11-06T11:30:40.402Z\",\n  \"bitti\": true,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 2,\n    \"sirada\": 0,\n    \"okunuyor\": 0,\n    \"bitti\": 2,\n    \"hata\": 0\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261106-110231-5d2e9a07\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    }\n  ]\n}"
+              "body": "{\n  \"id\": \"20261106-113040-4e0d9b12\",\n  \"olusturulma\": \"2026-11-06T11:30:40.402Z\",\n  \"bitti\": true,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 2,\n    \"sirada\": 0,\n    \"okunuyor\": 0,\n    \"bitti\": 2,\n    \"hata\": 0\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"dosyaOzeti\": \"affea583920e1fb7a12c7c78ae6e67f8f342ca027176ba8c3493700aa427d9f4\",\n      \"durum\": \"bitti\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"dosyaOzeti\": \"84d621ba7b3bb1b7ee94bc737bfa069c285bc252efc62c7e697ca78e6475254c\",\n      \"durum\": \"bitti\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": \"20261106-110231-5d2e9a07\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    }\n  ]\n}"
             },
             {
               "name": "Kuyruğa alındı (biri daha önce okunmuş)",
@@ -1580,7 +2867,7 @@
                   "value": "/api/invoices/toplu/20261106-110215-8c1f02ab"
                 }
               ],
-              "body": "{\n  \"id\": \"20261106-110215-8c1f02ab\",\n  \"olusturulma\": \"2026-11-06T11:02:15.120Z\",\n  \"bitti\": false,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 3,\n    \"sirada\": 0,\n    \"okunuyor\": 1,\n    \"bitti\": 1,\n    \"hata\": 1\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"durum\": \"okunuyor\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"durum\": \"hata\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    }\n  ]\n}"
+              "body": "{\n  \"id\": \"20261106-110215-8c1f02ab\",\n  \"olusturulma\": \"2026-11-06T11:02:15.120Z\",\n  \"bitti\": false,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 4,\n    \"sirada\": 1,\n    \"okunuyor\": 1,\n    \"bitti\": 1,\n    \"hata\": 1\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"dosyaOzeti\": \"affea583920e1fb7a12c7c78ae6e67f8f342ca027176ba8c3493700aa427d9f4\",\n      \"durum\": \"bitti\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"dosyaOzeti\": \"c2c0f757a6e368be3f9b01e6fd1949736bbf0a2f3cbe7f1ece701b9a3e47ec51\",\n      \"durum\": \"okunuyor\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"dosyaOzeti\": null,\n      \"durum\": \"hata\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 4,\n      \"dosyaAdi\": \"fis.jpg\",\n      \"dosyaOzeti\": \"91175a111b7211c7aee37bd71b81a6bbc3c78beaa44d587bf32656b006c7ccaa\",\n      \"durum\": \"sirada\",\n      \"kuyrukSirasi\": 3,\n      \"onundeki\": 4,\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": null\n    }\n  ]\n}"
             },
             {
               "name": "Çok fazla dosya",
@@ -1677,7 +2964,7 @@
                 "{{kuyrukId}}"
               ]
             },
-            "description": "Toplu gönderimin ilerlemesini verir. Birkaç saniyede bir sormak yeterlidir. `bitti: true` olunca bütün dosyalar okunmuş ya da hata almıştır.\n\nHer dosyanın `durum` alanı `sirada`, `okunuyor`, `bitti` ya da `hata` olur. Okunan dosyanın faturası `sonuc` alanındadır (`fatura` ve `kalemler`). Ölçüm dahil tam kayıt `GET /api/invoices/<kayitId>` ile alınır; bu isteğin testi ilk okunan dosyanın kimliğini `faturaId` değişkenine yazar, \"Kaydı getir\" ile açabilirsiniz. `onbellek: true`, dosyanın daha önce okunduğunu ve kayıtlı sonucun kullanıldığını gösterir.\n\n`claude_limit` hatası alan dosyalar kendiliğinden yeniden denenmez; limit açılınca yeniden gönderin.\n\nKuyruk sunucunun belleğinde tutulur; sunucu yeniden başlarsa `404` döner. Okunan faturalar kayıtlarda durur."
+            "description": "Toplu gönderimin ilerlemesini verir. Birkaç saniyede bir sormak yeterlidir. `bitti: true` olunca bütün dosyalar okunmuş ya da hata almıştır.\n\nHer dosyanın `durum` alanı `sirada`, `okunuyor`, `bitti` ya da `hata` olur. Okunan dosyanın faturası `sonuc` alanındadır (`fatura` ve `kalemler`). Ölçüm dahil tam kayıt `GET /api/invoices/<kayitId>` ile alınır; bu isteğin testi ilk okunan dosyanın kimliğini `faturaId` değişkenine yazar, \"Kaydı getir\" ile açabilirsiniz. `onbellek: true`, dosyanın daha önce okunduğunu ve kayıtlı sonucun kullanıldığını gösterir.\n\n`sirada` olan dosyanın `kuyrukSirasi` (ortak sıradaki yeri, 1 = sıradaki) ve `onundeki` (ondan önce okunacak ya da okunmakta olan dosya sayısı) alanları doludur; \"Okunuyor\" örneğindeki `fis.jpg` için \"Sırada 1. · önünde 2 fatura var\". Okunmaya başlayan, biten ya da yeri henüz belli olmayan dosyada ikisi de `null`. `dosyaOzeti` dosyanın SHA-256 özetidir (reddedilen dosyada `null`); okuması bitmeyen dosyayı masraf formuna `bekleyenFaturalar` ile eklemek için kullanılır.\n\n`claude_limit` hatası alan dosyalar kendiliğinden yeniden denenmez; limit açılınca yeniden gönderin.\n\nKuyruk sunucunun belleğinde tutulur; sunucu yeniden başlarsa `404` döner. Okunan faturalar kayıtlarda durur."
           },
           "event": [
             {
@@ -1721,7 +3008,7 @@
                   "value": "application/json; charset=utf-8"
                 }
               ],
-              "body": "{\n  \"id\": \"20261106-110215-8c1f02ab\",\n  \"olusturulma\": \"2026-11-06T11:02:15.120Z\",\n  \"bitti\": false,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 3,\n    \"sirada\": 0,\n    \"okunuyor\": 1,\n    \"bitti\": 1,\n    \"hata\": 1\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"durum\": \"okunuyor\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"durum\": \"hata\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    }\n  ]\n}"
+              "body": "{\n  \"id\": \"20261106-110215-8c1f02ab\",\n  \"olusturulma\": \"2026-11-06T11:02:15.120Z\",\n  \"bitti\": false,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 4,\n    \"sirada\": 1,\n    \"okunuyor\": 1,\n    \"bitti\": 1,\n    \"hata\": 1\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"dosyaOzeti\": \"affea583920e1fb7a12c7c78ae6e67f8f342ca027176ba8c3493700aa427d9f4\",\n      \"durum\": \"bitti\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"dosyaOzeti\": \"c2c0f757a6e368be3f9b01e6fd1949736bbf0a2f3cbe7f1ece701b9a3e47ec51\",\n      \"durum\": \"okunuyor\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"dosyaOzeti\": null,\n      \"durum\": \"hata\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 4,\n      \"dosyaAdi\": \"fis.jpg\",\n      \"dosyaOzeti\": \"91175a111b7211c7aee37bd71b81a6bbc3c78beaa44d587bf32656b006c7ccaa\",\n      \"durum\": \"sirada\",\n      \"kuyrukSirasi\": 1,\n      \"onundeki\": 2,\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": null\n    }\n  ]\n}"
             },
             {
               "name": "Bitti",
@@ -1750,7 +3037,7 @@
                   "value": "application/json; charset=utf-8"
                 }
               ],
-              "body": "{\n  \"id\": \"20261106-104502-a1c37f60\",\n  \"olusturulma\": \"2026-11-06T10:45:02.871Z\",\n  \"bitti\": true,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 4,\n    \"sirada\": 0,\n    \"okunuyor\": 0,\n    \"bitti\": 2,\n    \"hata\": 2\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261106-110231-5d2e9a07\",\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"durum\": \"bitti\",\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"aralik.pdf\",\n      \"durum\": \"hata\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"claude_limit\",\n        \"mesaj\": \"Claude abonelik kullanım limitine ulaşıldı; bir süre sonra tekrar deneyin. (usage limit reached)\"\n      },\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 4,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"durum\": \"hata\",\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    }\n  ]\n}"
+              "body": "{\n  \"id\": \"20261106-104502-a1c37f60\",\n  \"olusturulma\": \"2026-11-06T10:45:02.871Z\",\n  \"bitti\": true,\n  \"esZamanli\": 2,\n  \"sayac\": {\n    \"toplam\": 4,\n    \"sirada\": 0,\n    \"okunuyor\": 0,\n    \"bitti\": 2,\n    \"hata\": 2\n  },\n  \"dosyalar\": [\n    {\n      \"sira\": 1,\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"dosyaOzeti\": \"84d621ba7b3bb1b7ee94bc737bfa069c285bc252efc62c7e697ca78e6475254c\",\n      \"durum\": \"bitti\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": \"20261106-110231-5d2e9a07\",\n      \"onbellek\": false,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 2,\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"dosyaOzeti\": \"affea583920e1fb7a12c7c78ae6e67f8f342ca027176ba8c3493700aa427d9f4\",\n      \"durum\": \"bitti\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": \"20261105-163012-0b9c44d1\",\n      \"onbellek\": true,\n      \"hata\": null,\n      \"sonuc\": {\n        \"fatura\": {\n          \"faturaNo\": \"ABC2026000000123\",\n          \"faturaTarihi\": \"2026-11-05\",\n          \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n          \"saticiVergiNo\": \"1234567890\",\n          \"aliciUnvan\": \"Deneme Ltd. Şti.\",\n          \"aliciVergiNo\": \"9876543210\",\n          \"paraBirimi\": \"TRY\",\n          \"araToplam\": 1500,\n          \"kdvToplam\": 300,\n          \"genelToplam\": 1800\n        },\n        \"kalemler\": [\n          {\n            \"aciklama\": \"Danışmanlık\",\n            \"miktar\": 2,\n            \"birim\": \"saat\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 1000\n          },\n          {\n            \"aciklama\": \"Lisans\",\n            \"miktar\": 1,\n            \"birim\": \"adet\",\n            \"birimFiyat\": 500,\n            \"kdvOrani\": 20,\n            \"tutar\": 500\n          }\n        ]\n      }\n    },\n    {\n      \"sira\": 3,\n      \"dosyaAdi\": \"aralik.pdf\",\n      \"dosyaOzeti\": \"0bca368d50b7895df42b62755a0780ee220695935467d2bbdff8aebbe29ff168\",\n      \"durum\": \"hata\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"claude_limit\",\n        \"mesaj\": \"Claude abonelik kullanım limitine ulaşıldı; bir süre sonra tekrar deneyin. (usage limit reached)\"\n      },\n      \"sonuc\": null\n    },\n    {\n      \"sira\": 4,\n      \"dosyaAdi\": \"notlar.txt\",\n      \"dosyaOzeti\": null,\n      \"durum\": \"hata\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"kayitId\": null,\n      \"onbellek\": false,\n      \"hata\": {\n        \"kod\": \"desteklenmeyen_dosya\",\n        \"mesaj\": \"Yalnızca PDF, PNG, JPEG, WEBP veya GIF fatura dosyası kabul edilir.\"\n      },\n      \"sonuc\": null\n    }\n  ]\n}"
             },
             {
               "name": "Kuyruk yok",
@@ -1798,7 +3085,7 @@
                 "izleme"
               ]
             },
-            "description": "Canlı izlemenin anlık durumu: sunucu açıldığından beri gelen her dosya, panelden ya da API ile, tekli ya da toplu.\n\n- `istatistik`: o anki sırada ve okunuyor sayıları, açılıştan beri okunan, kayıttan dönen, hata alan dosyalar ve Claude okumalarının API karşılığı (USD).\n- `etkinlikler`: en yeni başta. `durum` sirada → okunuyor → bitti ya da hata. `model` o an okuyan model, `ozet` bitmiş faturanın özeti, `kayitId` tam kaydın kimliği.\n- `kaynak`: `panel` ya da `api`. Panel isteklerine `X-Panel-Etiket` başlığı ekler; bu başlık olmayan her istek `api` sayılır.\n- Süren okumaların hepsi ve bitenlerin son 300'ü bellekte tutulur. Sunucu yeniden başlayınca sıfırlanır."
+            "description": "Canlı izlemenin anlık durumu: sunucu açıldığından beri gelen her dosya, panelden ya da API ile, tekli ya da toplu.\n\n- `istatistik`: o anki sırada ve okunuyor sayıları, açılıştan beri okunan, kayıttan dönen, hata alan dosyalar ve Claude okumalarının API karşılığı (USD).\n- `etkinlikler`: en yeni başta. `durum` sirada → okunuyor → bitti ya da hata. `model` o an okuyan model, `ozet` bitmiş faturanın özeti, `kayitId` tam kaydın kimliği.\n- `kaynak`: `panel`, `api` ya da `arka_plan`. Panel isteklerine `X-Panel-Etiket` başlığı ekler; bu başlık olmayan her istek `api` sayılır. `arka_plan`, okunması bitmeden kaydedilmiş bir masraf formunun dosyasını sunucunun kendisinin okumasıdır (sunucu yeniden başladıktan sonra ya da \"Yeniden oku\" ile).\n- `kuyrukSirasi`, `onundeki`: `sirada` olan dosyanın ortak sıradaki yeri (1 = sıradaki) ve ondan önce okunacak ya da okunmakta olan dosya sayısı; toplu yüklemedeki gibi. Dosya sırada değilse ya da yeri belli değilse `null`.\n- Süren okumaların hepsi ve bitenlerin son 300'ü bellekte tutulur. Sunucu yeniden başlayınca sıfırlanır."
           },
           "event": [
             {
@@ -1842,7 +3129,7 @@
                   "value": "application/json; charset=utf-8"
                 }
               ],
-              "body": "{\n  \"istatistik\": {\n    \"baslangic\": \"2026-11-06T09:00:00.000Z\",\n    \"esZamanli\": 2,\n    \"sirada\": 1,\n    \"okunuyor\": 2,\n    \"bitti\": 14,\n    \"kayittan\": 5,\n    \"hata\": 1,\n    \"apiEsdegeriUsd\": 0.4123\n  },\n  \"etkinlikler\": [\n    {\n      \"id\": \"3f9c1a7be210\",\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"boyut\": 48211,\n      \"kaynak\": \"api\",\n      \"etiket\": null,\n      \"kuyrukId\": \"20261106-110215-8c1f02ab\",\n      \"sira\": 2,\n      \"durum\": \"okunuyor\",\n      \"model\": \"opus\",\n      \"modeller\": [\n        \"haiku\",\n        \"opus\"\n      ],\n      \"onbellek\": false,\n      \"kayitId\": null,\n      \"hata\": null,\n      \"ozet\": null,\n      \"apiEsdegeriUsd\": null,\n      \"alinma\": \"2026-11-06T11:02:15.120Z\",\n      \"baslama\": \"2026-11-06T11:02:16.004Z\",\n      \"bitis\": null\n    },\n    {\n      \"id\": \"8a41d07c55e9\",\n      \"dosyaAdi\": \"fis.jpg\",\n      \"boyut\": 391022,\n      \"kaynak\": \"api\",\n      \"etiket\": null,\n      \"kuyrukId\": \"20261106-110215-8c1f02ab\",\n      \"sira\": 3,\n      \"durum\": \"sirada\",\n      \"model\": null,\n      \"modeller\": [],\n      \"onbellek\": false,\n      \"kayitId\": null,\n      \"hata\": null,\n      \"ozet\": null,\n      \"apiEsdegeriUsd\": null,\n      \"alinma\": \"2026-11-06T11:02:15.121Z\",\n      \"baslama\": null,\n      \"bitis\": null\n    },\n    {\n      \"id\": \"c07be93a1f42\",\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"boyut\": 51870,\n      \"kaynak\": \"panel\",\n      \"etiket\": \"5b0e6f8e-2a1c-4d3e-9f10-7c2b8a4d6e01\",\n      \"kuyrukId\": null,\n      \"sira\": null,\n      \"durum\": \"bitti\",\n      \"model\": \"claude-haiku-5-5\",\n      \"modeller\": [\n        \"claude-haiku-5-5\"\n      ],\n      \"onbellek\": false,\n      \"kayitId\": \"20261106-105931-0b9c44d1\",\n      \"hata\": null,\n      \"ozet\": {\n        \"faturaNo\": \"ABC2026000000123\",\n        \"faturaTarihi\": \"2026-10-31\",\n        \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n        \"genelToplam\": 1800,\n        \"paraBirimi\": \"TRY\",\n        \"kalemSayisi\": 1\n      },\n      \"apiEsdegeriUsd\": 0.0006,\n      \"alinma\": \"2026-11-06T10:59:22.410Z\",\n      \"baslama\": \"2026-11-06T10:59:22.433Z\",\n      \"bitis\": \"2026-11-06T10:59:31.087Z\"\n    }\n  ]\n}"
+              "body": "{\n  \"istatistik\": {\n    \"baslangic\": \"2026-11-06T09:00:00.000Z\",\n    \"esZamanli\": 2,\n    \"sirada\": 1,\n    \"okunuyor\": 2,\n    \"bitti\": 14,\n    \"kayittan\": 5,\n    \"hata\": 1,\n    \"apiEsdegeriUsd\": 0.4123\n  },\n  \"etkinlikler\": [\n    {\n      \"id\": \"5d71c2e0a8b4\",\n      \"dosyaAdi\": \"aralik.pdf\",\n      \"boyut\": 62340,\n      \"kaynak\": \"arka_plan\",\n      \"etiket\": null,\n      \"kuyrukId\": null,\n      \"sira\": null,\n      \"durum\": \"okunuyor\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"model\": \"haiku\",\n      \"modeller\": [\n        \"haiku\"\n      ],\n      \"onbellek\": false,\n      \"kayitId\": null,\n      \"hata\": null,\n      \"ozet\": null,\n      \"apiEsdegeriUsd\": null,\n      \"alinma\": \"2026-11-06T11:02:14.870Z\",\n      \"baslama\": \"2026-11-06T11:02:14.902Z\",\n      \"bitis\": null\n    },\n    {\n      \"id\": \"3f9c1a7be210\",\n      \"dosyaAdi\": \"kasim.pdf\",\n      \"boyut\": 48211,\n      \"kaynak\": \"api\",\n      \"etiket\": null,\n      \"kuyrukId\": \"20261106-110215-8c1f02ab\",\n      \"sira\": 2,\n      \"durum\": \"okunuyor\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"model\": \"opus\",\n      \"modeller\": [\n        \"haiku\",\n        \"opus\"\n      ],\n      \"onbellek\": false,\n      \"kayitId\": null,\n      \"hata\": null,\n      \"ozet\": null,\n      \"apiEsdegeriUsd\": null,\n      \"alinma\": \"2026-11-06T11:02:15.120Z\",\n      \"baslama\": \"2026-11-06T11:02:16.004Z\",\n      \"bitis\": null\n    },\n    {\n      \"id\": \"8a41d07c55e9\",\n      \"dosyaAdi\": \"fis.jpg\",\n      \"boyut\": 391022,\n      \"kaynak\": \"api\",\n      \"etiket\": null,\n      \"kuyrukId\": \"20261106-110215-8c1f02ab\",\n      \"sira\": 3,\n      \"durum\": \"sirada\",\n      \"kuyrukSirasi\": 1,\n      \"onundeki\": 2,\n      \"model\": null,\n      \"modeller\": [],\n      \"onbellek\": false,\n      \"kayitId\": null,\n      \"hata\": null,\n      \"ozet\": null,\n      \"apiEsdegeriUsd\": null,\n      \"alinma\": \"2026-11-06T11:02:15.121Z\",\n      \"baslama\": null,\n      \"bitis\": null\n    },\n    {\n      \"id\": \"c07be93a1f42\",\n      \"dosyaAdi\": \"ekim.pdf\",\n      \"boyut\": 51870,\n      \"kaynak\": \"panel\",\n      \"etiket\": \"5b0e6f8e-2a1c-4d3e-9f10-7c2b8a4d6e01\",\n      \"kuyrukId\": null,\n      \"sira\": null,\n      \"durum\": \"bitti\",\n      \"kuyrukSirasi\": null,\n      \"onundeki\": null,\n      \"model\": \"claude-haiku-5-5\",\n      \"modeller\": [\n        \"claude-haiku-5-5\"\n      ],\n      \"onbellek\": false,\n      \"kayitId\": \"20261106-105931-0b9c44d1\",\n      \"hata\": null,\n      \"ozet\": {\n        \"faturaNo\": \"ABC2026000000123\",\n        \"faturaTarihi\": \"2026-10-31\",\n        \"saticiUnvan\": \"Örnek Yazılım A.Ş.\",\n        \"genelToplam\": 1800,\n        \"paraBirimi\": \"TRY\",\n        \"kalemSayisi\": 1\n      },\n      \"apiEsdegeriUsd\": 0.0006,\n      \"alinma\": \"2026-11-06T10:59:22.410Z\",\n      \"baslama\": \"2026-11-06T10:59:22.433Z\",\n      \"bitis\": \"2026-11-06T10:59:31.087Z\"\n    }\n  ]\n}"
             }
           ]
         },
@@ -1905,7 +3192,7 @@
                   "value": "no-cache, no-transform"
                 }
               ],
-              "body": "retry: 3000\n\nevent: durum\ndata: {\"istatistik\":{\"baslangic\":\"2026-11-06T09:00:00.000Z\",\"esZamanli\":2,\"sirada\":1,\"okunuyor\":2,\"bitti\":14,\"kayittan\":5,\"hata\":1,\"apiEsdegeriUsd\":0.4123},\"etkinlikler\":[{\"id\":\"3f9c1a7be210\",\"dosyaAdi\":\"kasim.pdf\",\"boyut\":48211,\"kaynak\":\"api\",\"etiket\":null,\"kuyrukId\":\"20261106-110215-8c1f02ab\",\"sira\":2,\"durum\":\"okunuyor\",\"model\":\"opus\",\"modeller\":[\"haiku\",\"opus\"],\"onbellek\":false,\"kayitId\":null,\"hata\":null,\"ozet\":null,\"apiEsdegeriUsd\":null,\"alinma\":\"2026-11-06T11:02:15.120Z\",\"baslama\":\"2026-11-06T11:02:16.004Z\",\"bitis\":null}]}\n\nevent: etkinlik\ndata: {\"etkinlik\":{\"id\":\"3f9c1a7be210\",\"dosyaAdi\":\"kasim.pdf\",\"boyut\":48211,\"kaynak\":\"api\",\"etiket\":null,\"kuyrukId\":\"20261106-110215-8c1f02ab\",\"sira\":2,\"durum\":\"bitti\",\"model\":\"claude-opus-5-5\",\"modeller\":[\"claude-haiku-5-5\",\"claude-opus-5-5\"],\"onbellek\":false,\"kayitId\":\"20261106-110241-5d2e7a90\",\"hata\":null,\"ozet\":{\"faturaNo\":\"GIB2026000004521\",\"faturaTarihi\":\"2026-11-01\",\"saticiUnvan\":\"Türk Telekom A.Ş.\",\"genelToplam\":1416,\"paraBirimi\":\"TRY\",\"kalemSayisi\":3},\"apiEsdegeriUsd\":0.0318,\"alinma\":\"2026-11-06T11:02:15.120Z\",\"baslama\":\"2026-11-06T11:02:16.004Z\",\"bitis\":\"2026-11-06T11:02:41.502Z\"},\"istatistik\":{\"baslangic\":\"2026-11-06T09:00:00.000Z\",\"esZamanli\":2,\"sirada\":1,\"okunuyor\":1,\"bitti\":15,\"kayittan\":5,\"hata\":1,\"apiEsdegeriUsd\":0.4441}}\n\n: canli\n"
+              "body": "retry: 3000\n\nevent: durum\ndata: {\"istatistik\":{\"baslangic\":\"2026-11-06T09:00:00.000Z\",\"esZamanli\":2,\"sirada\":1,\"okunuyor\":2,\"bitti\":14,\"kayittan\":5,\"hata\":1,\"apiEsdegeriUsd\":0.4123},\"etkinlikler\":[{\"id\":\"3f9c1a7be210\",\"dosyaAdi\":\"kasim.pdf\",\"boyut\":48211,\"kaynak\":\"api\",\"etiket\":null,\"kuyrukId\":\"20261106-110215-8c1f02ab\",\"sira\":2,\"durum\":\"okunuyor\",\"kuyrukSirasi\":null,\"onundeki\":null,\"model\":\"opus\",\"modeller\":[\"haiku\",\"opus\"],\"onbellek\":false,\"kayitId\":null,\"hata\":null,\"ozet\":null,\"apiEsdegeriUsd\":null,\"alinma\":\"2026-11-06T11:02:15.120Z\",\"baslama\":\"2026-11-06T11:02:16.004Z\",\"bitis\":null}]}\n\nevent: etkinlik\ndata: {\"etkinlik\":{\"id\":\"3f9c1a7be210\",\"dosyaAdi\":\"kasim.pdf\",\"boyut\":48211,\"kaynak\":\"api\",\"etiket\":null,\"kuyrukId\":\"20261106-110215-8c1f02ab\",\"sira\":2,\"durum\":\"bitti\",\"kuyrukSirasi\":null,\"onundeki\":null,\"model\":\"claude-opus-5-5\",\"modeller\":[\"claude-haiku-5-5\",\"claude-opus-5-5\"],\"onbellek\":false,\"kayitId\":\"20261106-110241-5d2e7a90\",\"hata\":null,\"ozet\":{\"faturaNo\":\"GIB2026000004521\",\"faturaTarihi\":\"2026-11-01\",\"saticiUnvan\":\"Türk Telekom A.Ş.\",\"genelToplam\":1416,\"paraBirimi\":\"TRY\",\"kalemSayisi\":3},\"apiEsdegeriUsd\":0.0318,\"alinma\":\"2026-11-06T11:02:15.120Z\",\"baslama\":\"2026-11-06T11:02:16.004Z\",\"bitis\":\"2026-11-06T11:02:41.502Z\"},\"istatistik\":{\"baslangic\":\"2026-11-06T09:00:00.000Z\",\"esZamanli\":2,\"sirada\":1,\"okunuyor\":1,\"bitti\":15,\"kayittan\":5,\"hata\":1,\"apiEsdegeriUsd\":0.4441}}\n\n: canli\n"
             }
           ]
         },

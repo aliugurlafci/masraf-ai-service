@@ -2,7 +2,8 @@
 // the older records. It mirrors the server's activity log and redraws only what changed.
 
 import { el, icon, ICONS, replay } from './dom.js';
-import { dayLabel, fmtClock, fmtCount, fmtDay, fmtMoney, fmtTime, fmtUsdShort, modelName } from './format.js';
+import { dayLabel, fmtClock, fmtCount, fmtDay, fmtMoney, fmtTime, fmtUsdShort, modelName, queueText } from './format.js';
+import { READ_SOURCE } from './labels.js';
 
 const FLASH_MS = 1400;
 const FEED_LIMIT = 200;
@@ -20,7 +21,10 @@ const EMPTY_TEXT = {
   hata: 'Okunamayan dosya yok.',
 };
 
-const sourceChip = (a) => el('span', { className: `source ${a.kaynak}`, text: a.kaynak === 'api' ? 'API' : 'Panel' });
+// kaynak: panel | api | arka_plan (a read the server started itself: pending invoices after a
+// restart, or "Yeniden oku" on an expense). Anything unknown is shown as the panel was.
+const sourceKey = (a) => (READ_SOURCE[a.kaynak] ? a.kaynak : 'panel');
+const sourceChip = (a) => el('span', { className: `source ${sourceKey(a)}`, text: READ_SOURCE[sourceKey(a)] });
 
 function glyph(a) {
   if (a.durum === 'sirada') return el('span', { className: 'glyph sirada', 'aria-hidden': 'true' }, icon(ICONS.clock));
@@ -37,8 +41,13 @@ function readingText(a) {
   return `${modelName(a.model)} okuyor`;
 }
 
+/** "Sırada 3. · önünde 4 fatura var" when the server knows the place; otherwise the old wording. */
+function waitingText(a) {
+  return Number.isInteger(a.kuyrukSirasi) ? queueText(a.kuyrukSirasi, a.onundeki) : 'Sırada, boş hat bekliyor';
+}
+
 function subText(a) {
-  if (a.durum === 'sirada') return 'Sırada, boş hat bekliyor';
+  if (a.durum === 'sirada') return waitingText(a);
   if (a.durum === 'okunuyor') return readingText(a);
   if (a.durum === 'hata') return a.hata?.mesaj ?? 'Okunamadı';
   const o = a.ozet;
@@ -265,11 +274,14 @@ export function createMonitor(els, { canRetry }) {
     const busy = slots.filter((s) => s && s.until === 0).length;
     els.lanesMeta.textContent = `${fmtCount(busy)} / ${fmtCount(slots.length)} hat dolu${overflow > 0 ? `, +${fmtCount(overflow)} okuma daha` : ''}`;
 
-    // The line in front of the lanes, oldest first.
+    // The line in front of the lanes in reading order (the server's place when known), else oldest first.
     const waiting = order
       .map((id) => activities.get(id))
       .filter((a) => a?.durum === 'sirada')
-      .reverse();
+      .reverse()
+      .map((a, i) => ({ a, i }))
+      .sort((x, y) => (x.a.kuyrukSirasi ?? Infinity) - (y.a.kuyrukSirasi ?? Infinity) || x.i - y.i)
+      .map((x) => x.a);
     els.waiting.hidden = waiting.length === 0;
     if (waiting.length > 0) {
       const names = waiting.slice(0, 3).map((a) => a.dosyaAdi).join(', ');
@@ -281,7 +293,7 @@ export function createMonitor(els, { canRetry }) {
   // ---------- Feed ----------
 
   function rowSig(a) {
-    return [a.durum, a.model, a.modeller.length, a.kayitId, a.onbellek, a.hata?.kod, current.activityId === a.id, canRetry(a)].join('|');
+    return [a.durum, a.model, a.modeller.length, a.kayitId, a.onbellek, a.hata?.kod, a.kuyrukSirasi, a.onundeki, a.kaynak, current.activityId === a.id, canRetry(a)].join('|');
   }
 
   function fillRow(entry, a) {

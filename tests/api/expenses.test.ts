@@ -1,6 +1,7 @@
 // Administration, expense forms, approvals, export and invoice access over HTTP (docs/onay-sistemi.md,
 // section 6). The rules themselves are tested on the service in tests/expenses/forms.test.ts; this file
 // checks what clients see: status codes, error codes, shapes, roles and races through the API.
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
@@ -20,8 +21,8 @@ interface Answer {
 const PAST = '2025-06-15';
 const formBody = (over: Record<string, unknown> = {}) => ({ baslik: 'Müşteri yemeği', kategoriId: 1, masrafTarihi: PAST, tutar: 100, ...over });
 
-const SUMMARY_KEYS = ['id', 'baslik', 'kategori', 'masrafTarihi', 'satici', 'tutar', 'paraBirimi', 'yerelTutar', 'durum', 'olusturan', 'olusturma', 'gonderim', 'siradakiOnayci', 'faturaIdler'];
-const DETAIL_KEYS = [...SUMMARY_KEYS, 'aciklama', 'kur', 'onayTutari', 'tur', 'sonuclanma', 'odeme', 'guncelleme', 'faturalar', 'tutarFarki', 'onaylar', 'gecmis', 'izinler'];
+const SUMMARY_KEYS = ['id', 'baslik', 'kategori', 'masrafTarihi', 'satici', 'tutar', 'paraBirimi', 'yerelTutar', 'durum', 'olusturan', 'olusturma', 'gonderim', 'siradakiOnayci', 'faturaIdler', 'okuma', 'masrafMerkezi', 'organizasyon'];
+const DETAIL_KEYS = [...SUMMARY_KEYS, 'aciklama', 'kur', 'onayTutari', 'tur', 'sonuclanma', 'odeme', 'guncelleme', 'faturalar', 'tutarFarki', 'onaylar', 'gecmis', 'izinler', 'okununcaGonder', 'bekleyenFaturalar', 'eksikAlanlar'];
 const NONE = { duzenle: false, gonder: false, geriCek: false, iptal: false, onayla: false, reddet: false, odendi: false, devret: false };
 
 describe('expense, approval and administration API', () => {
@@ -654,11 +655,11 @@ describe('expense, approval and administration API', () => {
 
       const lines = bytes.toString('utf8').slice(1).split('\r\n');
       expect(lines.at(-1)).toBe('');
-      expect(lines[0]).toBe('No;Başlık;Kategori;Masraf tarihi;Satıcı;Fatura no;Tutar;Para birimi;Kur;Yerel tutar;Durum;Oluşturan;Departman;Gönderim;Sonuçlanma;Ödeme');
+      expect(lines[0]).toBe('No;Başlık;Kategori;Masraf tarihi;Satıcı;Fatura no;Tutar;Para birimi;Kur;Yerel tutar;Durum;Oluşturan;Departman;Gönderim;Sonuçlanma;Ödeme;Organizasyon;Masraf Merkezi');
       expect(lines.slice(1, -1)).toEqual([
-        `${f1.id};"'=HYPERLINK(""http://kotu.example"",""tıkla"")";Yemek;2025-06-15;'+90 212 555 00 00;;1234,50;TRY;;1234,50;Taslak;Form Sahibi;;;;`,
-        `${f2.id};"Yemek; içecek";Yemek;2025-06-15;'@SUM(A1);;100,00;TRY;;100,00;Taslak;Form Sahibi;;;;`,
-        `${f3.id};'-2+3;Yemek;2025-06-16;"Çarşı ""Merkez""";;100,00;TRY;;100,00;Taslak;Form Sahibi;;;;`,
+        `${f1.id};"'=HYPERLINK(""http://kotu.example"",""tıkla"")";Yemek;2025-06-15;'+90 212 555 00 00;;1234,50;TRY;;1234,50;Taslak;Form Sahibi;;;;;;`,
+        `${f2.id};"Yemek; içecek";Yemek;2025-06-15;'@SUM(A1);;100,00;TRY;;100,00;Taslak;Form Sahibi;;;;;;`,
+        `${f3.id};'-2+3;Yemek;2025-06-16;"Çarşı ""Merkez""";;100,00;TRY;;100,00;Taslak;Form Sahibi;;;;;;`,
       ]);
     });
 
@@ -900,6 +901,8 @@ describe('expense, approval and administration API', () => {
       expect(f.faturalar[0]).toEqual({
         id: inv.id,
         dosyaAdi: expect.any(String),
+        // The file read, by SHA-256: how a client knows which waiting file became this invoice.
+        dosyaOzeti: createHash('sha256').update(inv.bytes).digest('hex'),
         dosyaVar: true,
         mime: 'application/pdf',
         faturaNo: 'DOGRU-1',
@@ -917,6 +920,7 @@ describe('expense, approval and administration API', () => {
         kalemler: read.kalemler,
         duzeltildi: true,
         okunan: { fatura: read.fatura, kalemler: read.kalemler },
+        alanlar: {},
         eksikAlanlar: [],
       });
       // An approver sees the same, read values included.

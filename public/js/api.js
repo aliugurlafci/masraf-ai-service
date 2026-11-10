@@ -111,6 +111,16 @@ async function fetchBlob(url, { signal } = {}) {
   }
 }
 
+/** The file name of a Content-Disposition header (filename*= or filename=), or null. */
+function filenameOf(disposition) {
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition ?? '');
+  try {
+    return m ? decodeURIComponent(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Forgets everything cached for the previous user. */
 export function clearCache() {
   records.clear();
@@ -176,35 +186,110 @@ export const previewFlow = (data, opts) => send('POST', '/api/onay-akisi/onizle'
 
 // ---------- Categories ----------
 
+/** Kategori[]: { id, ad, simge, aktif, sira, kod, kdvOranlari, hesapKodu }. `all` (yonetici) adds inactive ones. */
 export const listCategories = (all, opts) => get(`/api/kategoriler${all ? '?tumu=1' : ''}`, opts);
+/** { ad, simge?, kod?, kdvOranlari?, hesapKodu? } → 201 Kategori · 409 kategori_var */
 export const createCategory = (data) => send('POST', '/api/kategoriler', data);
+/** { ad?, simge?, aktif?, sira?, kod?, kdvOranlari?, hesapKodu? }; an empty text or null clears kod/kdvOranlari/hesapKodu. */
 export const updateCategory = (id, data) => send('PATCH', `/api/kategoriler/${seg(id)}`, data);
+/** 204 · 409 kullaniliyor (used on a form; make it inactive instead). */
+export const deleteCategory = (id) => send('DELETE', `/api/kategoriler/${seg(id)}`);
+
+// ---------- Definition lists (yonetici; docs section 6, "Tanım listeleri") ----------
+// Every list has the same shape: GET <base>?q=&aktif=1|0&sayfa=&adet= → { kayitlar, toplam, sayfa, adet },
+// POST <base>, PATCH/DELETE <base>/:id, GET <base>/disa-aktar (.xlsx) and POST <base>/ice-aktar.
+// The categories list (/api/kategoriler) is not paged and answers with a plain array.
+
+export const ORGANIZATIONS = '/api/organizasyonlar';
+export const COST_CENTRES = '/api/masraf-merkezleri';
+export const CATEGORIES = '/api/kategoriler';
+/** The option list of a 'liste' receipt field. */
+export const optionsBase = (anahtar) => `/api/alanlar/${seg(anahtar)}/secenekler`;
+
+/** Organizasyon: { id, kod, ad, paraBirimi, aktif, kullaniciSayisi }. */
+export const listOrganizations = (params, opts) => get(`${ORGANIZATIONS}${qs(params)}`, opts);
+/** MasrafMerkezi: { id, kod, aciklama, gosterim, aktif, kullaniciSayisi }. */
+export const listCostCentres = (params, opts) => get(`${COST_CENTRES}${qs(params)}`, opts);
+/**
+ * Secenek: { id, kod, ad, gosterim, aktif, sira }. Everyone may ask (only active options of an active
+ * field for non-managers); 404 when the field is missing, not a 'liste' or inactive for them.
+ */
+export const listOptions = (anahtar, params, opts) => get(`${optionsBase(anahtar)}${qs(params)}`, opts);
+
+/** One record of a paged definition list: create (201), change, delete (204 · 409 kullaniliyor). */
+export const createDefinition = (base, data) => send('POST', base, data);
+export const updateDefinition = (base, id, data) => send('PATCH', `${base}/${seg(id)}`, data);
+export const deleteDefinition = (base, id) => send('DELETE', `${base}/${seg(id)}`);
+export const listDefinitions = (base, params, opts) => get(`${base}${qs(params)}`, opts);
+
+/** Every record of a list (inactive ones too) as .xlsx: { ok, blob, filename }. */
+export async function exportDefinitions(base) {
+  const r = await fetchBlob(`${base}/disa-aktar`);
+  return r.ok ? { ...r, filename: filenameOf(r.disposition) } : r;
+}
+
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+/**
+ * Sends an .xlsx file as the raw body. onizleme: nothing is written, the answer says what would
+ * happen; eksikleriPasiflestir: active records whose key is not in the file become inactive.
+ * → IceAktarim { onizleme, satirSayisi, eklenen, guncellenen, degismeyen, pasiflestirilen, hataSayisi,
+ * hatalar: [{ satir, mesaj }], sutunlar: { alan: dosyaSutunu }, yokSayilanSutunlar } · 400 gecersiz_dosya
+ * · 413 dosya_cok_buyuk.
+ */
+export function importDefinitions(base, file, { onizleme = false, eksikleriPasiflestir = false, signal } = {}) {
+  const query = qs({ onizleme: onizleme ? 1 : undefined, eksikleriPasiflestir: eksikleriPasiflestir ? 1 : undefined });
+  return call(`${base}/ice-aktar${query}`, { method: 'POST', body: file, headers: { 'Content-Type': XLSX }, signal });
+}
+
+// ---------- Receipt fields and their rules (docs section 6, "Fiş alanları") ----------
+
+/**
+ * { alanlar: AlanTanimi[], kurallar: AlanKurali[] }. Without `all` only active fields and the rules
+ * whose condition field is active (targets cut to active fields); `all` (yonetici) adds inactive ones
+ * and each field's `kullanim`.
+ * AlanTanimi: { id, anahtar, ad, duzey: form|fis, tur, zorunlu, aktif, sira, sistem, aciklama, secenekSayisi, kullanim? }.
+ * AlanKurali: { id, kosulAlan, kosulDeger: { id, gosterim, aktif }, hedefler: [anahtar] }.
+ */
+export const listFields = (all, opts) => get(`/api/alanlar${all ? '?tumu=1' : ''}`, opts);
+/** { ad, tur, zorunlu?, aciklama? } → 201 AlanTanimi · 409 alan_adi_kullaniliyor · 409 alan_siniri */
+export const createField = (data) => send('POST', '/api/alanlar', data);
+/** { ad?, zorunlu?, aktif?, sira?, aciklama? } → AlanTanimi · 400 (a property this field cannot change) */
+export const updateField = (id, data) => send('PATCH', `/api/alanlar/${seg(id)}`, data);
+/** 204 · 409 sistem_alani · 409 alan_kullaniliyor */
+export const deleteField = (id) => send('DELETE', `/api/alanlar/${seg(id)}`);
+/** { kosulAlan, kosulDegerId, hedefler } → 201 AlanKurali · 409 kural_var */
+export const createFieldRule = (data) => send('POST', '/api/alan-kurallari', data);
+/** The whole rule: { kosulAlan, kosulDegerId, hedefler } → AlanKurali · 409 kural_var */
+export const updateFieldRule = (id, data) => send('PUT', `/api/alan-kurallari/${seg(id)}`, data);
+export const deleteFieldRule = (id) => send('DELETE', `/api/alan-kurallari/${seg(id)}`);
 
 // ---------- Expenses ----------
 
 /** { kapsam: 'benim'|'tumu', durum: 'onayda,taslak', q, sayfa, adet } */
 export const listExpenses = (params, opts) => get(`/api/masraflar${qs(params)}`, opts);
 export const getExpense = (id, opts) => get(`/api/masraflar/${seg(id)}`, opts);
-/** { baslik, kategoriId, masrafTarihi, tutar, paraBirimi?, kur?, satici?, aciklama?, faturaIdler?, yerelKarsiliklar?, faturaDuzeltmeleri?, gonder? } → 201 MasrafDetay. */
+/**
+ * { baslik, kategoriId, masrafTarihi, tutar?, paraBirimi?, kur?, satici?, aciklama?, masrafMerkeziId?,
+ * faturaIdler?, bekleyenFaturalar?, okununcaGonder?, yerelKarsiliklar?, faturaDuzeltmeleri?, fisAlanlari?,
+ * gonder? } → 201 MasrafDetay. A draft may leave tutar out; bekleyenFaturalar holds the SHA-256
+ * (dosyaOzeti) of files still being read. fisAlanlari maps a receipt (invoice id, or the dosyaOzeti of a
+ * file still being read) to its field values ({ anahtar: deger }), replacing that receipt's values.
+ */
 export const createExpense = (data) => send('POST', '/api/masraflar', data);
-/** Only the fields that change; faturaIdler, when sent, replaces the whole invoice list (order included). */
+/**
+ * Only the fields that change; faturaIdler, when sent, replaces the whole invoice list (order included),
+ * and bekleyenFaturalar the whole list of files still being read (always sent with faturaIdler).
+ */
 export const updateExpense = (id, data) => send('PATCH', `/api/masraflar/${seg(id)}`, data);
 
-/** action: gonder | geri-cek | iptal | onayla | reddet | odendi | devret */
+/** action: gonder | yeniden-oku | geri-cek | iptal | onayla | reddet | odendi | devret */
 export const expenseAction = (id, action, body) => send('POST', `/api/masraflar/${seg(id)}/${action}`, body);
 
 /** The approval certificate (PDF) of an approved or paid expense, as a Blob. */
 export async function getExpensePdf(id, opts) {
   const r = await fetchBlob(`/api/masraflar/${seg(id)}/pdf`, opts);
-  if (!r.ok) return r;
-  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(r.disposition ?? '');
-  let filename = null;
-  try {
-    filename = m ? decodeURIComponent(m[1]) : null;
-  } catch {
-    filename = null;
-  }
-  return { ...r, filename };
+  return r.ok ? { ...r, filename: filenameOf(r.disposition) } : r;
 }
 
 /** durum: bekleyen | karar */
@@ -213,15 +298,7 @@ export const listApprovals = (durum, opts) => get(`/api/onaylar${qs({ durum })}`
 /** CSV of all expenses: { durum?, baslangic?, bitis? } → { ok, blob, filename }. */
 export async function exportExpenses(params) {
   const r = await fetchBlob(`/api/masraflar/disa-aktar${qs(params)}`);
-  if (!r.ok) return r;
-  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(r.disposition ?? '');
-  let filename = null;
-  try {
-    filename = m ? decodeURIComponent(m[1]) : null;
-  } catch {
-    filename = null;
-  }
-  return { ...r, filename };
+  return r.ok ? { ...r, filename: filenameOf(r.disposition) } : r;
 }
 
 // ---------- Invoices ----------
@@ -251,16 +328,25 @@ export async function sendOne(file, { force, tag, signal }) {
   return { ...r, id };
 }
 
-/** Several files; the server answers once each one is read from the records, refused or queued. */
-export function sendMany(files, { force, tag }) {
+/**
+ * Several files; the server answers once each one is read from the records, refused or queued.
+ * Kuyruk: { id, bitti, dosyalar: [{ sira, dosyaAdi, durum, kayitId, onbellek, hata, sonuc, dosyaOzeti,
+ * kuyrukSirasi, onundeki }] }. Aborting `signal` stops the upload; files the server has already
+ * taken are still read.
+ */
+export function sendMany(files, { force, tag, signal }) {
   const form = new FormData();
   for (const file of files) form.append('files', file);
   return call(force ? '/api/invoices/toplu?yenile=1' : '/api/invoices/toplu', {
     method: 'POST',
     body: form,
     headers: { 'X-Panel-Etiket': tag },
+    signal,
   });
 }
+
+/** The state of a multi-file send (same shape as sendMany's answer); 404 once the server restarted. */
+export const getBatch = (id, opts) => get(`/api/invoices/toplu/${seg(id)}`, opts);
 
 export function splitForSending(files) {
   const groups = [];

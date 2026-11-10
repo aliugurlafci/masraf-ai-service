@@ -12,11 +12,14 @@ import { detectFileType } from '../invoice/file-type.ts';
 import { createInvoiceStorage, type InvoiceStorage, type StoredRecord } from '../invoice/storage.ts';
 import { createActivityLog, type TrackMeta } from '../reading/activity.ts';
 import { createBatchQueue, type BatchInput, type BatchPlace, type ItemError } from '../reading/batch-queue.ts';
+import { createPendingReads, type PendingReads } from '../reading/pending-reads.ts';
 import { createInvoiceReader, type ReadHooks, type ReadInput, type ReadInvoice, type ReadResult } from '../reading/reader.ts';
 import { accountRouter, loginHandler } from './account-routes.ts';
 import { adminRouter } from './admin-routes.ts';
+import { definitionRouter } from './definition-routes.ts';
 import { requireSession, tokenOf, userOf } from './auth.ts';
 import { expenseRouter } from './expense-routes.ts';
+import { fieldRouter } from './field-routes.ts';
 import { notificationRouter } from './notification-routes.ts';
 import { NO_MAIL, type NotifySettings } from '../notifications/store.ts';
 import { liveStream, type Visibility } from './live.ts';
@@ -58,6 +61,10 @@ export interface AppDeps {
   readonly log?: (line: string) => void;
   /** Mail settings of the notifications. Default: mail off, mails written as skipped. */
   readonly mail?: NotifySettings;
+  /** Start reading the files saved forms still wait for (after a restart). Default false. */
+  readonly resumeReads?: boolean;
+  /** Receives the background reader of saved forms' files, e.g. to wait for it in tests. */
+  readonly onPendingReads?: (pending: PendingReads) => void;
 }
 
 const EXTRACTION_STATUS: Record<ExtractionError['code'], number> = {
@@ -117,7 +124,6 @@ export function createApp(deps: AppDeps): express.Express {
   const baseCurrency = deps.baseCurrency ?? 'TRY';
   const storage = deps.storage ?? createInvoiceStorage(deps.db);
   const mail = deps.mail ?? NO_MAIL;
-  const expenses = createExpenseService(deps.db, { baseCurrency, notifications: mail });
   const limiter = deps.loginLimiter ?? createLoginLimiter(auth.loginMaxAttempts, auth.loginLockMs);
 
   // Every upload is noted for its sender; that is what lets them open the invoice and attach it to a form.
@@ -157,6 +163,48 @@ export function createApp(deps: AppDeps): express.Express {
         file.hata,
       ),
   });
+
+  // A form saved before its files were read keeps them (bekleyen_faturalar) and reads them in the
+  // background, in the same queue as uploads; a file whose read already runs is joined.
+  const expenses = createExpenseService(deps.db, {
+    baseCurrency,
+    notifications: mail,
+    reading: {
+      file: (hash, kullaniciId) => {
+        const f = reader.file(hash, kullaniciId);
+        return f === null ? null : { buffer: f.buffer, mime: f.type.mime, name: f.name };
+      },
+      status: (hash) => reader.status(hash),
+      waiting: (ids) => pending.start(ids),
+    },
+  });
+  const pending = createPendingReads({
+    files: (ids) => expenses.waitingFiles(ids),
+    content: (id) => expenses.waitingContent(id),
+    // The owner sent the file: a read of it that still runs already holds its bytes.
+    running: (file) => reader.file(file.dosyaOzeti, file.kullanici.id)?.buffer ?? null,
+    limit: maxConcurrent,
+    read: async (file, input) => {
+      // Joining a read that already shows in the monitor; a new read shows as a background one.
+      const result = reader.status(file.dosyaOzeti) !== null ? await readAndNote(input) : await read(input, { kaynak: 'arka_plan', kullanici: file.kullanici });
+      log(`bekleyen fatura okundu form=${file.formId} ${describeResult(result)}`);
+      return result;
+    },
+    settle: (id, outcome) => expenses.settleWaiting(id, outcome),
+    log,
+  });
+  deps.onPendingReads?.(pending);
+  if (deps.resumeReads === true) {
+    pending.start();
+    // A form whose last file was read just before the server stopped may still wait for its send.
+    expenses
+      .resumeSends()
+      .then((n) => {
+        if (n > 0) log(`okununca gönder: ${n} masraf için gönderim yeniden denendi`);
+      })
+      .catch((err: unknown) => log(`hata okununca_gonder: ${err instanceof Error ? err.message : String(err)}`));
+  }
+
   const tooLarge = (): HttpError =>
     new HttpError(413, 'dosya_cok_buyuk', `Dosya en fazla ${Math.floor(deps.maxFileBytes / MB)} MB olabilir.`);
 
@@ -351,6 +399,8 @@ export function createApp(deps: AppDeps): express.Express {
   });
 
   app.use('/api', json, accountRouter(accountDeps), adminRouter({ db: deps.db, baseCurrency, passwordMinLength: auth.passwordMinLength }), expenseRouter(expenses), notificationRouter({ db: deps.db, mail }));
+  app.use('/api', json, fieldRouter(deps.db));
+  app.use('/api', json, definitionRouter({ db: deps.db }));
 
   app.use(express.static(join(ROOT_DIR, 'public'), { index: 'index.html' }));
 

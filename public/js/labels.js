@@ -2,7 +2,7 @@
 // Status is never shown by colour alone: every badge carries an icon and its word.
 
 import { el, icon, ICONS } from './dom.js';
-import { fmtCurrency, fmtAmount } from './format.js';
+import { fmtCount, fmtCurrency, fmtAmount } from './format.js';
 
 export const EXPENSE_STATUS = {
   taslak: { label: 'Taslak', tone: 'muted', icon: ICONS.edit },
@@ -135,12 +135,28 @@ export const limitText = (limit, cur) => (isOpen(limit) ? 'sınırsız' : `limit
 
 /**
  * The amount line of an expense: the declared amount, and the local one when the currency differs.
- * Returns { main, local } texts.
+ * Returns { main, local, empty } texts. A draft may have no amount yet (tutar null): main then says
+ * so in words and empty is true, so lists can show it as a note rather than a figure.
  */
 export function amountTexts(m, base) {
+  if (m.tutar === null || m.tutar === undefined) {
+    return { main: m.okuma?.bekleyen > 0 ? 'Tutar okununca dolacak' : 'Tutar girilmedi', local: null, empty: true };
+  }
   const main = fmtCurrency(m.tutar, m.paraBirimi);
   const differs = m.paraBirimi && base && m.paraBirimi !== base && m.yerelTutar !== null && m.yerelTutar !== undefined;
-  return { main, local: differs ? fmtCurrency(m.yerelTutar, base) : null };
+  return { main, local: differs ? fmtCurrency(m.yerelTutar, base) : null, empty: false };
+}
+
+/**
+ * MasrafOzet.okuma ({ bekleyen, hatali } or null) as small tags: "2 fatura okunuyor", "1 fatura okunamadı".
+ * Returns null when nothing is waiting.
+ */
+export function readingTags(okuma, className = '') {
+  if (!okuma) return null;
+  const tags = [];
+  if (okuma.bekleyen > 0) tags.push(el('span', { className: 'tag accent read-tag' }, icon(ICONS.clock), el('span', { text: `${fmtCount(okuma.bekleyen)} fatura okunuyor` })));
+  if (okuma.hatali > 0) tags.push(el('span', { className: 'tag err read-tag' }, icon(ICONS.alert), el('span', { text: `${fmtCount(okuma.hatali)} fatura okunamadı` })));
+  return tags.length > 0 ? el('span', { className: `read-tags ${className}`.trim() }, ...tags) : null;
 }
 
 /** The audit log's action codes (src/ audit calls); an unknown code is shown humanized. */
@@ -173,7 +189,14 @@ export const NOTIFICATION_TYPES = {
   reddedildi: { label: 'Reddedildi', tone: 'err', icon: ICONS.xCircle },
   odendi: { label: 'Ödendi', tone: 'paid', icon: ICONS.cash },
   odeme_bekliyor: { label: 'Ödeme bekliyor', tone: 'wait', icon: ICONS.cash },
+  okuma_bitti: { label: 'Faturalar okundu', tone: 'ok', icon: ICONS.scan },
+  okuma_hatasi: { label: 'Okunamayan fatura', tone: 'err', icon: ICONS.alert },
+  onaya_gonderildi: { label: 'Onaya gönderildi', tone: 'accent', icon: ICONS.send },
+  onaya_gonderilemedi: { label: 'Gönderilemedi', tone: 'err', icon: ICONS.warn },
 };
+
+/** Where a read came from (activity `kaynak`): the panel, the API, or the server itself. */
+export const READ_SOURCE = { panel: 'Panel', api: 'API', arka_plan: 'Arka plan' };
 
 /** Outbox mail states (docs/onay-sistemi.md, section 7). */
 export const MAIL_STATUS = {

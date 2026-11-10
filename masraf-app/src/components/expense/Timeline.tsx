@@ -124,27 +124,31 @@ export function HistoryList({ items }: { readonly items: readonly GecmisKaydi[] 
   const { colors } = useTheme();
   return (
     <View style={styles.history} accessibilityRole="list">
-      {items.map((item, i) => (
-        <View
-          key={`${item.tarih}-${i}`}
-          style={styles.historyRow}
-          accessible
-          accessibilityLabel={`${HISTORY_LABELS[item.islem]}, ${item.kullanici?.adSoyad ?? ''}, ${formatDateTime(item.tarih)}`}
-        >
-          <View style={[styles.historyDot, { backgroundColor: i === items.length - 1 ? colors.primary : colors.border }]} />
-          <View style={styles.flex}>
-            <Text variant="label">{HISTORY_LABELS[item.islem]}</Text>
-            <Text variant="caption" tone="muted">
-              {[item.kullanici?.adSoyad, formatDateTime(item.tarih)].filter(Boolean).join(' · ')}
-            </Text>
-            {item.aciklama !== null && item.aciklama !== '' ? (
-              <Text variant="small" tone="muted" style={styles.historyNote}>
-                “{item.aciklama}”
+      {items.map((item, i) => {
+        // Rows without a user were written by the server itself (background reading, "okununca gönder").
+        const who = item.kullanici?.adSoyad ?? 'Sistem';
+        return (
+          <View
+            key={`${item.tarih}-${i}`}
+            style={styles.historyRow}
+            accessible
+            accessibilityLabel={`${HISTORY_LABELS[item.islem]}, ${who}, ${formatDateTime(item.tarih)}`}
+          >
+            <View style={[styles.historyDot, { backgroundColor: i === items.length - 1 ? colors.primary : colors.border }]} />
+            <View style={styles.flex}>
+              <Text variant="label">{HISTORY_LABELS[item.islem]}</Text>
+              <Text variant="caption" tone="muted">
+                {`${who} · ${formatDateTime(item.tarih)}`}
               </Text>
-            ) : null}
+              {item.aciklama !== null && item.aciklama !== '' ? (
+                <Text variant="small" tone="muted" style={styles.historyNote}>
+                  “{item.aciklama}”
+                </Text>
+              ) : null}
+            </View>
           </View>
-        </View>
-      ))}
+        );
+      })}
     </View>
   );
 }

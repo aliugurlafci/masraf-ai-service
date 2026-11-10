@@ -2,7 +2,7 @@
 
 Şirket içi masraf yönetimi. Çalışan fişini ya da faturasını yükler, fatura kendi Claude aboneliğinizle okunur ve masraf formu dolar. Form, tutarına göre onay akışındaki onaycılara sırayla gider; onaylanan masraflar muhasebe tarafından ödendi olarak işaretlenir. Bütün veriler Docker'da çalışan SQL Server'da tutulur. Servis varsayılan olarak yalnızca sizin makinenizde (`127.0.0.1`) çalışır; telefondan kullanmak için aynı Wi-Fi'ye açılabilir (`AG_ERISIMI`).
 
-- **Web paneli** (`http://127.0.0.1:4000`): masraflar, onay kutusu, fatura okuma ve canlı izleme; yöneticiler için kullanıcılar, onay akışı, kategoriler ve denetim kaydı.
+- **Web paneli** (`http://127.0.0.1:4000`): masraflar, onay kutusu, fatura okuma ve canlı izleme; yöneticiler için kullanıcılar, onay akışı, tanım listeleri (organizasyon, masraf merkezi, kategori, etiket, proje kodu gibi; Excel ile içe/dışa aktarma), alan yönetimi ve denetim kaydı.
 - **Mobil uygulama** (`masraf-app/`, React Native Expo): fişi fotoğraflayıp masraf oluşturma, onaylama. Kurulumu `masraf-app/README.md` dosyasındadır.
 - **API**: panelin ve mobil uygulamanın kullandığı uçların hepsi. Onay sisteminin kuralları ve API sözleşmesi `docs/onay-sistemi.md` dosyasındadır.
 
@@ -12,11 +12,15 @@
 - Her akışta onaycılar sırayla tanımlanır ve her onaycının bir onay limiti vardır: son onayını verebileceği en yüksek tutar (dahil, kuruş hassasiyetinde). Limitler sırayla büyür, son onaycının limiti sınırsızdır; böylece her tutarı onaylayacak tam bir onaycı (karar veren onaycı) bulunur. Her akışta en az bir onaycı olmak zorundadır; kurala uymayan akış kaydedilmez. Aynı kişi farklı akışlarda farklı limitlerle yer alabilir.
 - Akışın stratejisi masrafı kimin göreceğini belirler. **Zincirleme onayda** (`zincir`) masraf ilk onaycıdan başlar ve karar veren onaycıya kadar sıradaki herkesin onayından geçer; tutar büyüdükçe zincir uzar. **Tek onaycıda** (`tek`) masrafı yalnızca karar veren onaycı onaylar. Örneğin limitler 5.000, 50.000 ve sınırsızsa 20.000'lik masraf zincirleme onayda 1. ve 2. onaycıya sırayla, tek onaycıda yalnızca 2. onaycıya gider.
 - Bir masrafa birden çok fatura eklenebilir (en çok 20; örneğin bir seyahatin otel, taksi ve yemek fişleri). Bir fatura iptal edilmemiş yalnızca bir masrafta kullanılabilir.
+- Sunucu yoğunken fişin sırası ve önünde kaç fatura olduğu gösterilir. Masraf, fişlerin okunmasını beklemeden taslak olarak kaydedilebilir (tutar boş bırakılabilir). Fişler arka planda okunur ve forma eklenir; boş tutar ve satıcı faturalardan doldurulur, sahibine bildirim (ve açıksa mail) gider. Kaydederken "okumalar bitince onaya gönder" seçilirse form kendiliğinden onaya çıkar; gönderilemezse sebebiyle birlikte bildirilir.
 - Yönlendirmede kullanılan tutar, beyan edilen tutar ile bağlı faturaların toplamından büyük olanıdır (yabancı para biriminde kurla çevrilir). Formun ve TRY'nin dışında bir para birimindeki faturanın TRY karşılığını çalışan girer; karşılığı girilmemiş faturayla form onaya gönderilemez.
 - Gönderenin kendisi onaycıysa kendi adımı atlanır. Karar veren onaycı kendisiyse son onay bir üst onaycıya geçer; akışın en üstündeyse bir yöneticiye gider.
 - Reddedilen form sahibine döner; düzeltilip yeniden gönderilebilir. Yönetici bekleyen bir onayı başka bir kullanıcıya devredebilir.
+- Yönetici kullanıcıya bir organizasyon ve bir ya da birden çok masraf merkezi tanımlar; çalışan formda bunlardan birini seçer. Etiket, proje kodu, ödeme yöntemi, doküman tipi, not gibi alanlar her fiş için ayrı doldurulur, fiş okunurken de düzenlenebilir.
+- "Alan yönetimi" sayfasında fiş alanı eklenir, çıkarılır (pasifleştirilir), hangi fatura bilgilerinin ve fiş alanlarının zorunlu olduğu seçilir. Koşullu kurallarla bir değere bağlı zorunluluk tanımlanır: örneğin "Kategori ARAÇ BAKIM ONARIM ise Etiket zorunlu". Eksik alanlı form taslak kaydedilir ama onaya gönderilemez.
+- Organizasyonlar, masraf merkezleri, kategoriler ve liste alanlarının seçenekleri panelden yönetilir; Excel (`.xlsx`, en çok 5 MB ve 20.000 satır) ile önce önizlenip içe aktarılır, dışa aktarılır. masraff.io dışa aktarımlarının sütun adları tanınır.
 
-Roller: `calisan` (kendi masrafları ve onaycısı olduğu formlar), `muhasebe` (bütün masrafları görür, ödendi işaretler, dışa aktarır), `yonetici` (her şey; kullanıcılar, onay akışları, kategoriler). Onaycı olmak bir rol değildir: bir akışa eklenen herkes onaycıdır.
+Roller: `calisan` (kendi masrafları ve onaycısı olduğu formlar), `muhasebe` (bütün masrafları görür, ödendi işaretler, dışa aktarır), `yonetici` (her şey; kullanıcılar, onay akışları, tanım listeleri, alan yönetimi). Onaycı olmak bir rol değildir: bir akışa eklenen herkes onaycıdır.
 
 ## Gereksinimler
 
@@ -75,7 +79,7 @@ curl.exe -H "Content-Type: application/json" -d "{\"eposta\":\"ali@firma.com\",\
 
 Yanıttaki `token` değerini sonraki isteklerde `Authorization: Bearer <token>` başlığıyla gönderin. Oturum `OTURUM_SURESI_SAAT` kadar geçerlidir ve kullanıldıkça uzar. Aşağıdaki örneklerde PowerShell'de önce `$t = "<token>"` yazdığınız varsayılır.
 
-Masraf, onay, kullanıcı, onay akışı ve kategori uçlarının tamamı `docs/onay-sistemi.md` dosyasının 6. bölümündedir. Bu bölüm fatura okuma uçlarını anlatır.
+Masraf, onay, kullanıcı, onay akışı, tanım listesi (Excel içe/dışa aktarma dahil) ve fiş alanı uçlarının tamamı `docs/onay-sistemi.md` dosyasının 6. bölümündedir. Bu bölüm fatura okuma uçlarını anlatır.
 
 Bir fatura okumak bir dakika kadar sürebilir. Aynı anda en fazla 2 fatura okunur (`CLAUDE_MAX_CONCURRENT`); diğerleri sırada bekler. Bu sınır tekli ve çoklu gönderimler için ortaktır.
 
@@ -193,10 +197,13 @@ Sunucu Claude okumasını beklemeden yanıt verir. `Location` başlığı kuyru�
   "esZamanli": 2,
   "sayac": { "toplam": 3, "sirada": 1, "okunuyor": 1, "bitti": 1, "hata": 0 },
   "dosyalar": [
-    { "sira": 1, "dosyaAdi": "ekim.pdf", "durum": "bitti", "kayitId": "20261105-163012-0b9c44d1", "onbellek": true, "hata": null,
+    { "sira": 1, "dosyaAdi": "ekim.pdf", "dosyaOzeti": "0b87b8…", "durum": "bitti", "kuyrukSirasi": null, "onundeki": null,
+      "kayitId": "20261105-163012-0b9c44d1", "onbellek": true, "hata": null,
       "sonuc": { "fatura": { "faturaNo": "ABC2026000000123", "…": "…" }, "kalemler": [ { "aciklama": "Danışmanlık", "…": "…" } ] } },
-    { "sira": 2, "dosyaAdi": "kasim.pdf", "durum": "okunuyor", "kayitId": null, "onbellek": false, "hata": null, "sonuc": null },
-    { "sira": 3, "dosyaAdi": "fis.jpg", "durum": "sirada", "kayitId": null, "onbellek": false, "hata": null, "sonuc": null }
+    { "sira": 2, "dosyaAdi": "kasim.pdf", "dosyaOzeti": "5e1f02…", "durum": "okunuyor", "kuyrukSirasi": null, "onundeki": null,
+      "kayitId": null, "onbellek": false, "hata": null, "sonuc": null },
+    { "sira": 3, "dosyaAdi": "fis.jpg", "dosyaOzeti": "a91c3d…", "durum": "sirada", "kuyrukSirasi": 3, "onundeki": 4,
+      "kayitId": null, "onbellek": false, "hata": null, "sonuc": null }
   ]
 }
 ```
@@ -204,6 +211,8 @@ Sunucu Claude okumasını beklemeden yanıt verir. `Location` başlığı kuyru�
 İlerlemeyi `GET /api/invoices/toplu/<id>` ile izleyin. Aynı biçimde döner; birkaç saniyede bir sormak yeterlidir. Kuyruğu yalnızca oluşturan kullanıcı (ve muhasebe/yönetici) görebilir.
 
 - `durum`: `sirada` → `okunuyor` → `bitti` ya da `hata`. Dosyalar gönderildikleri sırayla okunur, aynı anda en fazla `esZamanli` tanesi.
+- `kuyrukSirasi` ve `onundeki`: `sirada` olan dosyanın, bütün kullanıcıların dosyalarıyla ortak sıradaki yeri (1 = sıradaki) ve ondan önce okunacak ya da okunmakta olan dosya sayısı. Örnekte "Sırada 3. · önünde 4 fatura var". Yeri henüz belli değilse ya da dosya sırada değilse `null`.
+- `dosyaOzeti`: dosyanın SHA-256'sı. Okuması bitmeden kaydedilen masraf formu bu dosyayı `bekleyenFaturalar` içinde bu değerle anar (`docs/onay-sistemi.md`, bölüm 3 ve 6). Reddedilen dosyada `null`.
 - `bitti: true` olduğunda bütün dosyalar okunmuş ya da hata almıştır.
 - `sonuc`: okunan dosyanın faturası (`fatura` ve `kalemler`). Ölçüm (`olcum`) dahil tam kayıt `GET /api/invoices/<kayitId>` ile alınır.
 - `onbellek: true`: dosya daha önce okunmuş, kayıtlı sonuç kullanıldı; Claude çalışmadı. Aynı dosya bir istekte iki kez varsa bir kez okunur, ikincisi `onbellek: true` olur. Yine de yeniden okutmak için `?yenile=1` ekleyin.
@@ -236,7 +245,8 @@ Sunucu açıldığından beri gelen her dosya, tekli ya da çoklu, panelden ya d
 - `durum`: `sirada` → `okunuyor` → `bitti` ya da `hata`. Reddedilen dosyalar (desteklenmeyen tür, büyük dosya) doğrudan `hata` olarak görünür.
 - `model`: okuyan model; kademeli okumada önce `haiku`, kontroller tutmazsa `opus`. Bittiğinde sonucu kullanılan modelin tam adı yazar. `modeller` bu dosyayı okuyan bütün modellerdir.
 - `ozet`: bitmiş okumanın fatura no, tarih, satıcı, genel toplam, para birimi ve kalem sayısı. Faturanın tamamı `GET /api/invoices/<kayitId>` ile alınır.
-- `kaynak`: `panel` ya da `api`. Panel isteklerine `X-Panel-Etiket` başlığı ekler; bu başlığı taşımayan her istek `api` sayılır.
+- `kaynak`: `panel`, `api` ya da `arka_plan`. Panel isteklerine `X-Panel-Etiket` başlığı ekler; bu başlığı taşımayan her istek `api` sayılır. `arka_plan`, okunması bitmeden kaydedilmiş bir formun dosyasını sunucunun kendisinin okumasıdır (örneğin yeniden başlatmadan sonra ya da "Yeniden oku" ile).
+- `kuyrukSirasi`, `onundeki`: sıradaki dosyanın yeri, toplu yüklemedeki gibi.
 - `kullanici`: dosyayı gönderen (`{id, adSoyad}`). Çalışanlar yalnızca kendi etkinliklerini görür; muhasebe ve yönetici hepsini. `istatistik` sayaçları geneldir.
 - `istatistik` sayaçları sunucunun açılışından (`baslangic`) beri sayar. `apiEsdegeriUsd` Claude'un gerçekten çalıştığı okumaların API karşılığıdır; aboneliğe ek ücret yansımaz.
 - Etkinlikler bellekte tutulur: süren okumaların hepsi ve bitenlerin son 300'ü. Sunucu yeniden başlayınca sıfırlanır, okunan faturalar veritabanında kalır.
@@ -269,6 +279,7 @@ Hatalı isteklerde gövde `{"hata": {"kod": "...", "mesaj": "..."}}` biçiminded
 | 403 | `yetki_yok`, `hesap_pasif`, `sifre_degismeli` | Rol yetmiyor, hesap pasif ya da önce şifre değiştirilmeli |
 | 403 | `izinsiz_host`, `izinsiz_kaynak`, `izinsiz_ag` | İstek izinli adresler (127.0.0.1, localhost; yerel ağ erişimi açıksa bilgisayarın yerel ağ adresi) dışından, başka bir web sitesinden ya da yerel ağ dışından geldi |
 | 404 | `bulunamadi` | Kayıt, form, kullanıcı ya da kuyruk yok (ya da görme yetkiniz yok) |
+| 409 | `okuma_suruyor`, `okuma_hatali`, `tutar_eksik` | Masraf onaya gönderilemiyor: faturası hâlâ okunuyor, okunamayan faturası var ya da tutarı boş |
 | 409 | `gecersiz_durum`, `onay_beklemiyor`, `onaylayan_yok`, `fatura_kullaniliyor`, `eposta_kullaniliyor`, `son_yonetici`, `onay_akisinda`, `bekleyen_onay_var`, `akis_adi_kullaniliyor`, `varsayilan_akis` | İşlem formun, kullanıcının ya da onay akışının şu anki durumuna uymuyor; ayrıntısı `mesaj` alanında |
 | 413 | `dosya_cok_buyuk` | Dosya boyut sınırını aşıyor |
 | 413 | `istek_cok_buyuk` | Çoklu gönderimde dosyaların toplamı 200 MB'ı aşıyor |
@@ -325,7 +336,8 @@ Bütün ayarlar kök dizindeki `.env` dosyasındadır (şablon: `env.example`). 
 - Servis varsayılan olarak yalnızca `127.0.0.1` adresinde dinler. Başka bir `Host` başlığıyla ya da başka bir siteden (Origin) gelen istekleri reddeder. Böylece tarayıcıda açtığınız bir web sayfası servise fatura gönderemez. Android emülatörü ya da USB ile bağlı Android cihaz `adb reverse tcp:4000 tcp:4000` ile, iOS simülatörü doğrudan `127.0.0.1` ile bağlanır.
 - `AG_ERISIMI=yerel` ile servis aynı Wi-Fi'deki telefonlara açılır (iPhone ya da Wi-Fi'deki Android için tek yol; kurulumu `masraf-app/README.md` içinde). O zaman bütün IPv4 arabirimlerinde dinler, ama yalnızca özel ağ adreslerinden (192.168.x.x, 10.x.x.x, 172.16–31.x.x) ve bilgisayarın kendisinden gelen istekleri kabul eder; `Host` başlığı bilgisayarın kendi yerel ağ adresi, `localhost`, `127.0.0.1` ya da `IZINLI_HOSTLAR` içindeki bir ad olmalıdır. Bağlantı şifresiz HTTP'dir: aynı ağdaki biri oturum token'larını ve faturaları görebilir. Yalnızca güvendiğiniz ağlarda açın, misafir ve halka açık Wi-Fi'de kapalı tutun. Açıkken sunucu her açılışta uyarı yazar.
 - Şifreler scrypt ile tuzlanarak saklanır. Oturum token'larının yalnızca SHA-256 özeti veritabanında durur. Panel oturumu `HttpOnly; SameSite=Strict` çerezdedir, JavaScript okuyamaz.
-- Her yetki kontrolü sunucuda yapılır: çalışan başkasının masrafını ya da faturasını göremez, yalnızca sırası gelen onaycı karar verebilir. Kullanıcı, rol, onay akışı ve kategori değişiklikleri denetim kaydına yazılır.
+- Her yetki kontrolü sunucuda yapılır: çalışan başkasının masrafını ya da faturasını göremez, yalnızca sırası gelen onaycı karar verebilir. Kullanıcı, rol, onay akışı, tanım listesi, alan ve kural değişiklikleri ile Excel içe aktarmaları denetim kaydına yazılır.
+- Excel dosyaları ek paket kullanmadan, yerleşik `zlib` ile okunur. Bozuk, şifreli ya da ZIP64 dosyalar reddedilir. Açılınca aşırı büyüyen dosyalara (zip bombası) karşı parça sayısı ve açılmış boyut sınırlıdır. Dışa aktarılan hücreler formül değil, düz metindir.
 - SQL Server portu Docker'da yalnızca `127.0.0.1`'e açılır. Bütün sorgular parametrelidir.
 - Claude her fatura için yeni ve boş bir geçici klasörde çalışır. O klasörde yalnızca fatura dosyası bulunur; iş bitince klasör silinir.
 - Claude'un kullanabileceği tek araç `Read`'dir. Komut çalıştıramaz, dosya yazamaz, internette gezinemez.
@@ -403,6 +415,6 @@ npm run db:logs    # SQL Server günlüğü
 
 Testler gerçek Claude'u hiç çağırmaz; `tests/fixtures/fake-claude.mjs` onun yerine geçer. Veritabanı testleri `.env` içindeki SQL Server'a bağlanır ama kendi veritabanlarını kullanır (`<MSSQL_DATABASE>_test_<n>`, her test işçisi için bir tane); asıl veritabanınıza dokunmaz.
 
-Veritabanı şeması `src/db/migrations/` altındaki numaralı SQL dosyalarıdır. Sunucu açılışta uygulanmamış olanları sırayla uygular ve `sema_surumleri` tablosuna yazar. Şemayı değiştirmek için sıradaki numarayla yeni bir dosya ekleyin (`003_….sql`); uygulanmış bir dosyayı değiştirmeyin. Veritabanında artık bulunmayan bir dosyanın kaydı varsa (örneğin dosyalar birleştirildiyse) sunucu o veritabanıyla açılmaz; veritabanını silin ya da `MSSQL_DATABASE` ile yeni bir ad verin.
+Veritabanı şeması `src/db/migrations/` altındaki numaralı SQL dosyalarıdır. Sunucu açılışta uygulanmamış olanları sırayla uygular ve `sema_surumleri` tablosuna yazar. Şemanın tamamı `001_baslangic.sql` dosyasındadır. Şemayı değiştirmek için sıradaki numarayla yeni bir dosya ekleyin (`002_….sql`); uygulanmış bir dosyayı değiştirmeyin. Veritabanında artık bulunmayan bir dosyanın kaydı varsa (örneğin dosyalar birleştirildiyse) sunucu o veritabanıyla açılmaz; veritabanını silin ya da `MSSQL_DATABASE` ile yeni bir ad verin.
 
 Panelin derleme adımı yoktur: `public/index.html`, `public/css/app.css` ve `public/js/` altındaki ES modülleri doğrudan sunulur.

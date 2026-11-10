@@ -2,7 +2,19 @@
 import { formatMoney } from '../approval/flow.ts';
 import type { FormDurum } from '../expenses/rules.ts';
 
-export const NOTIFICATION_TYPES = ['onay_bekliyor', 'hatirlatma', 'devredildi', 'onaylandi', 'reddedildi', 'odendi', 'odeme_bekliyor'] as const;
+export const NOTIFICATION_TYPES = [
+  'onay_bekliyor',
+  'hatirlatma',
+  'devredildi',
+  'onaylandi',
+  'reddedildi',
+  'odendi',
+  'odeme_bekliyor',
+  'okuma_bitti',
+  'okuma_hatasi',
+  'onaya_gonderildi',
+  'onaya_gonderilemedi',
+] as const;
 export type BildirimTuru = (typeof NOTIFICATION_TYPES)[number];
 
 /** What a notification and its mail say about the form. */
@@ -10,7 +22,8 @@ export interface FormRef {
   readonly id: number;
   readonly baslik: string;
   readonly sahip: { readonly id: number; readonly adSoyad: string };
-  readonly tutar: number;
+  /** Null only on a draft whose amount waits for its invoices. */
+  readonly tutar: number | null;
   readonly paraBirimi: string;
   /** The form's state after the action. */
   readonly durum: FormDurum;
@@ -26,7 +39,16 @@ export type NotificationEvent =
   | { readonly kind: 'reddedildi'; readonly form: FormRef; readonly reddeden: string; readonly gerekce: string }
   | { readonly kind: 'odendi'; readonly form: FormRef }
   /** A step has waited longer than the reminder threshold. */
-  | { readonly kind: 'hatirlatma'; readonly form: FormRef; readonly onayciId: number; readonly saat: number };
+  | { readonly kind: 'hatirlatma'; readonly form: FormRef; readonly onayciId: number; readonly saat: number }
+  // Reading in the background (docs/onay-sistemi.md, section 3): the form's last waiting file is settled.
+  /** Every file was read. */
+  | { readonly kind: 'okuma_bitti'; readonly form: FormRef }
+  /** `hatali` files could not be read. */
+  | { readonly kind: 'okuma_hatasi'; readonly form: FormRef; readonly hatali: number }
+  /** "Okununca gönder" sent the form for approval. */
+  | { readonly kind: 'onaya_gonderildi'; readonly form: FormRef }
+  /** "Okununca gönder" could not send the form; `neden` is the refusal's message. */
+  | { readonly kind: 'onaya_gonderilemedi'; readonly form: FormRef; readonly neden: string };
 
 export interface PlannedNotification {
   readonly kullaniciId: number;
@@ -37,7 +59,7 @@ export interface PlannedNotification {
   readonly ek: 'masraf_pdf' | null;
 }
 
-const amountOf = (f: FormRef): string => formatMoney(f.tutar, f.paraBirimi);
+const amountOf = (f: FormRef): string => (f.tutar === null ? 'tutarı girilmedi' : formatMoney(f.tutar, f.paraBirimi));
 const quoted = (f: FormRef): string => `"${f.baslik}"`;
 
 /**
@@ -92,6 +114,28 @@ export function planNotifications(event: NotificationEvent, actorId: number | nu
         'hatirlatma',
         'Onay hatırlatması',
         `${f.sahip.adSoyad} adlı kişinin ${quoted(f)} masrafı (${amountOf(f)}) ${event.saat} saatten uzun süredir onayınızı bekliyor.`,
+      );
+      break;
+    case 'okuma_bitti':
+      add(f.sahip.id, 'okuma_bitti', 'Faturalarınız okundu', `${quoted(f)} masrafınızın faturaları okundu. Kontrol edip onaya gönderebilirsiniz.`);
+      break;
+    case 'okuma_hatasi':
+      add(
+        f.sahip.id,
+        'okuma_hatasi',
+        'Okunamayan fatura var',
+        `${quoted(f)} masrafınızın ${event.hatali === 1 ? 'bir faturası' : `${event.hatali} faturası`} okunamadı. Masrafı açıp yeniden okutun ya da faturayı kaldırın.`,
+      );
+      break;
+    case 'onaya_gonderildi':
+      add(f.sahip.id, 'onaya_gonderildi', 'Masrafınız onaya gönderildi', `${quoted(f)} masrafınızın faturaları okundu ve masrafınız (${amountOf(f)}) onaya gönderildi.`);
+      break;
+    case 'onaya_gonderilemedi':
+      add(
+        f.sahip.id,
+        'onaya_gonderilemedi',
+        'Masrafınız onaya gönderilemedi',
+        `${quoted(f)} masrafınızın faturaları okundu ama masraf onaya gönderilemedi: ${event.neden} Masrafı açıp tamamlayın ve gönderin.`,
       );
       break;
   }

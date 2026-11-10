@@ -17,6 +17,7 @@ import {
   fmtTime,
   fmtUsd,
   modelName,
+  queueText,
 } from './format.js';
 
 function value(tag, className, text, missing = 'Bulunamadı') {
@@ -308,7 +309,11 @@ export function loadingView() {
 export function readingView(a) {
   const reading = a.durum === 'okunuyor';
   let status;
-  if (!reading) status = 'Sırada. Boş bir okuma hattı açılınca başlayacak.';
+  if (!reading) {
+    status = Number.isInteger(a.kuyrukSirasi)
+      ? `${queueText(a.kuyrukSirasi, a.onundeki)}. Sırası gelince okunmaya başlayacak.`
+      : 'Sırada. Boş bir okuma hattı açılınca başlayacak.';
+  }
   else if (!a.model) status = 'Claude başlıyor.';
   else if (a.modeller.length > 1) status = `Kontroller tutmadı; ${modelName(a.model)} yeniden okuyor.`;
   else status = `${modelName(a.model)} okuyor.`;

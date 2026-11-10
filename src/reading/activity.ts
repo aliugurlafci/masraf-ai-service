@@ -3,8 +3,11 @@ import { cleanFileName } from '../invoice/storage.ts';
 import { toItemError, type ItemError } from './batch-queue.ts';
 import type { ReadHooks, ReadInput, ReadInvoice, ReadResult } from './reader.ts';
 
-/** Who sent the file: the web panel (it tags its requests) or any other API client. */
-export type Kaynak = 'panel' | 'api';
+/**
+ * Who sent the file: the web panel (it tags its requests), any other API client, or the server itself
+ * (arka_plan: files of saved forms read again after a restart, or read again on request).
+ */
+export type Kaynak = 'panel' | 'api' | 'arka_plan';
 export type ActivityState = 'sirada' | 'okunuyor' | 'bitti' | 'hata';
 
 /** The signed-in user who sent the file. */
@@ -36,6 +39,10 @@ export interface ActivityView {
   readonly kuyrukId: string | null;
   readonly sira: number | null;
   readonly durum: ActivityState;
+  /** While `sirada`: its place among the files waiting for Claude (1 = next); null otherwise. */
+  readonly kuyrukSirasi: number | null;
+  /** While `sirada`: files read before it (being read now or waiting ahead); null otherwise. */
+  readonly onundeki: number | null;
   /** Model reading the file now; once done, the model whose result was kept. */
   readonly model: string | null;
   /** Every model that read the file in this request, in order. */
@@ -180,6 +187,8 @@ export function createActivityLog(opts: ActivityLogOptions): ActivityLog {
       kuyrukId: meta.kuyrukId ?? null,
       sira: meta.sira ?? null,
       durum: 'sirada',
+      kuyrukSirasi: null,
+      onundeki: null,
       model: null,
       modeller: [],
       onbellek: false,
@@ -196,9 +205,15 @@ export function createActivityLog(opts: ActivityLogOptions): ActivityLog {
     return a;
   };
 
+  const unplace = (a: Activity): void => {
+    a.kuyrukSirasi = null;
+    a.onundeki = null;
+  };
+
   const done = (a: Activity, { record, reused }: ReadResult): void => {
     const f = record.sonuc.fatura;
     a.durum = 'bitti';
+    unplace(a);
     a.bitis = now().toISOString();
     a.onbellek = reused;
     a.kayitId = record.id;
@@ -225,6 +240,7 @@ export function createActivityLog(opts: ActivityLogOptions): ActivityLog {
 
   const failed = (a: Activity, err: unknown): void => {
     a.durum = 'hata';
+    unplace(a);
     a.bitis = now().toISOString();
     a.hata = toItemError(err);
     totals.hata++;
@@ -239,8 +255,15 @@ export function createActivityLog(opts: ActivityLogOptions): ActivityLog {
         emit(a);
         const result = read(input, {
           onQueued: () => hooks.onQueued?.(),
+          onPosition: (place) => {
+            a.kuyrukSirasi = place.kuyrukSirasi;
+            a.onundeki = place.onundeki;
+            emit(a);
+            hooks.onPosition?.(place);
+          },
           onStart: () => {
             a.durum = 'okunuyor';
+            unplace(a);
             a.baslama = now().toISOString();
             emit(a);
             hooks.onStart?.();

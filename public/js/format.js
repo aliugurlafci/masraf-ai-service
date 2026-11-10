@@ -38,6 +38,16 @@ export function fmtElapsed(ms) {
   return `${Math.floor(total / 60)} dk ${String(total % 60).padStart(2, '0')} sn`;
 }
 
+/**
+ * A file's place in the shared reading line (docs/onay-sistemi.md, "Okuma sırası"):
+ * 3, 4 → "Sırada 3. · önünde 4 fatura var"; without a known place just "Sırada".
+ */
+export function queueText(kuyrukSirasi, onundeki) {
+  if (!Number.isInteger(kuyrukSirasi) || kuyrukSirasi < 1) return 'Sırada';
+  const ahead = Number.isInteger(onundeki) && onundeki > 0 ? `önünde ${countFmt.format(onundeki)} fatura var` : 'birazdan okunacak';
+  return `Sırada ${countFmt.format(kuyrukSirasi)}. · ${ahead}`;
+}
+
 export function dayLabel(date) {
   const today = new Date();
   const yesterday = new Date(today);

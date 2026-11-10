@@ -61,8 +61,37 @@ const SEED_CATEGORIES: ReadonlyArray<[number, string, string]> = [
   [9, 'Diğer', 'diger'],
 ];
 
+/** The fields and options the schema file seeds, as it leaves them; ids differ after every reset, so tests look fields up by key. */
+const SEED_FIELDS = `
+  INSERT INTO dbo.alan_tanimlari (anahtar, ad, duzey, tur, zorunlu, sira, sistem) VALUES
+    ('kategori', N'Kategori', 'form', 'kategori', 1, 1, 1),
+    ('masrafMerkezi', N'Masraf Merkezi', 'form', 'masraf_merkezi', 0, 2, 1),
+    ('faturaNo', N'Fatura No', 'fis', 'fatura', 1, 1, 1),
+    ('faturaTarihi', N'Fatura Tarihi', 'fis', 'fatura', 1, 2, 1),
+    ('saticiUnvan', N'Satıcı', 'fis', 'fatura', 1, 3, 1),
+    ('saticiVergiNo', N'Satıcı Vergi No', 'fis', 'fatura', 0, 4, 1),
+    ('aliciUnvan', N'Alıcı', 'fis', 'fatura', 0, 5, 1),
+    ('aliciVergiNo', N'Alıcı Vergi No', 'fis', 'fatura', 0, 6, 1),
+    ('paraBirimi', N'Para Birimi', 'fis', 'fatura', 0, 7, 1),
+    ('araToplam', N'Ara Toplam', 'fis', 'fatura', 0, 8, 1),
+    ('kdvToplam', N'KDV Toplamı', 'fis', 'fatura', 0, 9, 1),
+    ('genelToplam', N'Genel Toplam', 'fis', 'fatura', 1, 10, 1),
+    ('etiket', N'Etiket', 'fis', 'liste', 0, 11, 0),
+    ('projeKodu', N'Proje Kodu', 'fis', 'liste', 0, 12, 0),
+    ('odemeYontemi', N'Ödeme Yöntemi', 'fis', 'liste', 0, 13, 0),
+    ('dokumanTipi', N'Doküman Tipi', 'fis', 'liste', 0, 14, 0),
+    ('kkegTuru', N'KKEG Türü', 'fis', 'liste', 0, 15, 0),
+    ('vergiDairesi', N'Vergi Dairesi', 'fis', 'metin', 0, 16, 0),
+    ('not', N'Not', 'fis', 'uzun_metin', 0, 17, 0);
+  INSERT INTO dbo.alan_secenekleri (alan_id, kod, sira)
+  SELECT a.id, v.kod, v.sira FROM dbo.alan_tanimlari a JOIN (VALUES
+    ('odemeYontemi', N'Nakit', 1), ('odemeYontemi', N'Kredi Kartı', 2), ('odemeYontemi', N'Şirket Kartı', 3), ('odemeYontemi', N'Banka Havalesi', 4),
+    ('dokumanTipi', N'Fiş', 1), ('dokumanTipi', N'Fatura', 2), ('dokumanTipi', N'e-Arşiv Fatura', 3), ('dokumanTipi', N'e-Fatura', 4),
+    ('dokumanTipi', N'Serbest Meslek Makbuzu', 5), ('dokumanTipi', N'Gider Pusulası', 6)
+  ) v (anahtar, kod, sira) ON a.anahtar = v.anahtar;`;
+
 /**
- * Empties every table and puts back the seeded categories (ids 1–9). Only the default approval flow
+ * Empties every table and puts back the seeded categories (ids 1–9) and the seeded fields. Only the default approval flow
  * stays, empty, named "Genel" and a chain ('zincir') as the migrations leave it. A read still finishing from the
  * previous test may insert a row mid-reset (foreign key error) or deadlock with it; then it tries again.
  */
@@ -72,11 +101,13 @@ export async function resetDb(db: Db): Promise<void> {
       await transaction(db, (tx) =>
         execute(
           tx,
-          `DELETE FROM dbo.bildirimler; DELETE FROM dbo.eposta_kutusu; DELETE FROM dbo.form_gecmisi; DELETE FROM dbo.form_onaylari; DELETE FROM dbo.form_faturalari; DELETE FROM dbo.masraf_formlari;
+          `DELETE FROM dbo.bildirimler; DELETE FROM dbo.eposta_kutusu; DELETE FROM dbo.form_gecmisi; DELETE FROM dbo.form_onaylari; DELETE FROM dbo.fis_alan_degerleri; DELETE FROM dbo.bekleyen_alan_degerleri; DELETE FROM dbo.form_faturalari; DELETE FROM dbo.bekleyen_faturalar; DELETE FROM dbo.masraf_formlari;
            DELETE FROM dbo.fatura_yuklemeleri; DELETE FROM dbo.fatura_dosyalari; DELETE FROM dbo.fatura_kayitlari;
            DELETE FROM dbo.onay_adimlari; UPDATE dbo.onay_akislari SET guncelleyen_id = NULL;
            DELETE FROM dbo.oturumlar; DELETE FROM dbo.denetim_kayitlari;
-           DELETE FROM dbo.masraf_kategorileri; DELETE FROM dbo.kullanicilar;
+           DELETE FROM dbo.masraf_kategorileri; DELETE FROM dbo.kullanici_masraf_merkezleri; DELETE FROM dbo.kullanicilar;
+           DELETE FROM dbo.organizasyonlar; DELETE FROM dbo.masraf_merkezleri;
+           DELETE FROM dbo.alan_kurali_hedefleri; DELETE FROM dbo.alan_kurallari; DELETE FROM dbo.alan_secenekleri; DELETE FROM dbo.alan_tanimlari;
            DELETE FROM dbo.onay_akislari WHERE varsayilan = 0; UPDATE dbo.onay_akislari SET ad = N'Genel', strateji = 'zincir';`,
         ),
       );
@@ -91,7 +122,8 @@ export async function resetDb(db: Db): Promise<void> {
     db,
     `SET IDENTITY_INSERT dbo.masraf_kategorileri ON;
      INSERT INTO dbo.masraf_kategorileri (id, ad, simge, sira) VALUES ${SEED_CATEGORIES.map((_, i) => `(@i${i}, @a${i}, @s${i}, @i${i})`).join(', ')};
-     SET IDENTITY_INSERT dbo.masraf_kategorileri OFF;`,
+     SET IDENTITY_INSERT dbo.masraf_kategorileri OFF;
+     ${SEED_FIELDS}`,
     Object.fromEntries(SEED_CATEGORIES.flatMap(([id, ad, s], i) => [[`i${i}`, p.int(id)], [`a${i}`, p.str(ad, 60)], [`s${i}`, p.ascii(s, 16)]])),
   );
 }
@@ -164,7 +196,7 @@ export type Steps = ReadonlyArray<{ onayciId: number; limit: number | null }>;
 /**
  * Steps every amount above a few cents passes, approver by approver, in a 'zincir' flow: limits 0,01,
  * 0,02, … and none for the last one. One id gives a single approver without a limit. This is what a
- * flow whose approvers all started at 0 became (see 002_onay_stratejisi.sql).
+ * flow whose approvers all started at 0 became when amount ranges gave way to approval limits.
  */
 export const chainOf = (...ids: readonly number[]): Steps => ids.map((onayciId, i) => ({ onayciId, limit: i === ids.length - 1 ? null : (i + 1) / 100 }));
 
@@ -204,4 +236,62 @@ export async function makeFlow(db: Db, ad: string, steps: Steps, strateji: Strat
 /** Assigns a user to a flow (null = the default) directly. */
 export async function assignFlow(db: Db, userId: number, flowId: number | null): Promise<void> {
   await execute(db, 'UPDATE dbo.kullanicilar SET onay_akisi_id = @f WHERE id = @u', { f: p.int(flowId), u: p.int(userId) });
+}
+
+/** Inserts an organisation; returns its id. */
+export async function makeOrganization(db: Db, kod: string, ad = `${kod} A.Ş.`, aktif = true): Promise<number> {
+  const row = await queryOne<{ id: number }>(db, 'INSERT INTO dbo.organizasyonlar (kod, ad, aktif) OUTPUT inserted.id VALUES (@k, @a, @ak)', {
+    k: p.str(kod, 50),
+    a: p.str(ad, 200),
+    ak: p.bit(aktif),
+  });
+  return row?.id ?? 0;
+}
+
+/** Inserts a cost centre; returns its id. */
+export async function makeCostCenter(db: Db, kod: string, aciklama: string | null = null, aktif = true): Promise<number> {
+  const row = await queryOne<{ id: number }>(db, 'INSERT INTO dbo.masraf_merkezleri (kod, aciklama, aktif) OUTPUT inserted.id VALUES (@k, @a, @ak)', {
+    k: p.str(kod, 50),
+    a: p.str(aciklama, 200),
+    ak: p.bit(aktif),
+  });
+  return row?.id ?? 0;
+}
+
+/** Sets the user's organisation and cost centres directly (replaces the cost centres). */
+export async function assignDefinitions(db: Db, userId: number, organizasyonId: number | null, masrafMerkeziIdler: readonly number[] = []): Promise<void> {
+  await execute(db, 'UPDATE dbo.kullanicilar SET organizasyon_id = @o WHERE id = @u; DELETE FROM dbo.kullanici_masraf_merkezleri WHERE kullanici_id = @u', {
+    o: p.int(organizasyonId),
+    u: p.int(userId),
+  });
+  for (const id of masrafMerkeziIdler) {
+    await execute(db, 'INSERT INTO dbo.kullanici_masraf_merkezleri (kullanici_id, masraf_merkezi_id) VALUES (@u, @m)', { u: p.int(userId), m: p.int(id) });
+  }
+}
+
+/** The id of a field by its key. */
+export async function fieldId(db: Db, anahtar: string): Promise<number> {
+  const row = await queryOne<{ id: number }>(db, 'SELECT id FROM dbo.alan_tanimlari WHERE anahtar = @a', { a: p.ascii(anahtar, 40) });
+  if (row === null) throw new Error(`alan yok: ${anahtar}`);
+  return row.id;
+}
+
+/** Inserts an option into a 'liste' field (by key); returns its id. */
+export async function makeOption(db: Db, anahtar: string, kod: string, ad: string | null = null, aktif = true): Promise<number> {
+  const row = await queryOne<{ id: number }>(
+    db,
+    'INSERT INTO dbo.alan_secenekleri (alan_id, kod, ad, aktif) OUTPUT inserted.id VALUES (@f, @k, @a, @ak)',
+    { f: p.int(await fieldId(db, anahtar)), k: p.str(kod, 50), a: p.str(ad, 200), ak: p.bit(aktif) },
+  );
+  return row?.id ?? 0;
+}
+
+/** The id of an option of a field, by code. */
+export async function optionId(db: Db, anahtar: string, kod: string): Promise<number> {
+  const row = await queryOne<{ id: number }>(db, 'SELECT id FROM dbo.alan_secenekleri WHERE alan_id = @f AND kod = @k', {
+    f: p.int(await fieldId(db, anahtar)),
+    k: p.str(kod, 50),
+  });
+  if (row === null) throw new Error(`seçenek yok: ${anahtar}/${kod}`);
+  return row.id;
 }

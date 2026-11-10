@@ -6,6 +6,8 @@ import { hashPassword, passwordProblem, verifyPassword } from '../auth/password.
 import { stepBand, type Strateji } from '../approval/flow.ts';
 import type { AkisOzet } from '../approval/flow-store.ts';
 import type { FirstAdmin } from '../config.ts';
+import { display } from '../definitions/display.ts';
+import type { MasrafMerkeziOzet, OrganizasyonOzet } from '../definitions/lists.ts';
 
 /** One flow the user approves in: their order, approval limit and the amounts that reach them there. */
 export interface OnayciYeri {
@@ -36,9 +38,21 @@ export interface Kullanici {
   readonly onayAkisi: AkisOzet | null;
   /** The flows the user approves in, the default first, then by name. */
   readonly onaycilik: readonly OnayciYeri[];
+  /** The user's organisation; null = none. */
+  readonly organizasyon: OrganizasyonOzet | null;
+  /** The cost centres assigned to the user, by code; a form picks one of the active ones. */
+  readonly masrafMerkezleri: readonly MasrafMerkeziOzet[];
 }
 
-export interface NewUser {
+/** Organisation and cost centres: undefined leaves them as they are. */
+interface DefinitionAssignment {
+  /** null = no organisation. */
+  readonly organizasyonId?: number | null | undefined;
+  /** The user's cost centres, all of them; [] removes every one. */
+  readonly masrafMerkeziIdler?: readonly number[] | undefined;
+}
+
+export interface NewUser extends DefinitionAssignment {
   readonly eposta: string;
   readonly adSoyad: string;
   readonly rol: Rol;
@@ -47,7 +61,7 @@ export interface NewUser {
   readonly onayAkisiId?: number | null | undefined;
 }
 
-export interface UserPatch {
+export interface UserPatch extends DefinitionAssignment {
   readonly eposta?: string | undefined;
   readonly adSoyad?: string | undefined;
   readonly rol?: Rol | undefined;
@@ -71,6 +85,18 @@ interface UserRow {
   akis_id: number | null;
   akis_ad: string | null;
   akis_varsayilan: boolean | null;
+  organizasyon_id: number | null;
+  org_kod: string | null;
+  org_ad: string | null;
+  org_aktif: boolean | null;
+}
+
+interface CostCenterRow {
+  kullanici_id: number;
+  id: number;
+  kod: string;
+  aciklama: string | null;
+  aktif: boolean;
 }
 
 interface PlaceRow {
@@ -85,14 +111,16 @@ interface PlaceRow {
 export const normalizeEmail = (eposta: string): string => eposta.trim().toLowerCase();
 
 const USER_COLUMNS = `k.id, k.eposta, k.ad_soyad, k.rol, k.departman, k.aktif, k.sifre_degismeli, k.olusturma, k.son_giris,
-  k.mail_bildirim, k.onay_akisi_id, ea.id AS akis_id, ea.ad AS akis_ad, ea.varsayilan AS akis_varsayilan`;
+  k.mail_bildirim, k.onay_akisi_id, ea.id AS akis_id, ea.ad AS akis_ad, ea.varsayilan AS akis_varsayilan,
+  k.organizasyon_id, o.kod AS org_kod, o.ad AS org_ad, o.aktif AS org_aktif`;
 // The effective flow: the assigned one, otherwise the default.
 const USER_FROM = `FROM dbo.kullanicilar k
+  LEFT JOIN dbo.organizasyonlar o ON o.id = k.organizasyon_id
   OUTER APPLY (SELECT TOP (1) a.id, a.ad, a.varsayilan FROM dbo.onay_akislari a
                WHERE a.id = k.onay_akisi_id OR (k.onay_akisi_id IS NULL AND a.varsayilan = 1)) ea`;
 const USER_SELECT = `SELECT ${USER_COLUMNS} ${USER_FROM}`;
 
-function toUser(r: UserRow, places: readonly OnayciYeri[]): Kullanici {
+function toUser(r: UserRow, places: readonly OnayciYeri[], costCenters: readonly MasrafMerkeziOzet[]): Kullanici {
   return {
     id: r.id,
     eposta: r.eposta,
@@ -107,7 +135,27 @@ function toUser(r: UserRow, places: readonly OnayciYeri[]): Kullanici {
     onayAkisiId: r.onay_akisi_id,
     onayAkisi: r.akis_id === null ? null : { id: r.akis_id, ad: r.akis_ad ?? '', varsayilan: r.akis_varsayilan === true },
     onaycilik: places,
+    organizasyon: r.organizasyon_id === null ? null : { id: r.organizasyon_id, kod: r.org_kod ?? '', ad: r.org_ad ?? '', aktif: r.org_aktif === true },
+    masrafMerkezleri: costCenters,
   };
+}
+
+/** The cost centres of each user, by code; `userId` narrows it to one user. */
+async function costCentersOf(ex: Executor, userId?: number): Promise<Map<number, MasrafMerkeziOzet[]>> {
+  const rows = await query<CostCenterRow>(
+    ex,
+    `SELECT km.kullanici_id, m.id, m.kod, m.aciklama, m.aktif
+     FROM dbo.kullanici_masraf_merkezleri km JOIN dbo.masraf_merkezleri m ON m.id = km.masraf_merkezi_id
+     ${userId === undefined ? '' : 'WHERE km.kullanici_id = @u'}
+     ORDER BY m.kod, m.id`,
+    userId === undefined ? {} : { u: p.int(userId) },
+  );
+  const out = new Map<number, MasrafMerkeziOzet[]>();
+  for (const r of rows) {
+    const centre: MasrafMerkeziOzet = { id: r.id, kod: r.kod, aciklama: r.aciklama, gosterim: display(r.kod, r.aciklama), aktif: r.aktif };
+    out.set(r.kullanici_id, [...(out.get(r.kullanici_id) ?? []), centre]);
+  }
+  return out;
 }
 
 /** Where each user approves; `userId` narrows it to one user. The amounts that reach a step depend on the steps around it. */
@@ -137,7 +185,10 @@ async function approverPlaces(ex: Executor, userId?: number): Promise<Map<number
 
 async function oneUser(ex: Executor, row: UserRow | null): Promise<Kullanici | null> {
   if (row === null) return null;
-  return toUser(row, (await approverPlaces(ex, row.id)).get(row.id) ?? []);
+  // One after the other: `ex` may be a transaction, which runs one request at a time.
+  const places = await approverPlaces(ex, row.id);
+  const centres = await costCentersOf(ex, row.id);
+  return toUser(row, places.get(row.id) ?? [], centres.get(row.id) ?? []);
 }
 
 const likePattern = (q: string): string => `%${q.replace(/[%_[]/g, '[$&]')}%`;
@@ -159,8 +210,8 @@ export async function listUsers(db: Db, filter: { q?: string | undefined; aktif?
     `${USER_SELECT} ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY k.ad_soyad, k.id`,
     params,
   );
-  const places = await approverPlaces(db);
-  return rows.map((r) => toUser(r, places.get(r.id) ?? []));
+  const [places, centres] = await Promise.all([approverPlaces(db), costCentersOf(db)]);
+  return rows.map((r) => toUser(r, places.get(r.id) ?? [], centres.get(r.id) ?? []));
 }
 
 export async function getUser(ex: Executor, id: number): Promise<Kullanici | null> {
@@ -187,6 +238,62 @@ async function checkFlowExists(ex: Executor, flowId: number | null | undefined):
   }
 }
 
+/**
+ * Rejects an organisation or cost centre that does not exist, and an inactive one the user does not have
+ * yet (one already assigned may stay). The rows stay share-locked until the transaction ends, so they
+ * cannot be deleted before the assignment is written.
+ */
+async function checkDefinitions(tx: Executor, input: DefinitionAssignment, current: Kullanici | null): Promise<void> {
+  const alanlar: Record<string, string> = {};
+  const orgId = input.organizasyonId;
+  if (orgId !== undefined && orgId !== null) {
+    const org = await queryOne<{ aktif: boolean }>(tx, 'SELECT aktif FROM dbo.organizasyonlar WITH (HOLDLOCK) WHERE id = @id', { id: p.int(orgId) });
+    if (org === null) alanlar.organizasyonId = 'Organizasyon bulunamadı.';
+    else if (!org.aktif && current?.organizasyon?.id !== orgId) alanlar.organizasyonId = 'Organizasyon pasif; kullanıcıya tanımlanamaz.';
+  }
+  const ids = input.masrafMerkeziIdler ?? [];
+  if (ids.length > 0) {
+    const rows = await query<{ id: number; aktif: boolean }>(
+      tx,
+      `SELECT id, aktif FROM dbo.masraf_merkezleri WITH (HOLDLOCK) WHERE id IN (${ids.map((_, i) => `@m${i}`).join(', ')})`,
+      Object.fromEntries(ids.map((id, i) => [`m${i}`, p.int(id)])),
+    );
+    const active = new Map(rows.map((r) => [r.id, r.aktif]));
+    const assigned = new Set(current?.masrafMerkezleri.map((m) => m.id) ?? []);
+    ids.forEach((id, i) => {
+      const aktif = active.get(id);
+      if (aktif === undefined) alanlar[`masrafMerkeziIdler.${i}`] = 'Masraf merkezi bulunamadı.';
+      else if (!aktif && !assigned.has(id)) alanlar[`masrafMerkeziIdler.${i}`] = 'Masraf merkezi pasif; kullanıcıya tanımlanamaz.';
+    });
+  }
+  const first = Object.values(alanlar)[0];
+  if (first !== undefined) throw new HttpError(400, 'gecersiz_istek', first, { alanlar });
+}
+
+/** Makes `ids` the user's cost centres: adds the new ones, removes the ones left out. */
+async function writeCostCenters(tx: Executor, userId: number, ids: readonly number[], current: readonly MasrafMerkeziOzet[]): Promise<void> {
+  const wanted = new Set(ids);
+  const had = new Set(current.map((m) => m.id));
+  const removed = [...had].filter((id) => !wanted.has(id));
+  const added = [...wanted].filter((id) => !had.has(id));
+  const list = (prefix: string, values: readonly number[]): { refs: string; params: Record<string, Param> } => ({
+    refs: values.map((_, i) => `@${prefix}${i}`).join(', '),
+    params: Object.fromEntries(values.map((v, i) => [`${prefix}${i}`, p.int(v)])),
+  });
+  if (removed.length > 0) {
+    const { refs, params } = list('r', removed);
+    await execute(tx, `DELETE FROM dbo.kullanici_masraf_merkezleri WHERE kullanici_id = @u AND masraf_merkezi_id IN (${refs})`, { ...params, u: p.int(userId) });
+  }
+  if (added.length > 0) {
+    const { params } = list('a', added);
+    await execute(
+      tx,
+      `INSERT INTO dbo.kullanici_masraf_merkezleri (kullanici_id, masraf_merkezi_id) VALUES ${added.map((_, i) => `(@u, @a${i})`).join(', ')}`,
+      { ...params, u: p.int(userId) },
+    );
+  }
+}
+
 function checkPassword(sifre: string, minLength: number, field = 'sifre'): void {
   const problem = passwordProblem(sifre, minLength);
   if (problem !== null) throw new HttpError(400, 'gecersiz_istek', problem, { alanlar: { [field]: problem } });
@@ -204,10 +311,11 @@ export async function createUser(db: Db, actor: Actor, input: NewUser, passwordM
         await lockFlow(tx); // the flow cannot be deleted under us
         await checkFlowExists(tx, flowId);
       }
+      await checkDefinitions(tx, input, null);
       const row = await queryOne<{ id: number }>(
         tx,
-        `INSERT INTO dbo.kullanicilar (eposta, ad_soyad, rol, departman, sifre_ozeti, sifre_degismeli, onay_akisi_id)
-         OUTPUT inserted.id VALUES (@e, @ad, @rol, @dep, @h, 1, @akis)`,
+        `INSERT INTO dbo.kullanicilar (eposta, ad_soyad, rol, departman, sifre_ozeti, sifre_degismeli, onay_akisi_id, organizasyon_id)
+         OUTPUT inserted.id VALUES (@e, @ad, @rol, @dep, @h, 1, @akis, @org)`,
         {
           e: p.str(normalizeEmail(input.eposta), 254),
           ad: p.str(input.adSoyad.trim(), 120),
@@ -215,15 +323,21 @@ export async function createUser(db: Db, actor: Actor, input: NewUser, passwordM
           dep: p.str(input.departman?.trim() || null, 80),
           h: p.ascii(hash, 256),
           akis: p.int(flowId),
+          org: p.int(input.organizasyonId ?? null),
         },
       );
       if (row === null) throw new Error('kullanıcı eklenemedi');
+      await writeCostCenters(tx, row.id, input.masrafMerkeziIdler ?? [], []);
       const user = (await getUser(tx, row.id)) as Kullanici;
+      const definitions = [
+        user.organizasyon === null ? '' : `, organizasyon: ${user.organizasyon.kod}`,
+        user.masrafMerkezleri.length === 0 ? '' : `, masraf merkezleri: ${user.masrafMerkezleri.map((m) => m.kod).join(', ')}`,
+      ].join('');
       await audit(
         tx,
         actor.id,
         'kullanici_olusturuldu',
-        `${user.adSoyad} <${user.eposta}>, rol: ${user.rol}, onay akışı: ${flowLabel(user)}`,
+        `${user.adSoyad} <${user.eposta}>, rol: ${user.rol}, onay akışı: ${flowLabel(user)}${definitions}`,
       );
       return user;
     });
@@ -305,7 +419,13 @@ export async function updateUser(db: Db, actor: Actor, id: number, patch: UserPa
         sets.push('onay_akisi_id = @akis');
         params.akis = p.int(patch.onayAkisiId);
       }
+      await checkDefinitions(tx, patch, before);
+      if (patch.organizasyonId !== undefined) {
+        sets.push('organizasyon_id = @org');
+        params.org = p.int(patch.organizasyonId);
+      }
       await execute(tx, `UPDATE dbo.kullanicilar SET ${sets.join(', ')} WHERE id = @id`, params);
+      if (patch.masrafMerkeziIdler !== undefined) await writeCostCenters(tx, id, patch.masrafMerkeziIdler, before.masrafMerkezleri);
       if (deactivating) await execute(tx, 'DELETE FROM dbo.oturumlar WHERE kullanici_id = @id', { id: p.int(id) });
       const after = (await getUser(tx, id)) as Kullanici;
       const changes = describeChanges(before, after);
@@ -326,6 +446,14 @@ function describeChanges(a: Kullanici, b: Kullanici): string {
   if (a.departman !== b.departman) out.push(`departman ${a.departman ?? '-'} → ${b.departman ?? '-'}`);
   if (a.aktif !== b.aktif) out.push(b.aktif ? 'aktif edildi' : 'pasifleştirildi');
   if (a.onayAkisiId !== b.onayAkisiId) out.push(`onay akışı ${flowLabel(a)} → ${flowLabel(b)}`);
+  if (a.organizasyon?.id !== b.organizasyon?.id) out.push(`organizasyon ${a.organizasyon?.kod ?? '-'} → ${b.organizasyon?.kod ?? '-'}`);
+  const had = new Set(a.masrafMerkezleri.map((m) => m.id));
+  const has = new Set(b.masrafMerkezleri.map((m) => m.id));
+  const centres = [
+    ...b.masrafMerkezleri.filter((m) => !had.has(m.id)).map((m) => `+${m.kod}`),
+    ...a.masrafMerkezleri.filter((m) => !has.has(m.id)).map((m) => `-${m.kod}`),
+  ];
+  if (centres.length > 0) out.push(`masraf merkezleri ${centres.join(' ')}`);
   return out.join(', ');
 }
 

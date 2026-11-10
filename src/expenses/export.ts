@@ -1,3 +1,4 @@
+import { display } from '../definitions/display.ts';
 import type { ExportRow } from './forms.ts';
 import type { FormDurum } from './rules.ts';
 
@@ -44,6 +45,8 @@ export function toCsv(rows: readonly ExportRow[]): string {
     'Gönderim',
     'Sonuçlanma',
     'Ödeme',
+    'Organizasyon',
+    'Masraf Merkezi',
   ];
   const lines = rows.map((r) =>
     [
@@ -63,6 +66,8 @@ export function toCsv(rows: readonly ExportRow[]): string {
       when(r.gonderim),
       when(r.sonuclanma),
       when(r.odeme),
+      r.organizasyon === null ? null : display(r.organizasyon.kod, r.organizasyon.ad),
+      r.masrafMerkezi?.gosterim ?? null,
     ]
       .map(cell)
       .join(';'),

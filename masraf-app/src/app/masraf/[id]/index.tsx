@@ -1,17 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState, type ReactNode } from 'react';
-import { Alert, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Alert, RefreshControl, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError, errorMessage } from '@/api/client';
-import { approveMasraf, rejectMasraf, runMasrafAction, type MasrafIslemi } from '@/api/endpoints';
-import { useMasraf, useMasrafChanged, useOzet } from '@/api/queries';
-import type { MasrafDetay, MasrafFatura } from '@/api/types';
+import { approveMasraf, rejectMasraf, runMasrafAction, updateMasraf, type MasrafIslemi } from '@/api/endpoints';
+import { useAlanlar, useMasraf, useMasrafChanged, useOzet } from '@/api/queries';
+import type { BekleyenFatura, MasrafDetay, MasrafFatura } from '@/api/types';
 import { CategoryIcon } from '@/components/expense/CategoryIcon';
 import { InvoiceInfoCard } from '@/components/expense/InvoiceInfoCard';
 import { InvoiceThumb } from '@/components/expense/InvoiceThumb';
+import { PendingInvoices } from '@/components/expense/PendingInvoices';
 import { StatusBadge } from '@/components/expense/StatusBadge';
 import { ApprovalTimeline, HistoryList } from '@/components/expense/Timeline';
 import { Button, type ButtonVariant, type IconName } from '@/components/ui/Button';
@@ -26,15 +27,26 @@ import { useToast } from '@/components/ui/Toast';
 import { useMotion } from '@/hooks/useMotion';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
+import { displayName, fieldName, type FieldDefs } from '@/lib/fields';
 import { invoiceTotalInForm } from '@/lib/invoices';
-import { fieldLabel } from '@/lib/invoiceEdit';
 import { isPdf } from '@/lib/pickers';
+import { autoSendFailure } from '@/lib/reading';
 import { amountLargeFor, radius, spacing, statusColors, useTheme } from '@/theme';
 
-type ActionKey = 'duzenle' | 'gonder' | 'geriCek' | 'iptal' | 'onayla' | 'reddet' | 'odendi';
+type ActionKey = 'duzenle' | 'gonder' | 'geriCek' | 'iptal' | 'onayla' | 'reddet' | 'odendi' | 'yenidenOku' | 'okununcaGonder' | 'bekleyen';
 
 /** Send errors the sender fixes by editing the form. */
-const FIXABLE: readonly string[] = ['karsilik_eksik', 'fatura_eksik', 'fatura_mukerrer'];
+const FIXABLE: readonly string[] = ['karsilik_eksik', 'fatura_eksik', 'alan_eksik', 'fatura_mukerrer', 'tutar_eksik'];
+
+/** Titles for the send errors explained in an alert (the server's message is the text). */
+const SEND_ERROR_TITLES: Readonly<Record<string, string>> = {
+  fatura_eksik: 'Fatura bilgisi eksik',
+  alan_eksik: 'Zorunlu alan eksik',
+  fatura_mukerrer: 'Mükerrer fatura',
+  tutar_eksik: 'Tutar eksik',
+  okuma_suruyor: 'Faturalar okunuyor',
+  okuma_hatali: 'Okunamayan fatura var',
+};
 
 /** Width of one invoice in the strip of a form with several invoices. */
 const TILE_W = 144;
@@ -43,16 +55,24 @@ export default function ExpenseDetailScreen() {
   const { colors } = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const masraf = useMasraf(Number(id));
+  // The spinner follows the user's own refresh, not the polling while invoices are read.
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = (): void => {
+    setRefreshing(true);
+    void masraf.refetch().finally(() => setRefreshing(false));
+  };
 
-  if (masraf.isPending) return <DetailSkeleton />;
-  if (masraf.isError) {
+  // A failed background refresh (asked again while invoices are read) keeps the form on screen; only a
+  // first load that failed shows the error.
+  if (masraf.data === undefined) {
+    if (!masraf.isError) return <DetailSkeleton />;
     return (
       <View style={[styles.flex, { backgroundColor: colors.bg }]}>
         <ErrorState error={masraf.error} onRetry={() => void masraf.refetch()} />
       </View>
     );
   }
-  return <Detail detail={masraf.data} refreshing={masraf.isRefetching} onRefresh={() => void masraf.refetch()} />;
+  return <Detail detail={masraf.data} refreshing={refreshing} onRefresh={refresh} />;
 }
 
 function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDetay; readonly refreshing: boolean; readonly onRefresh: () => void }) {
@@ -62,6 +82,8 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
   const toast = useToast();
   const changed = useMasrafChanged();
   const ozet = useOzet();
+  // Field names for the missing fields and the receipt values; the keys show until they load.
+  const defs = useAlanlar().data;
   const [busy, setBusy] = useState<ActionKey | null>(null);
   const [sheet, setSheet] = useState<'onayla' | 'reddet' | null>(null);
   const [note, setNote] = useState('');
@@ -73,14 +95,31 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
   const tone = statusColors(colors, detail.durum);
   const izin = detail.izinler;
 
-  /** `explain` may show a failure its own way; it returns true when it did. */
-  const run = async (key: ActionKey, call: () => Promise<MasrafDetay>, success: string, explain?: (err: unknown) => boolean): Promise<boolean> => {
+  // Background reading moves the form on by itself (an invoice read, the form sent by "okununca gönder"):
+  // the lists, the summary and the notification badge follow when this screen's polling sees it.
+  const progress = `${detail.durum}|${detail.bekleyenFaturalar.length}|${detail.faturalar.length}`;
+  const lastProgress = useRef(progress);
+  useEffect(() => {
+    if (lastProgress.current === progress) return;
+    lastProgress.current = progress;
+    void changed(detail);
+    // Only when the form moved on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress]);
+
+  /** `explain` may show a failure its own way; it returns true when it did. `success` may word the new state. */
+  const run = async (
+    key: ActionKey,
+    call: () => Promise<MasrafDetay>,
+    success: string | ((next: MasrafDetay) => string),
+    explain?: (err: unknown) => boolean,
+  ): Promise<boolean> => {
     setBusy(key);
     try {
       const next = await call();
       await changed(next);
       haptics.success();
-      toast(success, 'success');
+      toast(typeof success === 'string' ? success : success(next), 'success');
       return true;
     } catch (err) {
       haptics.error();
@@ -122,24 +161,53 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
     if (ok) setSheet(null);
   };
 
-  const actions: { key: ActionKey; title: string; icon: IconName; variant: ButtonVariant; onPress: () => void }[] = [];
+  // Invoice files the server still reads in the background, and those it could not read.
+  const pending = detail.bekleyenFaturalar;
+  const readingCount = pending.filter((b) => b.durum !== 'hata').length;
+  const failedCount = pending.length - readingCount;
+  // `izinler.gonder` stays true while files are pending; the server would refuse (409 okuma_suruyor /
+  // okuma_hatali), so the button is off and says why.
+  const sendBlock =
+    !izin.gonder || pending.length === 0
+      ? null
+      : readingCount > 0
+        ? detail.okununcaGonder
+          ? 'Faturalar okununca masraf kendiliğinden onaya gönderilecek.'
+          : `${readingCount > 1 ? 'Faturalar' : 'Fatura'} okunurken onaya gönderilemez; okuma bitince bildirim gelir.`
+        : 'Okunamayan faturaları yeniden okutun ya da masraftan çıkarın; sonra onaya gönderebilirsiniz.';
+
+  const actions: { key: ActionKey; title: string; icon: IconName; variant: ButtonVariant; onPress: () => void; blocked?: string }[] = [];
   if (izin.reddet) actions.push({ key: 'reddet', title: 'Reddet', icon: 'close-circle-outline', variant: 'dangerSoft', onPress: () => openSheet('reddet') });
   if (izin.onayla) actions.push({ key: 'onayla', title: 'Onayla', icon: 'checkmark-circle-outline', variant: 'success', onPress: () => openSheet('onayla') });
   const openEdit = (): void => router.push({ pathname: '/masraf/[id]/duzenle', params: { id: String(detail.id) } });
-  const hasIncomplete = izin.gonder && detail.faturalar.some((f) => f.eksikAlanlar.length > 0);
-  if (izin.duzenle && !hasIncomplete) {
-    actions.push({ key: 'duzenle', title: 'Düzenle', icon: 'create-outline', variant: 'outline', onPress: openEdit });
-  }
-  // Sending with missing invoice information is a sure rejection: the way forward is to fill it in.
+  // Sending with missing invoice information or without an amount is a sure rejection: the way forward
+  // is to fill it in, so the main action leads to the edit screen.
   const incompleteInvoices = detail.faturalar.flatMap((f, i) => (f.eksikAlanlar.length > 0 ? [{ f, n: i + 1 }] : []));
   const firstIncomplete = incompleteInvoices[0];
-  if (izin.gonder && firstIncomplete !== undefined) {
+  // Required form fields left empty (for now only the cost centre).
+  const formMissing = detail.eksikAlanlar;
+  const amountMissing = izin.gonder && detail.tutar === null;
+  const fixFirst = izin.gonder && sendBlock === null && (firstIncomplete !== undefined || formMissing.length > 0 || amountMissing);
+  if (izin.duzenle && !fixFirst) {
+    actions.push({ key: 'duzenle', title: 'Düzenle', icon: 'create-outline', variant: 'outline', onPress: openEdit });
+  }
+  if (sendBlock !== null) {
+    actions.push({ key: 'gonder', title: 'Onaya gönder', icon: 'paper-plane', variant: 'primary', onPress: () => undefined, blocked: sendBlock });
+  } else if (fixFirst && firstIncomplete !== undefined) {
     actions.push({
       key: 'duzenle',
       title: 'Eksikleri tamamla',
       icon: 'create-outline',
       variant: 'primary',
       onPress: () => router.push({ pathname: '/masraf/[id]/duzenle', params: { id: String(detail.id), fatura: firstIncomplete.f.id } }),
+    });
+  } else if (fixFirst) {
+    actions.push({
+      key: 'duzenle',
+      title: formMissing.length > 0 ? 'Eksikleri tamamla' : 'Tutarı gir',
+      icon: 'create-outline',
+      variant: 'primary',
+      onPress: openEdit,
     });
   } else if (izin.gonder) {
     actions.push({
@@ -149,23 +217,63 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
       variant: 'primary',
       onPress: () =>
         void run('gonder', () => runMasrafAction(detail.id, 'gonder'), 'Masraf onaya gönderildi.', (err) => {
-          // A missing equivalent, missing invoice information or a duplicate is fixed on the edit screen;
-          // offer to go there instead of a passing toast.
-          if (!(err instanceof ApiError) || !FIXABLE.includes(err.kod)) return false;
-          Alert.alert(
-            err.kod === 'karsilik_eksik' ? `${base} karşılığı eksik` : err.kod === 'fatura_eksik' ? 'Fatura bilgisi eksik' : 'Mükerrer fatura',
-            err.message,
-            izin.duzenle
-              ? [
-                  { text: 'Vazgeç', style: 'cancel' },
-                  { text: 'Düzenle', onPress: openEdit },
-                ]
-              : [{ text: 'Tamam' }],
-          );
+          // A missing amount, equivalent or invoice information or a duplicate is fixed on the edit
+          // screen; offer to go there instead of a passing toast. Files still (or not) read are explained.
+          if (!(err instanceof ApiError)) return false;
+          if (FIXABLE.includes(err.kod)) {
+            Alert.alert(
+              err.kod === 'karsilik_eksik' ? `${base} karşılığı eksik` : (SEND_ERROR_TITLES[err.kod] ?? 'Gönderilemedi'),
+              err.message,
+              izin.duzenle
+                ? [
+                    { text: 'Vazgeç', style: 'cancel' },
+                    { text: 'Düzenle', onPress: openEdit },
+                  ]
+                : [{ text: 'Tamam' }],
+            );
+            return true;
+          }
+          const title = SEND_ERROR_TITLES[err.kod];
+          if (title === undefined) return false;
+          Alert.alert(title, err.message, [{ text: 'Tamam' }]);
           return true;
         }),
     });
   }
+  const reread = (): void => {
+    void run('yenidenOku', () => runMasrafAction(detail.id, 'yeniden-oku'), 'Okunamayan faturalar yeniden okuma sırasına alındı.');
+  };
+
+  // The rest of the pending list replaces it; the file's reading result, if any, is not lost (it lands in
+  // the user's invoices). With "okununca gönder" on, the server may send the form right away.
+  const removePending = (item: BekleyenFatura): void => {
+    confirm('Masraftan çıkar', `"${item.dosyaAdi}" bu masraftan çıkarılacak.`, 'Çıkar', true, () => {
+      void run(
+        'bekleyen',
+        () => updateMasraf(detail.id, { bekleyenFaturalar: pending.filter((b) => b.dosyaOzeti !== item.dosyaOzeti).map((b) => b.dosyaOzeti) }),
+        (next) =>
+          next.durum === 'onayda'
+            ? 'Masraf onaya gönderildi.'
+            : detail.okununcaGonder && !next.okununcaGonder
+              ? `Dosya masraftan çıkarıldı. ${autoSendFailure(next)}`
+              : 'Dosya masraftan çıkarıldı.',
+      );
+    });
+  };
+
+  const setAutoSend = (value: boolean): void => {
+    void run('okununcaGonder', () => updateMasraf(detail.id, { okununcaGonder: value }), (next) =>
+      next.durum === 'onayda'
+        ? 'Masraf onaya gönderildi.'
+        : !value
+          ? 'Okumalar bitince gönderme kapatıldı.'
+          : next.okununcaGonder
+            ? 'Faturalar okununca masraf onaya gönderilecek.'
+            : autoSendFailure(next),
+    );
+  };
+  const showAutoSend = detail.okununcaGonder || (izin.duzenle && pending.length > 0);
+
   if (izin.geriCek) {
     actions.push({
       key: 'geriCek',
@@ -221,14 +329,24 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
           <Text variant="title" accessibilityRole="header">
             {detail.baslik}
           </Text>
-          <Text
-            variant="amountLarge"
-            style={amountLargeFor(formatMoney(detail.tutar, detail.paraBirimi))}
-            accessibilityLabel={`Tutar ${formatMoney(detail.tutar, detail.paraBirimi)}`}
-          >
-            {formatMoney(detail.tutar, detail.paraBirimi)}
-          </Text>
-          {showLocal ? (
+          {detail.tutar !== null ? (
+            <Text
+              variant="amountLarge"
+              style={amountLargeFor(formatMoney(detail.tutar, detail.paraBirimi))}
+              accessibilityLabel={`Tutar ${formatMoney(detail.tutar, detail.paraBirimi)}`}
+            >
+              {formatMoney(detail.tutar, detail.paraBirimi)}
+            </Text>
+          ) : (
+            // A draft saved without an amount: the server fills it once the invoices are read.
+            <View style={styles.next}>
+              <Ionicons name={readingCount > 0 ? 'hourglass-outline' : 'remove-circle-outline'} size={18} color={colors.textMuted} />
+              <Text variant="heading" tone="muted">
+                {readingCount > 0 ? 'Tutar okununca dolacak' : 'Tutar girilmedi'}
+              </Text>
+            </View>
+          )}
+          {showLocal && detail.yerelTutar !== null ? (
             <Text variant="small" tone="muted">
               ≈ {formatMoney(detail.yerelTutar, localCurrency)}
               {detail.kur !== null ? ` · kur ${formatNumber(detail.kur, 4)}` : ''}
@@ -270,14 +388,15 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
           </Animated.View>
         ) : null}
 
-        {incompleteInvoices.length > 0 && izin.gonder ? (
+        {(incompleteInvoices.length > 0 || formMissing.length > 0) && izin.gonder ? (
           <Animated.View entering={motion.enter(1)}>
             <Banner
               tone="warning"
               icon="document-text-outline"
               message={[
-                'Onaya göndermeden önce eksik fatura bilgilerini tamamlayın',
-                ...incompleteInvoices.map(({ f, n }) => `${n}. fatura: ${f.eksikAlanlar.map((k) => fieldLabel(k).toLowerCase()).join(', ')}`),
+                'Onaya göndermeden önce eksik bilgileri tamamlayın',
+                ...formMissing.map((k) => `${fieldName(defs, k)} seçilmeli.`),
+                ...incompleteInvoices.map(({ f, n }) => `${n}. fatura: ${missingNames(defs, f.eksikAlanlar)}`),
               ].join('\n')}
             />
           </Animated.View>
@@ -308,6 +427,20 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
         <Animated.View entering={motion.enter(2)}>
           <Card style={styles.facts}>
             <Fact label="Kategori" icon={<CategoryIcon simge={detail.kategori.simge} size={32} />} value={detail.kategori.ad} />
+            {detail.masrafMerkezi !== null ? (
+              <Fact
+                label={fieldName(defs, 'masrafMerkezi')}
+                icon={<FactIcon name="layers-outline" />}
+                value={`${detail.masrafMerkezi.gosterim}${detail.masrafMerkezi.aktif ? '' : ' (pasif)'}`}
+              />
+            ) : null}
+            {detail.organizasyon !== null ? (
+              <Fact
+                label="Organizasyon"
+                icon={<FactIcon name="business-outline" />}
+                value={`${displayName(detail.organizasyon.kod, detail.organizasyon.ad)}${detail.organizasyon.aktif ? '' : ' (pasif)'}`}
+              />
+            ) : null}
             <Fact label="Masraf tarihi" icon={<FactIcon name="calendar-outline" />} value={formatDate(detail.masrafTarihi)} />
             {detail.satici !== null && detail.satici !== '' ? <Fact label="Satıcı" icon={<FactIcon name="storefront-outline" />} value={detail.satici} /> : null}
             <Fact label="Oluşturan" icon={<FactIcon name="person-outline" />} value={detail.olusturan.adSoyad} />
@@ -321,6 +454,66 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
             <SectionTitle>Açıklama</SectionTitle>
             <Card>
               <Text>{detail.aciklama}</Text>
+            </Card>
+          </Animated.View>
+        ) : null}
+
+        {pending.length > 0 ? (
+          <Animated.View entering={motion.enter(3)} style={styles.section}>
+            <SectionTitle>
+              {readingCount === 0
+                ? pending.length > 1
+                  ? `Okunamayan faturalar (${pending.length})`
+                  : 'Okunamayan fatura'
+                : pending.length > 1
+                  ? `Okunmayı bekleyen faturalar (${pending.length})`
+                  : 'Okunmayı bekleyen fatura'}
+            </SectionTitle>
+            <PendingInvoices
+              items={pending}
+              canEdit={izin.duzenle}
+              rereading={busy === 'yenidenOku'}
+              disabled={busy !== null}
+              onReread={reread}
+              onRemove={removePending}
+              defs={defs}
+            />
+            {failedCount > 0 && readingCount > 0 ? (
+              <Text variant="caption" tone="muted" style={styles.sectionTitle}>
+                {failedCount} fatura okunamadı; diğerleri okunuyor.
+              </Text>
+            ) : null}
+          </Animated.View>
+        ) : null}
+
+        {showAutoSend ? (
+          <Animated.View entering={motion.enter(3)}>
+            <Card style={styles.autoSend}>
+              <View style={[styles.factIcon, { backgroundColor: colors.primarySoft }]}>
+                <Ionicons name="paper-plane-outline" size={17} color={colors.primary} />
+              </View>
+              <View style={styles.flex}>
+                <Text variant="bodyStrong">Okumalar bitince onaya gönder</Text>
+                <Text variant="small" tone="muted">
+                  {detail.okununcaGonder
+                    ? 'Faturaların hepsi okununca masraf kendiliğinden onaya gönderilecek; sonucu bildirimle öğrenirsiniz.'
+                    : 'Açarsanız faturaların hepsi okununca masraf kendiliğinden onaya gönderilir.'}
+                </Text>
+              </View>
+              {izin.duzenle ? (
+                <Switch
+                  // Shows the requested value while the change is saved.
+                  value={busy === 'okununcaGonder' ? !detail.okununcaGonder : detail.okununcaGonder}
+                  disabled={busy !== null}
+                  onValueChange={(value) => {
+                    haptics.tap();
+                    setAutoSend(value);
+                  }}
+                  trackColor={{ false: colors.border, true: colors.primary }}
+                  accessibilityLabel="Okumalar bitince onaya gönder"
+                  accessibilityRole="switch"
+                />
+              ) : null}
             </Card>
           </Animated.View>
         ) : null}
@@ -353,7 +546,7 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
                 <Ionicons name="document-outline" size={18} color={colors.textMuted} />
               </View>
               <Text tone="muted" style={styles.flex}>
-                Bu masrafa fatura eklenmemiş.
+                {pending.length > 0 ? 'Okunan faturalar burada görünecek.' : 'Bu masrafa fatura eklenmemiş.'}
               </Text>
             </Card>
           ) : (
@@ -415,7 +608,7 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
           <View style={styles.section}>
             <SectionTitle>{faturalar.length > 1 ? 'Fatura bilgileri' : 'Fatura detayı'}</SectionTitle>
             {faturalar.map((f, i) => (
-              <InvoiceInfoCard key={f.id} fatura={f} index={i} count={faturalar.length} currency={detail.paraBirimi} />
+              <InvoiceInfoCard key={f.id} fatura={f} index={i} count={faturalar.length} currency={detail.paraBirimi} defs={defs} />
             ))}
           </View>
         ) : null}
@@ -458,6 +651,11 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
           entering={motion.enter(1)}
           style={[styles.actions, { backgroundColor: colors.bg, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, spacing.md) }]}
         >
+          {sendBlock !== null ? (
+            <Text variant="caption" tone="muted" align="center" accessibilityLiveRegion="polite">
+              {sendBlock}
+            </Text>
+          ) : null}
           {chunk(actions, 2).map((row) => (
             <View key={row.map((a) => a.key).join('-')} style={styles.actionRow}>
               {row.map((a) => (
@@ -470,7 +668,8 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
                   // label fits on one line on a 360 pt screen.
                   flex={!(row.length > 1 && a.variant === 'outline')}
                   loading={busy === a.key}
-                  disabled={busy !== null && busy !== a.key}
+                  disabled={a.blocked !== undefined || (busy !== null && busy !== a.key)}
+                  accessibilityHint={a.blocked}
                   onPress={a.onPress}
                 />
               ))}
@@ -483,7 +682,7 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
         visible={sheet !== null}
         onClose={() => setSheet(null)}
         title={sheet === 'reddet' ? 'Masrafı reddet' : 'Masrafı onayla'}
-        subtitle={`${detail.baslik} · ${formatMoney(detail.tutar, detail.paraBirimi)}`}
+        subtitle={detail.tutar !== null ? `${detail.baslik} · ${formatMoney(detail.tutar, detail.paraBirimi)}` : detail.baslik}
       >
         <TextField
           label={sheet === 'reddet' ? 'Ret gerekçesi' : 'Not (isteğe bağlı)'}
@@ -512,6 +711,10 @@ function Detail({ detail, refreshing, onRefresh }: { readonly detail: MasrafDeta
 
 /** Only photos with a stored file open in the full-screen viewer (there is no PDF viewer). */
 const canOpen = (f: MasrafFatura): boolean => f.dosyaVar && !isPdf(f.mime);
+
+/** "fatura no, etiket": the missing fields' names in a sentence. */
+const missingNames = (defs: FieldDefs | undefined, keys: readonly string[]): string =>
+  keys.map((k) => fieldName(defs, k).toLocaleLowerCase('tr-TR')).join(', ');
 
 function releaseNote(count: number): string {
   if (count === 0) return '';
@@ -666,6 +869,7 @@ const styles = StyleSheet.create({
   heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
   next: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.xs },
   facts: { gap: spacing.lg },
+  autoSend: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   fact: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   factIcon: { width: 32, height: 32, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
   section: { gap: spacing.sm },

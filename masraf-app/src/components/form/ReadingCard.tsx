@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, {
   cancelAnimation,
@@ -14,10 +14,10 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import type { PickedFile } from '@/api/endpoints';
 import { Button } from '@/components/ui/Button';
 import { Text } from '@/components/ui/Text';
 import { isPdf } from '@/lib/pickers';
+import { queueText } from '@/lib/reading';
 import { radius, spacing, useTheme } from '@/theme';
 
 const DOC_W = 76;
@@ -25,18 +25,30 @@ const DOC_H = 96;
 const COMPACT_W = 52;
 const COMPACT_H = 66;
 
+/** The file being read: a picked file shows its photo; a file only the server holds (no uri) shows an icon. */
+export interface ReadingFile {
+  readonly name: string;
+  readonly mimeType: string | null;
+  readonly uri: string | null;
+}
+
 export interface ReadingCardProps {
-  readonly file: PickedFile;
+  readonly file: ReadingFile;
   /** pending: waiting on the device for an upload slot; sirada: queued on the server; okunuyor: being read. */
   readonly phase: 'pending' | 'uploading' | 'sirada' | 'okunuyor';
   readonly startedAt: number;
+  /** The file's place in the shared reading queue while sirada (both null while unknown). */
+  readonly kuyrukSirasi?: number | null;
+  readonly onundeki?: number | null;
   readonly onCancel: () => void;
   /** Smaller card for a list of several invoices: no long explanation, no "fill the form meanwhile" note. */
   readonly compact?: boolean;
+  /** Shown at the bottom of the card, e.g. the receipt's fields, which can be filled while it is read. */
+  readonly children?: ReactNode;
 }
 
 /** "Reading the invoice" state: a scan line sweeps over the document while Claude reads it. */
-export function ReadingCard({ file, phase, startedAt, onCancel, compact = false }: ReadingCardProps) {
+export function ReadingCard({ file, phase, startedAt, kuyrukSirasi = null, onundeki = null, onCancel, compact = false, children }: ReadingCardProps) {
   const { colors } = useTheme();
   const reduced = useReducedMotion();
   const scan = useSharedValue(0);
@@ -69,15 +81,22 @@ export function ReadingCard({ file, phase, startedAt, onCancel, compact = false 
   const barStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -120 + bar.get() * 360 }] }));
 
   const title =
-    phase === 'pending' ? 'Gönderilmeyi bekliyor' : phase === 'uploading' ? 'Dosya gönderiliyor' : phase === 'sirada' ? 'Sırada bekliyor' : 'Fatura okunuyor';
+    phase === 'pending'
+      ? 'Gönderilmeyi bekliyor'
+      : phase === 'uploading'
+        ? 'Dosya gönderiliyor'
+        : phase === 'sirada'
+          ? queueText(kuyrukSirasi, onundeki)
+          : 'Fatura okunuyor';
   const detail =
     phase === 'okunuyor'
       ? 'Tutar, tarih ve satıcı birazdan forma gelecek. Bu bir dakika kadar sürebilir.'
       : phase === 'sirada'
-        ? 'Okuyucular dolu; sıra gelince okumaya başlanacak.'
+        ? 'Okuyucular dolu; sıra gelince okumaya başlanacak. Beklemeden taslak olarak kaydedip çıkabilirsiniz.'
         : phase === 'pending'
           ? 'Önceki dosyalar gönderilince yüklenecek.'
           : 'Dosya sunucuya yükleniyor.';
+  const pdf = isPdf(file.mimeType);
   const minutes = Math.floor(elapsed / 60);
   const seconds = elapsed % 60;
   const elapsedText = minutes > 0 ? `${minutes} dk ${seconds} sn` : `${seconds} sn`;
@@ -95,8 +114,8 @@ export function ReadingCard({ file, phase, startedAt, onCancel, compact = false 
           accessibilityLiveRegion="polite"
         >
           <View style={[styles.doc, { width: docW, height: docH, backgroundColor: colors.primarySoft, borderColor: colors.border }]}>
-            {isPdf(file.mimeType) ? (
-              <Ionicons name="document-text" size={compact ? 28 : 40} color={colors.primary} />
+            {pdf || file.uri === null ? (
+              <Ionicons name={pdf ? 'document-text' : 'image-outline'} size={compact ? 28 : 40} color={colors.primary} />
             ) : (
               <Image source={{ uri: file.uri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={150} />
             )}
@@ -146,11 +165,12 @@ export function ReadingCard({ file, phase, startedAt, onCancel, compact = false 
         <View style={styles.footer}>
           <Ionicons name="create-outline" size={16} color={colors.textMuted} />
           <Text variant="small" tone="muted" style={styles.flex}>
-            Bu sırada kategori ve açıklamayı doldurabilirsiniz.
+            Bu sırada formu doldurabilir ya da taslak olarak kaydedip çıkabilirsiniz.
           </Text>
           <Button title="Vazgeç" size="sm" variant="ghost" onPress={onCancel} accessibilityHint="Okumayı bekleme, formu elle doldur" />
         </View>
       ) : null}
+      {children}
     </View>
   );
 }

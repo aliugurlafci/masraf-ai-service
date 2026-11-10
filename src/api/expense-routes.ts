@@ -16,6 +16,17 @@ const invoiceIds = z
     if (twice >= 0) ctx.addIssue({ code: 'custom', message: 'Aynı fatura bir forma iki kez eklenemez.', path: [twice] });
   });
 
+/** Files still being read that the form waits for, by SHA-256: at most MAX_INVOICES, each once. */
+const waitingFiles = z
+  .array(z.string({ error: 'Dosya özeti metin olmalıdır.' }).regex(/^[a-f0-9]{64}$/, 'Dosya özeti 64 karakterlik SHA-256 olmalıdır.'), {
+    error: 'Bekleyen fatura listesi geçersiz.',
+  })
+  .max(MAX_INVOICES, `Bir masrafa en fazla ${MAX_INVOICES} fatura eklenebilir.`)
+  .superRefine((hashes, ctx) => {
+    const twice = hashes.findIndex((x, i) => hashes.indexOf(x) !== i);
+    if (twice >= 0) ctx.addIssue({ code: 'custom', message: 'Aynı dosya bir forma iki kez eklenemez.', path: [twice] });
+  });
+
 /** Base-currency equivalents by invoice id, for invoices in a third currency. */
 const equivalents = z
   .record(recordId, amount('Karşılık'), { error: 'Karşılıklar fatura kimliğinden tutara bir eşleme olmalıdır.' })
@@ -103,34 +114,75 @@ const corrections = z
   .record(recordId, invoiceCorrection.nullable(), { error: 'Düzeltmeler fatura kimliğinden faturaya bir eşleme olmalıdır.' })
   .refine((m) => Object.keys(m).length <= MAX_INVOICES, `En fazla ${MAX_INVOICES} düzeltme gönderilebilir.`);
 
+/** A receipt: an invoice record id, or the SHA-256 of a file still being read (or read meanwhile). */
+const RECEIPT_KEY = /^(?:\d{8}-\d{6}-[a-f0-9]{8}|[a-f0-9]{64})$/;
+/** More fields than any receipt can have; the service names each unknown one. */
+const MAX_RECEIPT_KEYS = 100;
+
+/**
+ * Receipt field values by receipt (docs/onay-sistemi.md, section 6, `fisAlanlari`). Only the shape is
+ * checked here; the service checks each value against its field's definition.
+ */
+const receiptFields = z
+  .record(z.string(), z.record(z.string(), z.unknown(), { error: 'Fiş alanları alan anahtarından değere bir eşleme olmalıdır.' }), {
+    error: 'Fiş alanları fiş anahtarından alan değerlerine bir eşleme olmalıdır.',
+  })
+  .superRefine((receipts, ctx) => {
+    const keys = Object.keys(receipts);
+    if (keys.length > MAX_INVOICES) ctx.addIssue({ code: 'custom', message: `En fazla ${MAX_INVOICES} fişin alanları gönderilebilir.` });
+    for (const key of keys) {
+      if (!RECEIPT_KEY.test(key)) {
+        ctx.addIssue({ code: 'custom', path: [key], message: 'Fiş anahtarı bir fatura kimliği ya da 64 karakterlik dosya özeti olmalıdır.' });
+      } else if (Object.keys(receipts[key] ?? {}).length > MAX_RECEIPT_KEYS) {
+        ctx.addIssue({ code: 'custom', path: [key], message: `Bir fişte en fazla ${MAX_RECEIPT_KEYS} alan gönderilebilir.` });
+      }
+    }
+  });
+
 const formFields = {
   baslik: text('Başlık', 120),
   kategoriId: id('Kategori'),
   masrafTarihi: isoDate('Masraf tarihi'),
-  tutar: amount('Tutar'),
+  // A draft may leave the amount for its invoices to fill once they are read.
+  tutar: amount('Tutar').nullable().optional(),
   paraBirimi: currency.optional(),
   kur: rate.nullable().optional(),
   satici: optionalText('Satıcı', 200),
   aciklama: optionalText('Açıklama', 1000),
   faturaIdler: invoiceIds.optional(),
+  bekleyenFaturalar: waitingFiles.optional(),
+  okununcaGonder: z.boolean({ error: 'Okununca gönder seçeneği true ya da false olmalıdır.' }).optional(),
   yerelKarsiliklar: equivalents.optional(),
   faturaDuzeltmeleri: corrections.optional(),
+  masrafMerkeziId: id('Masraf merkezi').nullable().optional(),
+  fisAlanlari: receiptFields.optional(),
 };
 
-const NewFormBody = z.object({ ...formFields, gonder: z.boolean().optional() }).strict();
+const NewFormBody = z
+  .object({ ...formFields, gonder: z.boolean().optional() })
+  .strict()
+  .superRefine((body, ctx) => {
+    if (body.gonder === true && body.okununcaGonder === true) {
+      ctx.addIssue({ code: 'custom', message: 'Hemen gönderilen masrafta "okununca gönder" seçilemez.', path: ['okununcaGonder'] });
+    }
+  });
 const FormPatchBody = z
   .object({
     baslik: formFields.baslik.optional(),
     kategoriId: formFields.kategoriId.optional(),
     masrafTarihi: formFields.masrafTarihi.optional(),
-    tutar: formFields.tutar.optional(),
+    tutar: formFields.tutar,
     paraBirimi: formFields.paraBirimi,
     kur: formFields.kur,
     satici: formFields.satici,
     aciklama: formFields.aciklama,
     faturaIdler: formFields.faturaIdler,
+    bekleyenFaturalar: formFields.bekleyenFaturalar,
+    okununcaGonder: formFields.okununcaGonder,
     yerelKarsiliklar: formFields.yerelKarsiliklar,
     faturaDuzeltmeleri: formFields.faturaDuzeltmeleri,
+    masrafMerkeziId: formFields.masrafMerkeziId,
+    fisAlanlari: formFields.fisAlanlari,
   })
   .strict();
 
@@ -246,6 +298,7 @@ export function expenseRouter(expenses: ExpenseService): Router {
   action('gonder', (formId, _req, res) => expenses.submit(formId, userOf(res)));
   action('geri-cek', (formId, _req, res) => expenses.withdraw(formId, userOf(res)));
   action('iptal', (formId, _req, res) => expenses.cancel(formId, userOf(res)));
+  action('yeniden-oku', (formId, _req, res) => expenses.retryReads(formId, userOf(res)));
   // The comment is optional, so a request without a body (req.body is then undefined) also approves.
   action('onayla', (formId, req, res) => expenses.approve(formId, userOf(res), parse(ApproveBody, req.body ?? {}).aciklama ?? null));
   action('reddet', (formId, req, res) => expenses.reject(formId, userOf(res), parse(RejectBody, req.body).aciklama));

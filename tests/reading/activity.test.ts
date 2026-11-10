@@ -134,6 +134,76 @@ describe('activity log', () => {
     await Promise.all(reads);
   });
 
+  it('shows the place of each waiting file and clears it once the file starts or ends', async () => {
+    const pending = held(['opus']);
+    const log = createActivityLog({ esZamanli: 1 });
+    const events: LiveEvent[] = [];
+    log.subscribe((e) => events.push(e));
+    const read = log.track(createInvoiceReader(extract, storage, 1));
+    const passed: Array<[number, number]> = [];
+    const reads = [
+      read(input(1), { kaynak: 'arka_plan', kullanici: { id: 7, adSoyad: 'Ayşe Yılmaz' } }),
+      read(input(2), { kaynak: 'api' }, { onPosition: (p) => passed.push([p.kuyrukSirasi, p.onundeki]) }),
+      read(input(3), { kaynak: 'panel', etiket: 'p-3' }),
+    ];
+
+    await vi.waitFor(() => expect(log.snapshot().istatistik).toMatchObject({ okunuyor: 1, sirada: 2 }));
+    await vi.waitFor(() => expect(log.snapshot().etkinlikler[0]?.kuyrukSirasi).toBe(2));
+    const place = (a: { dosyaAdi: string; durum: string; kaynak: string; kuyrukSirasi: number | null; onundeki: number | null }) => [
+      a.dosyaAdi,
+      a.durum,
+      a.kaynak,
+      a.kuyrukSirasi,
+      a.onundeki,
+    ];
+    expect(log.snapshot().etkinlikler.map(place)).toEqual([
+      ['fatura-3.pdf', 'sirada', 'panel', 2, 2],
+      ['fatura-2.pdf', 'sirada', 'api', 1, 1],
+      ['fatura-1.pdf', 'okunuyor', 'arka_plan', null, null],
+    ]);
+    // The caller's own hooks still hear the place.
+    expect(passed).toEqual([[1, 1]]);
+    // A place change is a live event of its own.
+    expect(events.some((e) => e.etkinlik.dosyaAdi === 'fatura-2.pdf' && e.etkinlik.durum === 'sirada' && e.etkinlik.kuyrukSirasi === 1)).toBe(true);
+
+    pending.shift()?.();
+    await vi.waitFor(() => expect(log.snapshot().etkinlikler[1]?.durum).toBe('okunuyor'));
+    await vi.waitFor(() => expect(log.snapshot().etkinlikler[0]).toMatchObject({ durum: 'sirada', kuyrukSirasi: 1, onundeki: 1 }));
+    expect(log.snapshot().etkinlikler[1]).toMatchObject({ kuyrukSirasi: null, onundeki: null });
+    expect(log.snapshot().etkinlikler[2]).toMatchObject({ durum: 'bitti', kaynak: 'arka_plan', kuyrukSirasi: null, onundeki: null });
+    expect(events.filter((e) => e.etkinlik.dosyaAdi === 'fatura-3.pdf').map((e) => [e.etkinlik.kuyrukSirasi, e.etkinlik.onundeki])).toEqual([
+      [null, null],
+      [2, 2],
+      [1, 1],
+    ]);
+
+    while (log.snapshot().istatistik.bitti < 3) {
+      pending.shift()?.();
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await Promise.all(reads);
+    expect(log.snapshot().etkinlikler.map((a) => [a.kuyrukSirasi, a.onundeki])).toEqual([
+      [null, null],
+      [null, null],
+      [null, null],
+    ]);
+  });
+
+  it('clears the place of a file whose read failed', async () => {
+    const pending = held(['opus']);
+    const log = createActivityLog({ esZamanli: 1 });
+    const read = log.track(createInvoiceReader(extract, storage, 1));
+    const first = read(input(1), { kaynak: 'arka_plan' });
+    const second = read(input(2), { kaynak: 'arka_plan' });
+    await vi.waitFor(() => expect(log.snapshot().etkinlikler[0]).toMatchObject({ kuyrukSirasi: 1, onundeki: 1 }));
+    extract.mockRejectedValueOnce(new ExtractionError('claude_timeout', 'Claude zamanında yanıt vermedi.'));
+    pending.shift()?.();
+    await first;
+    await expect(second).rejects.toThrow(ExtractionError);
+    await vi.waitFor(() => expect(log.snapshot().etkinlikler[0]?.durum).toBe('hata'));
+    expect(log.snapshot().etkinlikler[0]).toMatchObject({ kaynak: 'arka_plan', kuyrukSirasi: null, onundeki: null });
+  });
+
   it('never shows more files being read than there are slots', async () => {
     const pending = held(['opus']);
     const log = createActivityLog({ esZamanli: 1 });

@@ -4,6 +4,7 @@
 // #/kullanicilar?akis=<id> opens filtered to the users whose expenses go to that flow.
 
 import * as api from '../api.js';
+import { listSearch, multiSelect, searchSelect } from '../combo.js';
 import { el, icon, ICONS } from '../dom.js';
 import { fmtCount, fmtCurrency, fmtDateTime, fmtRelative } from '../format.js';
 import { limitText, ROLE_HINTS, roleLabel, ROLES, STRATEGY_LABEL } from '../labels.js';
@@ -49,6 +50,10 @@ const HELP_LINKS = {
 
 const flowHref = (id) => href('/onay-akisi', { akis: id });
 
+/** Gösterim of an organisation: "kod – ad" (docs section 6). */
+const orgLabel = (o) => (o.ad && o.ad !== o.kod ? `${o.kod} – ${o.ad}` : o.kod);
+const costLabel = (m) => m.gosterim ?? m.kod;
+
 /** Where to fix a refusal; for onay_akisinda one link per flow the user approves in. */
 function helpLinks(error, u) {
   if (error.kod === 'onay_akisinda' && u.onaycilik?.length) {
@@ -83,7 +88,7 @@ export const usersView = {
       el(
         'div',
         { className: 'page' },
-        pageHead({ title: 'Kullanıcılar', sub: 'Hesaplar, roller, masraflarının gittiği onay akışı ve onaycı oldukları akışlar.', actions: [btn('Kullanıcı ekle', { icon: ICONS.plus, kind: 'primary', onClick: () => editUser(null) })] }),
+        pageHead({ title: 'Kullanıcılar', sub: 'Hesaplar, roller, organizasyon ve masraf merkezleri, masraflarının gittiği onay akışı ve onaycı oldukları akışlar.', actions: [btn('Kullanıcı ekle', { icon: ICONS.plus, kind: 'primary', onClick: () => editUser(null) })] }),
         el('div', { className: 'toolbar' }, el('label', { className: 'search' }, icon(ICONS.search), search), statusSeg, roleSelect, flowSelect),
         announcer,
         list,
@@ -150,7 +155,7 @@ export const usersView = {
         if (filters.rol && u.rol !== filters.rol) return false;
         if (filters.akis && String(u.onayAkisi?.id ?? '') !== filters.akis) return false;
         if (!q) return true;
-        return [u.adSoyad, u.eposta, u.departman].some((s) => (s ?? '').toLocaleLowerCase('tr-TR').includes(q));
+        return [u.adSoyad, u.eposta, u.departman, u.organizasyon?.ad, u.organizasyon?.kod].some((s) => (s ?? '').toLocaleLowerCase('tr-TR').includes(q));
       });
     }
 
@@ -189,6 +194,7 @@ export const usersView = {
             ),
             el('td', { 'data-label': 'Rol' }, el('span', { className: `role-badge ${u.rol}`, text: roleLabel(u.rol) })),
             el('td', { 'data-label': 'Departman', text: u.departman || '—' }),
+            el('td', { className: 't-org', 'data-label': 'Organizasyon' }, orgCell(u)),
             el('td', { className: 't-flow', 'data-label': 'Onay akışı' }, flowCell(u)),
             el('td', { 'data-label': 'Durum' }, el('span', { className: 'chips' }, el('span', { className: `status ${u.aktif ? 'ok' : 'off'} sm` }, icon(u.aktif ? ICONS.check : ICONS.ban), el('span', { text: u.aktif ? 'Aktif' : 'Pasif' })), u.sifreDegismeli ? el('span', { className: 'tag warn', title: 'İlk girişte şifresini değiştirecek', text: 'Şifre bekliyor' }) : null)),
             el('td', { 'data-label': 'Son giriş' }, u.sonGiris ? el('time', { datetime: u.sonGiris, title: fmtDateTime(u.sonGiris), text: fmtRelative(u.sonGiris) }) : el('span', { className: 'muted', text: 'Hiç' })),
@@ -224,6 +230,7 @@ export const usersView = {
                   el('th', { scope: 'col', text: 'Kullanıcı' }),
                   el('th', { scope: 'col', text: 'Rol' }),
                   el('th', { scope: 'col', text: 'Departman' }),
+                  el('th', { scope: 'col', text: 'Organizasyon' }),
                   el('th', { scope: 'col', text: 'Onay akışı' }),
                   el('th', { scope: 'col', text: 'Durum' }),
                   el('th', { scope: 'col', text: 'Son giriş' }),
@@ -242,6 +249,20 @@ export const usersView = {
       const strategy = STRATEGY_LABEL[o.akis.strateji];
       const limit = o.limit === null || o.limit === undefined ? 'son onaycı, limiti sınırsız' : `onay limiti ${fmtCurrency(o.limit, base)}`;
       return `“${o.akis.ad}” akışında ${o.sira}. onaycı${strategy ? ` (${strategy.toLocaleLowerCase('tr-TR')})` : ''}; ${limit}`;
+    }
+
+    /** The organisation, and how many cost centres the user may choose from. */
+    function orgCell(u) {
+      const org = u.organizasyon;
+      const n = Array.isArray(u.masrafMerkezleri) ? u.masrafMerkezleri.length : 0;
+      const centres = n > 0 ? `${fmtCount(n)} masraf merkezi` : 'Masraf merkezi yok';
+      const title = n > 0 ? u.masrafMerkezleri.map(costLabel).join(', ') : null;
+      return el(
+        'div',
+        { className: 'cell-text' },
+        org ? el('span', { className: 'cell-title' }, el('span', { text: org.ad || org.kod }), org.aktif === false ? el('span', { className: 'tag', text: 'Pasif' }) : null) : el('span', { className: 'muted', text: '—' }),
+        el('span', { className: 'cell-sub', title, text: org && org.ad && org.ad !== org.kod ? `${org.kod} · ${centres}` : centres }),
+      );
     }
 
     /** The flow the user's expenses go to, and the flows they approve in (order and limit). */
@@ -342,8 +363,39 @@ export const usersView = {
       }
       const roleSet = fieldset({ legend: 'Rol', content: roleGroup });
       const flowPick = flowSelectFor(u);
+      // Only active records can be newly chosen; an inactive one the user already has is kept and shown.
+      const orgPick = searchSelect({
+        value: u?.organizasyon ? { id: u.organizasyon.id, label: orgLabel(u.organizasyon), inactive: u.organizasyon.aktif === false } : null,
+        placeholder: 'Organizasyon arayın…',
+        label: 'Organizasyonlar',
+        search: listSearch(api.listOrganizations, (o) => ({ id: o.id, label: orgLabel(o), sub: o.paraBirimi ?? null })),
+        onChange: () => setFieldError(orgPick.input, null),
+      });
+      const savedCentres = (u?.masrafMerkezleri ?? []).map((m) => ({ id: m.id, label: costLabel(m), inactive: m.aktif === false }));
+      const centresPick = multiSelect({
+        values: savedCentres,
+        label: 'Masraf merkezleri',
+        placeholder: 'Masraf merkezi arayın ve ekleyin…',
+        max: 100,
+        search: listSearch(api.listCostCentres, (m) => ({ id: m.id, label: costLabel(m) })),
+        onChange: () => setFieldError(centresPick.input, null),
+      });
       let pw = null;
-      const body = [field({ label: 'Ad soyad', input: name }), field({ label: 'E-posta', input: email }), field({ label: 'Departman', input: dept, optional: true }), roleSet, flowPick.field];
+      const body = [
+        field({ label: 'Ad soyad', input: name }),
+        field({ label: 'E-posta', input: email }),
+        field({ label: 'Departman', input: dept, optional: true }),
+        roleSet,
+        flowPick.field,
+        field({ label: 'Organizasyon', input: orgPick.input, control: orgPick.node, optional: true, hint: 'Kullanıcının masrafları bu organizasyona yazılır.' }),
+        field({
+          label: 'Masraf merkezleri',
+          input: centresPick.input,
+          control: centresPick.node,
+          optional: true,
+          hint: 'Kullanıcı masraf formunda bunlardan birini seçer; tek merkez varsa kendiliğinden seçilir. Pasif merkez korunur ama yeni seçimde kullanılamaz.',
+        }),
+      ];
       if (creating) {
         pw = passwordField('Geçici şifre', { name: 'sifre', autocomplete: 'new-password', value: generatePassword() }, 'Kullanıcı ilk girişte bu şifreyi değiştirecek.');
         pw.field.querySelector('.pw-toggle').click(); // start visible: the admin passes it on
@@ -383,8 +435,17 @@ export const usersView = {
           }
           let r;
           const flowId = flowPick.value(); // undefined: the list did not load, the field is not sent
+          const orgId = orgPick.value()?.id ?? null;
+          const centreIds = centresPick.values().map((c) => c.id);
           if (creating) {
-            r = await api.createUser({ ...data, departman: data.departman ?? undefined, sifre: pw.input.value, onayAkisiId: flowId });
+            r = await api.createUser({
+              ...data,
+              departman: data.departman ?? undefined,
+              sifre: pw.input.value,
+              onayAkisiId: flowId,
+              organizasyonId: orgId ?? undefined,
+              masrafMerkeziIdler: centreIds.length > 0 ? centreIds : undefined,
+            });
           } else {
             const patch = {};
             if (data.eposta !== u.eposta) patch.eposta = data.eposta;
@@ -392,6 +453,10 @@ export const usersView = {
             if (data.rol !== u.rol) patch.rol = data.rol;
             if ((data.departman ?? null) !== (u.departman ?? null)) patch.departman = data.departman;
             if (flowId !== undefined && flowId !== (u.onayAkisiId ?? null)) patch.onayAkisiId = flowId;
+            if (orgId !== (u.organizasyon?.id ?? null)) patch.organizasyonId = orgId;
+            // The list is the user's whole set; the order does not matter.
+            const before = savedCentres.map((c) => c.id);
+            if (centreIds.length !== before.length || centreIds.some((x) => !before.includes(x))) patch.masrafMerkeziIdler = centreIds;
             if (Object.keys(patch).length === 0) return { ok: true, body: u };
             r = await api.updateUser(u.id, patch);
           }
@@ -402,8 +467,22 @@ export const usersView = {
             email.focus();
             return false;
           }
+          // alanlar["masrafMerkeziIdler.<i>"] names the i-th centre sent: the message goes under the list with its name.
+          const alanlar = { ...(r.error.alanlar ?? {}) };
+          const centreMsgs = [];
+          for (const [k, msg] of Object.entries(alanlar)) {
+            const m = /^masrafMerkeziIdler(?:\.(\d+))?$/.exec(k);
+            if (!m) continue;
+            delete alanlar[k];
+            const c = m[1] !== undefined ? centresPick.values()[Number(m[1])] : null;
+            centreMsgs.push(c ? `${c.label}: ${msg}` : String(msg));
+          }
+          if (centreMsgs.length > 0) {
+            setFieldError(centresPick.input, centreMsgs.join(' '));
+            centresPick.input.focus();
+          }
           const leftovers = r.error.alanlar
-            ? applyFieldErrors(r.error.alanlar, { eposta: email, adSoyad: name, departman: dept, rol: roleSet, sifre: pw?.input, onayAkisiId: flowPick.control })
+            ? applyFieldErrors(alanlar, { eposta: email, adSoyad: name, departman: dept, rol: roleSet, sifre: pw?.input, onayAkisiId: flowPick.control, organizasyonId: orgPick.input })
             : [r.error.mesaj];
           if (leftovers.length > 0) ctl.setError(leftovers.join(' '));
           return false;

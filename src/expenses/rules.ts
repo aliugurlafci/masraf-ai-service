@@ -90,7 +90,7 @@ const positive = (v: number | null | undefined): v is number => v !== null && v 
  * that currency or whose currency was not read), `local` in the base currency (base-currency invoices
  * and entered equivalents). Null when no invoice can count.
  */
-function invoiceCents(form: FormMoney, base: string, invoices: readonly InvoiceTotal[]): { form: number; local: number } | null {
+function invoiceCents(form: Pick<FormMoney, 'paraBirimi'>, base: string, invoices: readonly InvoiceTotal[]): { form: number; local: number } | null {
   let formCents = 0;
   let localCents = 0;
   let counted = false;
@@ -127,6 +127,16 @@ export function approvalAmount(form: FormMoney, base: string, invoices: readonly
 }
 
 /**
+ * The invoices' total in the form's currency: base-currency amounts (base-currency invoices and entered
+ * equivalents) are converted back with the form rate. Null when no invoice can count. A draft whose
+ * amount was left empty gets this amount once its invoices are read.
+ */
+export function invoicesFormTotal(form: Pick<FormMoney, 'paraBirimi' | 'kur'>, base: string, invoices: readonly InvoiceTotal[]): number | null {
+  const cents = invoiceCents(form, base, invoices);
+  return cents === null ? null : round2(cents.form / 100 + cents.local / 100 / (form.kur ?? 1));
+}
+
+/**
  * Set when the declared amount differs from the invoices' total, so approvers see it. Both are in the
  * form's currency; base-currency amounts are converted back with the form rate.
  */
@@ -135,9 +145,7 @@ export function amountMismatch(
   base: string,
   invoices: readonly InvoiceTotal[],
 ): { readonly fatura: number; readonly beyan: number } | null {
-  const cents = invoiceCents(form, base, invoices);
-  if (cents === null) return null;
-  const total = round2(cents.form / 100 + cents.local / 100 / (form.kur ?? 1));
-  if (total === round2(form.tutar)) return null;
+  const total = invoicesFormTotal(form, base, invoices);
+  if (total === null || total === round2(form.tutar)) return null;
   return { fatura: total, beyan: round2(form.tutar) };
 }

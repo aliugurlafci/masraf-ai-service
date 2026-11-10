@@ -7,8 +7,11 @@ import { InvoiceHeaderSchema, InvoiceLineSchema, type Invoice } from './schema.t
 type Header = Invoice['fatura'];
 type Line = Invoice['kalemler'][number];
 
-/** A header field that must be filled before a form is sent. */
-export type RequiredField = (typeof REQUIRED)[number][0];
+/** A header field that may be required before a form is sent (the field management decides which). */
+export type RequiredField = keyof Header;
+
+/** The header fields required when no list is given: those the reading checks need (REQUIRED). */
+export const DEFAULT_REQUIRED: readonly RequiredField[] = REQUIRED.map(([key]) => key);
 
 const HEADER_KEYS = Object.keys(InvoiceHeaderSchema.shape) as Array<keyof Header>;
 const LINE_KEYS = Object.keys(InvoiceLineSchema.shape) as Array<keyof Line>;
@@ -35,9 +38,12 @@ export function effectiveInvoice(read: Invoice, correction: Invoice | null | und
 
 const blank = (v: string | number | null): boolean => v === null || (typeof v === 'string' && v.trim() === '');
 
-/** Required header fields that are empty, in the order of REQUIRED. */
-export function missingFields(invoice: Invoice): RequiredField[] {
-  return REQUIRED.filter(([key]) => blank(invoice.fatura[key])).map(([key]) => key);
+/**
+ * The `required` header fields that are empty, in the order given. The form service passes the fields
+ * the field management requires for this receipt (src/expenses/field-rules.ts); the default is REQUIRED.
+ */
+export function missingFields(invoice: Invoice, required: readonly RequiredField[] = DEFAULT_REQUIRED): RequiredField[] {
+  return required.filter((key) => blank(invoice.fatura[key]));
 }
 
 /** Spaces, '-', '/' and '.' removed; a–z upper-cased by ASCII rules (Turkish letters stay as they are). */

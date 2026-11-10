@@ -6,6 +6,7 @@ import type { MasrafOzet } from '@/api/types';
 import { PressableScale } from '@/components/ui/PressableScale';
 import { Text } from '@/components/ui/Text';
 import { formatDate, formatMoney } from '@/lib/format';
+import { readingBadge } from '@/lib/reading';
 import { STATUS_LABELS } from '@/lib/status';
 import { amountFor, radius, spacing, useTheme } from '@/theme';
 
@@ -26,11 +27,17 @@ function ExpenseRowBase({ item, onPress, showOwner = false, showNext = true }: E
   const lead = showOwner ? item.olusturan.adSoyad : item.kategori.ad;
   const date = formatDate(item.masrafTarihi);
   const subtitleParts = [lead, date];
-  const amount = formatMoney(item.tutar, item.paraBirimi);
+  // A draft's amount may be empty until its invoices are read (the server fills it then).
+  const amount = item.tutar !== null ? formatMoney(item.tutar, item.paraBirimi) : null;
+  const stillReading = (item.okuma?.bekleyen ?? 0) > 0;
+  const noAmount = stillReading ? 'Tutar okununca dolacak' : 'Tutar girilmedi';
+  const badge = readingBadge(item.okuma);
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={`${item.baslik}, ${amount}, ${STATUS_LABELS[item.durum]}, ${subtitleParts.join(', ')}`}
+      accessibilityLabel={[item.baslik, amount ?? noAmount, STATUS_LABELS[item.durum], ...subtitleParts, badge?.text ?? null]
+        .filter((part) => part !== null)
+        .join(', ')}
       accessibilityHint="Ayrıntıları açar"
       onPress={() => onPress(item.id)}
       scaleTo={0.98}
@@ -58,11 +65,26 @@ function ExpenseRowBase({ item, onPress, showOwner = false, showNext = true }: E
             </Text>
           </View>
         ) : null}
+        {badge !== null ? (
+          <View style={[styles.badge, { backgroundColor: badge.failed ? colors.warningSoft : colors.infoSoft }]}>
+            <Ionicons name={badge.failed ? 'alert-circle-outline' : 'sync-outline'} size={13} color={badge.failed ? colors.warning : colors.info} />
+            <Text variant="caption" tone={badge.failed ? 'warning' : 'info'} numberOfLines={1} style={styles.badgeText}>
+              {badge.text}
+            </Text>
+          </View>
+        ) : null}
       </View>
       <View style={styles.right}>
-        <Text variant="amount" numberOfLines={1} style={amountFor(amount)}>
-          {amount}
-        </Text>
+        {amount !== null ? (
+          <Text variant="amount" numberOfLines={1} style={amountFor(amount)}>
+            {amount}
+          </Text>
+        ) : (
+          // Short enough for the amount column; the full wording is in the row's label.
+          <Text variant="small" tone="muted" numberOfLines={1}>
+            {stillReading ? 'Okununca dolacak' : 'Tutar yok'}
+          </Text>
+        )}
         <StatusBadge durum={item.durum} />
       </View>
     </PressableScale>
@@ -86,6 +108,18 @@ const styles = StyleSheet.create({
   // Never shrinks: an amount is shown whole, the title and subtitle give way instead.
   right: { alignItems: 'flex-end', gap: spacing.xs + 2, flexShrink: 0 },
   next: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    marginTop: 2,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    maxWidth: '100%',
+  },
+  badgeText: { flexShrink: 1 },
   subtitle: { flexDirection: 'row', alignItems: 'baseline' },
   lead: { flexShrink: 1 },
   // The gap before "·" is a margin: a leading space in its own text node is dropped on some renderers.

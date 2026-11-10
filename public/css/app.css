@@ -7843,3 +7843,928 @@ a.notif-main:hover {
   flex: 1 1 200px;
   margin: 0;
 }
+
+/* ---------- Background reading: queue places, files still being read, "send when read" ---------- */
+
+.tag.err {
+  border-color: transparent;
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+/* "2 fatura okunuyor", "1 fatura okunamadı" next to an expense's status in lists. */
+.read-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.read-tag {
+  gap: 4px;
+  padding: 0 7px 0 5px;
+}
+
+.read-tag svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.1;
+}
+
+.t-status .read-tags {
+  margin-top: 4px;
+}
+
+.mini-end .read-tags {
+  justify-content: flex-end;
+}
+
+/* A draft without an amount yet: a note, not a figure. */
+.amount.is-empty,
+.mini-amount.is-empty,
+.amount-main.is-empty {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: normal;
+}
+
+.head-amount .amount-main.is-empty {
+  font-size: 15px;
+}
+
+/* Reads the server started itself (pending invoices after a restart, "Yeniden oku"). */
+.source.arka_plan {
+  border-color: color-mix(in srgb, var(--wait) 45%, var(--line));
+  color: var(--wait);
+}
+
+/* The form: "Okumalar bitince onaya gönder", on its own line above the buttons. */
+.okg {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+
+.okg[hidden] {
+  display: none;
+}
+
+.okg .check-label {
+  font-weight: 650;
+  white-space: normal;
+}
+
+.okg .hint {
+  padding-left: 26px;
+}
+
+.locked-note {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+/* The detail page: files still being read. */
+.pend-card .pend-lead {
+  margin: 0 0 12px;
+}
+
+.pend-list {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.pend-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.pend-item[data-state='okunuyor'] {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.pend-item[data-state='hata'] {
+  border-color: color-mix(in srgb, var(--err) 55%, var(--line));
+  background: color-mix(in srgb, var(--err-soft) 45%, var(--surface-2));
+}
+
+.pend-item .sheet-glyph {
+  flex: none;
+  width: 22px;
+  height: 28px;
+}
+
+.pend-glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+.pend-glyph svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.2;
+}
+
+.pend-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.pend-name {
+  margin: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.pend-status {
+  margin: 2px 0 0;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pend-item[data-state='hata'] .pend-status {
+  color: var(--err);
+  font-weight: 600;
+}
+
+.pend-card .inv-actions {
+  margin-bottom: 12px;
+}
+
+.okg-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.pend-card > .inv-card-note {
+  margin: 0;
+}
+
+/* ---------- Definitions: shared bits ---------- */
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+/* The mark after a required field's name. */
+.req {
+  color: var(--err);
+  font-weight: 700;
+}
+
+.check-label.wrap {
+  align-items: flex-start;
+  white-space: normal;
+}
+
+.check-label.wrap > .check {
+  margin-top: 1px;
+}
+
+.with-tag {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.dlg.dlg-wide {
+  width: min(720px, calc(100vw - 32px));
+}
+
+/* "Aksiyonlar": a button that opens a menu under itself. */
+.menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.menu-anchor .menu {
+  min-width: 220px;
+}
+
+.btn-chev {
+  display: inline-flex;
+  margin-right: -4px;
+  color: var(--ink-3);
+}
+
+.btn-chev svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.15s var(--ease-out);
+}
+
+.btn[aria-expanded='true'] .btn-chev svg {
+  transform: rotate(180deg);
+}
+
+/* ---------- Search selects (combo.js) ---------- */
+
+.combo {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.combo-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.combo-search {
+  position: absolute;
+  left: 11px;
+  display: flex;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+.combo-search svg {
+  width: 16px;
+  height: 16px;
+}
+
+.input.combo-input {
+  padding-right: 62px;
+  padding-left: 34px;
+  text-overflow: ellipsis;
+}
+
+.combo.has-inactive .combo-input {
+  color: var(--ink-2);
+  font-style: italic;
+}
+
+.combo-clear {
+  position: absolute;
+  right: 32px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.combo-clear:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.combo-clear svg {
+  width: 14px;
+  height: 14px;
+}
+
+.combo-caret {
+  position: absolute;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 30px;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.combo-caret svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.15s var(--ease-out);
+}
+
+.combo-input[aria-expanded='true'] ~ .combo-caret svg {
+  transform: rotate(180deg);
+}
+
+.combo-input:disabled ~ .combo-caret {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* In the flow (not floating), so a dialog or a card never cuts it off. */
+.combo-list {
+  max-height: 264px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sheet);
+  list-style: none;
+  animation: menu-in 0.14s var(--ease-out);
+}
+
+.combo-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-height: 38px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.combo-option:hover {
+  background: var(--surface-2);
+}
+
+.combo-option.is-active {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.combo-option[aria-selected='true'] {
+  font-weight: 700;
+}
+
+.combo-option[aria-selected='true'] > svg {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.combo-option[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.combo-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.combo-sub {
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.combo-option .tag {
+  min-height: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.combo-note {
+  padding: 8px 10px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.combo-note.err {
+  color: var(--err);
+  font-weight: 600;
+}
+
+.combo-multi {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.combo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.combo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0 3px 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 13.5px;
+  font-weight: 600;
+  animation: fade-in 0.15s ease-out;
+}
+
+.combo-chip > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combo-chip.is-off {
+  border-style: dashed;
+  color: var(--ink-3);
+}
+
+.combo-chip .tag {
+  min-height: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.combo-chip-x {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.combo-chip-x:hover {
+  background: var(--err-soft);
+  color: var(--err);
+}
+
+.combo-chip-x svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ---------- Definition lists (organisations, cost centres, option lists) ---------- */
+
+.def-toolbar .search {
+  margin-left: 0;
+}
+
+.def-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.data-table .t-code {
+  width: 1%;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+
+.list-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.list-switch-label {
+  font-weight: 650;
+}
+
+.list-switch .list-picker {
+  width: auto;
+  min-width: 220px;
+  max-width: 100%;
+}
+
+.list-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+/* Categories: code, VAT rates and account code under the name. */
+.cat-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.cat-meta-item {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cat-meta-key {
+  font-weight: 600;
+}
+
+.cat-order-note {
+  margin: 0 0 8px;
+}
+
+.user-table td.t-org {
+  max-width: 240px;
+}
+
+/* Excel import: preview before saving. */
+.imp-option {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.imp-option .check-label {
+  font-weight: 650;
+}
+
+.imp-option .hint {
+  padding-left: 26px;
+}
+
+.imp-body {
+  display: grid;
+  gap: 14px;
+  min-height: 60px;
+}
+
+.imp-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.imp-count {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.imp-count.ok,
+.imp-count.accent,
+.imp-count.wait,
+.imp-count.err {
+  border-color: transparent;
+  background: var(--tone-soft);
+  color: var(--tone);
+}
+
+.imp-num {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.imp-label {
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.imp-section {
+  display: grid;
+  gap: 8px;
+}
+
+.imp-h {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.imp-map {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.imp-map li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.imp-map svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-3);
+}
+
+.imp-file-col {
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.imp-ignored {
+  margin: 0;
+}
+
+.imp-errors {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.imp-table th,
+.imp-table td {
+  padding: 8px 12px;
+}
+
+.imp-table .num {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* ---------- Field management (#/alanlar) ---------- */
+
+.fa-body {
+  display: grid;
+  gap: 18px;
+}
+
+.fa-card .card-head {
+  align-items: flex-start;
+}
+
+.fa-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fa-switch .switch-text {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.fa-about {
+  color: var(--ink-2);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.fa-table td.t-order {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.fa-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.fa-rules {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fa-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.fa-rule.is-off {
+  opacity: 0.65;
+}
+
+.fa-rule-text {
+  display: flex;
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.fa-rule-cond {
+  overflow-wrap: anywhere;
+}
+
+.fa-rule-arrow {
+  display: inline-flex;
+  color: var(--ink-3);
+}
+
+.fa-rule-targets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fa-targets {
+  display: grid;
+  gap: 10px;
+}
+
+.fa-target-group {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.fa-target-title {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fa-target-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+  gap: 8px 14px;
+}
+
+.fa-target {
+  font-size: 14px;
+}
+
+/* ---------- Expense form: cost centre and each receipt's fields ---------- */
+
+.mm-field {
+  max-width: 460px;
+}
+
+.fields-note:empty {
+  display: none;
+}
+
+.fields-note {
+  margin-bottom: 16px;
+}
+
+.fis-block {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.fis-title {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: 10px 14px;
+}
+
+.fis-grid > .field {
+  gap: 4px;
+  margin: 0;
+}
+
+.fis-grid > .field > label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.fis-grid > .fis-uzun_metin {
+  grid-column: 1 / -1;
+}
+
+.fis-grid textarea.input {
+  min-height: 60px;
+}
+
+.fis-missing {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--wait);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fis-missing svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+/* The detail: a receipt's fields under its invoice facts, or under a file still being read. */
+.fis-facts {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.fis-facts-title {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.pend-text .fis-facts {
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+@media (max-width: 760px) {
+  .dlg.dlg-wide {
+    width: 100%;
+  }
+
+  .def-toolbar .search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .def-actions {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+
+  .list-switch .list-picker {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .user-table td.t-org {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .fa-table td.t-order {
+    flex: none;
+    width: auto;
+  }
+
+  .mm-field {
+    max-width: none;
+  }
+
+  .fis-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

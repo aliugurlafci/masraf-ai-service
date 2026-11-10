@@ -21,6 +21,18 @@ const rol = z.enum(ROLES, { error: 'Rol calisan, muhasebe ya da yonetici olmalı
 const simge = z.enum(ICONS, { error: 'Geçersiz simge.' });
 
 const flowAssignment = id('Onay akışı').nullable().optional();
+const organizationAssignment = id('Organizasyon').nullable().optional();
+/** Every cost centre of the user, each once; [] removes them all. */
+const costCenterAssignment = z
+  .array(id('Masraf merkezi'), { error: 'Masraf merkezleri liste olmalıdır.' })
+  .max(100, 'Bir kullanıcıya en fazla 100 masraf merkezi tanımlanabilir.')
+  .superRefine((ids, ctx) => {
+    ids.forEach((v, i) => {
+      if (ids.indexOf(v) !== i) ctx.addIssue({ code: 'custom', path: [i], message: 'Aynı masraf merkezi bir kez seçilebilir.' });
+    });
+  })
+  .optional();
+const categoryDetail = (label: string) => optionalText(label, 50);
 
 const NewUserBody = z.object({
   eposta: email,
@@ -29,6 +41,8 @@ const NewUserBody = z.object({
   departman: optionalText('Departman', 80),
   sifre: password,
   onayAkisiId: flowAssignment,
+  organizasyonId: organizationAssignment,
+  masrafMerkeziIdler: costCenterAssignment,
 });
 
 const UserPatchBody = z
@@ -39,6 +53,8 @@ const UserPatchBody = z
     departman: optionalText('Departman', 80),
     aktif: z.boolean({ error: 'Aktif alanı true ya da false olmalıdır.' }).optional(),
     onayAkisiId: flowAssignment,
+    organizasyonId: organizationAssignment,
+    masrafMerkeziIdler: costCenterAssignment,
   })
   .strict();
 
@@ -61,13 +77,22 @@ const FlowBody = z.object({
     .max(50, 'Onay akışında en fazla 50 adım olabilir.'),
 });
 
-const NewCategoryBody = z.object({ ad: text('Kategori adı', 60), simge: simge.optional() });
+const NewCategoryBody = z.object({
+  ad: text('Kategori adı', 60),
+  simge: simge.optional(),
+  kod: categoryDetail('Kategori kodu'),
+  kdvOranlari: categoryDetail('KDV oranları'),
+  hesapKodu: categoryDetail('Hesap kodu'),
+});
 const CategoryPatchBody = z
   .object({
     ad: text('Kategori adı', 60).optional(),
     simge: simge.optional(),
     aktif: z.boolean({ error: 'Aktif alanı true ya da false olmalıdır.' }).optional(),
     sira: z.number().int().min(0).max(10_000).optional(),
+    kod: categoryDetail('Kategori kodu'),
+    kdvOranlari: categoryDetail('KDV oranları'),
+    hesapKodu: categoryDetail('Hesap kodu'),
   })
   .strict();
 
@@ -196,7 +221,7 @@ export function adminRouter(deps: AdminDeps): Router {
   r.post('/kategoriler', admin, async (req, res, next) => {
     try {
       const category = await createCategory(deps.db, userOf(res), parse(NewCategoryBody, req.body));
-      res.status(201).json(category);
+      res.status(201).location(`/api/kategoriler/${category.id}`).json(category);
     } catch (err) {
       next(err);
     }

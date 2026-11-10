@@ -56,7 +56,7 @@ export function renderNotificationMail(input: {
     ['Form', `#${form.id}`],
     ['Başlık', form.baslik],
     ['Sahibi', form.sahip.adSoyad],
-    ['Tutar', formatMoney(form.tutar, form.paraBirimi)],
+    ['Tutar', form.tutar === null ? 'Girilmedi' : formatMoney(form.tutar, form.paraBirimi)],
     ['Durum', STATE_TEXT[form.durum]],
   ];
   const link = formLink(appUrl, form.id);

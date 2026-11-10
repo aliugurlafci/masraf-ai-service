@@ -201,8 +201,11 @@ export function animatedValue(value, format, { duration = 700 } = {}) {
 
 // ---------- Form fields ----------
 
-/** A labelled control with a hint and an error slot wired through aria-describedby. */
-export function field({ label, input, hint, optional = false, className = '' }) {
+/**
+ * A labelled control with a hint and an error slot wired through aria-describedby. `control` is the
+ * node placed in the field when the labelled input sits inside a larger widget (a search select).
+ */
+export function field({ label, input, control = input, hint, optional = false, className = '' }) {
   if (!input.id) input.id = uid('f');
   const hintId = hint ? `${input.id}-hint` : null;
   const errId = `${input.id}-err`;
@@ -211,7 +214,7 @@ export function field({ label, input, hint, optional = false, className = '' }) 
     'div',
     { className: `field ${className}`.trim() },
     el('label', { for: input.id }, label, optional ? el('span', { className: 'optional', text: ' (isteğe bağlı)' }) : null),
-    input,
+    control,
     hint ? (typeof hint === 'string' ? el('p', { className: 'hint', id: hintId, text: hint }) : el('div', { className: 'hint', id: hintId }, hint)) : null,
     el('p', { className: 'field-error', id: errId, hidden: true }),
   );

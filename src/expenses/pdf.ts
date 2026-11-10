@@ -16,9 +16,13 @@ export interface PdfData {
     readonly baslik: string;
     readonly sahip: string;
     readonly departman: string | null;
+    /** The form's organisation and cost centre (gösterim); null when it has none. Left out, the rows are not printed. */
+    readonly organizasyon?: string | null | undefined;
+    readonly masrafMerkezi?: string | null | undefined;
     readonly kategori: string;
     readonly masrafTarihi: string;
-    readonly tutar: number;
+    /** Always set on the approved and paid forms the document is made for. */
+    readonly tutar: number | null;
     readonly paraBirimi: string;
     readonly kur: number | null;
     readonly onayTutari: number | null;
@@ -34,6 +38,8 @@ export interface PdfData {
     readonly genelToplam: number | null;
     readonly paraBirimi: string | null;
     readonly duzeltildi: boolean;
+    /** The receipt field values entered for the invoice, labelled with the field's name, in field order. */
+    readonly alanlar?: ReadonlyArray<{ readonly ad: string; readonly gosterim: string }> | undefined;
   }>;
   /** The steps of the last round, in order. */
   readonly onaylar: ReadonlyArray<{
@@ -69,6 +75,30 @@ const FORM_TEXT: Record<FormDurum, string> = {
 const timeText = (d: Date): string => new Intl.DateTimeFormat('tr-TR', { dateStyle: 'medium', timeStyle: 'short' }).format(d);
 const dateText = (s: string | null): string => (s === null ? '-' : `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)}`);
 const dash = (s: string | null | undefined): string => (s === null || s === undefined || s.trim() === '' ? '-' : s);
+
+/** The label and value rows at the top of the document. */
+export function headerRows(data: Pick<PdfData, 'form' | 'base'>): Array<[string, string]> {
+  const f = data.form;
+  return [
+    ['Başlık', f.baslik],
+    ['Sahibi', f.departman === null ? f.sahip : `${f.sahip} (${f.departman})`],
+    ...(f.organizasyon === undefined ? [] : [['Organizasyon', dash(f.organizasyon)] as [string, string]]),
+    ...(f.masrafMerkezi === undefined ? [] : [['Masraf merkezi', dash(f.masrafMerkezi)] as [string, string]]),
+    ['Kategori', f.kategori],
+    ['Masraf tarihi', dateText(f.masrafTarihi)],
+    ['Tutar', f.tutar === null ? '-' : formatMoney(f.tutar, f.paraBirimi)],
+    ['Para birimi', f.paraBirimi],
+    ['Kur', f.kur === null ? '-' : String(f.kur).replace('.', ',')],
+    ['Onay tutarı', f.onayTutari === null ? '-' : formatMoney(f.onayTutari, data.base)],
+  ];
+}
+
+/** One row per receipt field value: the invoice ("1. fatura · F-12"), the field's name and the value. */
+export function receiptFieldRows(data: Pick<PdfData, 'faturalar'>): string[][] {
+  return data.faturalar.flatMap((x, i) =>
+    (x.alanlar ?? []).map((v) => [`${i + 1}. fatura${x.faturaNo === null || x.faturaNo.trim() === '' ? '' : ` · ${x.faturaNo}`}`, v.ad, v.gosterim]),
+  );
+}
 
 interface Column {
   readonly title: string;
@@ -134,17 +164,7 @@ export function renderApprovalPdf(data: PdfData, opts: { readonly compress?: boo
   doc.font('regular').fontSize(10).fillColor('#52606d').text(`Form #${f.id} · ${FORM_TEXT[f.durum]}`);
   doc.moveDown(0.6);
 
-  const fields: Array<[string, string]> = [
-    ['Başlık', f.baslik],
-    ['Sahibi', f.departman === null ? f.sahip : `${f.sahip} (${f.departman})`],
-    ['Kategori', f.kategori],
-    ['Masraf tarihi', dateText(f.masrafTarihi)],
-    ['Tutar', formatMoney(f.tutar, f.paraBirimi)],
-    ['Para birimi', f.paraBirimi],
-    ['Kur', f.kur === null ? '-' : String(f.kur).replace('.', ',')],
-    ['Onay tutarı', f.onayTutari === null ? '-' : formatMoney(f.onayTutari, data.base)],
-  ];
-  for (const [k, v] of fields) {
+  for (const [k, v] of headerRows(data)) {
     const y = doc.y;
     doc.font('bold').fontSize(10).fillColor('#111').text(k, left, y, { width: 110 });
     doc.font('regular').text(v, left + 115, y, { width: usable - 115 });
@@ -173,6 +193,18 @@ export function renderApprovalPdf(data: PdfData, opts: { readonly compress?: boo
     );
     if (data.faturalar.some((x) => x.duzeltildi)) {
       doc.moveDown(0.3).font('regular').fontSize(8).fillColor('#52606d').text('* Bilgileri form sahibi tarafından düzeltilen fatura.', left, doc.y);
+    }
+    const receiptRows = receiptFieldRows(data);
+    if (receiptRows.length > 0) {
+      heading('Fiş alanları');
+      table(
+        [
+          { title: 'Fatura', width: 110 },
+          { title: 'Alan', width: 130 },
+          { title: 'Değer', width: usable - 240 },
+        ],
+        receiptRows,
+      );
     }
   }
 

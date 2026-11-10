@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { ApiError, errorMessage } from '@/api/client';
 import { getQueue, uploadInvoice, type PickedFile } from '@/api/endpoints';
-import type { Kuyruk, MasrafFatura, OkunanFatura } from '@/api/types';
+import type { BekleyenFatura, Kuyruk, MasrafDetay, MasrafFatura, OkunanFatura } from '@/api/types';
 import { config } from '@/config';
 import type { InvoiceSummary } from '@/lib/invoices';
 
@@ -17,6 +17,12 @@ export type LocalReading =
       readonly queueId: string;
       /** sirada: waiting for a free reader; okunuyor: Claude is reading it now. */
       readonly itemState: 'sirada' | 'okunuyor';
+      /** The file's SHA-256: a draft saved now carries it in `bekleyenFaturalar`. */
+      readonly dosyaOzeti: string | null;
+      /** Place in the shared reading queue while sirada (1 = next); null when not known. */
+      readonly kuyrukSirasi: number | null;
+      /** Files read before this one, including those being read now. */
+      readonly onundeki: number | null;
     }
   | {
       readonly phase: 'done';
@@ -24,30 +30,80 @@ export type LocalReading =
       readonly sonuc: OkunanFatura | null;
       /** The same file was read before; the stored result came back at once. */
       readonly onbellek: boolean;
+      /** The file's SHA-256, matched against the saved form's invoices and pending files. */
+      readonly dosyaOzeti: string | null;
     }
   | { readonly phase: 'failed'; readonly kod: string; readonly message: string };
 
-/** One invoice on the form: already on the server (edit mode) or a file read on this device. */
+/**
+ * One invoice on the form: already on the server (edit mode), a file the server reads in the background
+ * for this saved form (`pending`, edit mode) or a file picked and read on this device.
+ */
 export type InvoiceAttachment =
   | { readonly key: string; readonly kind: 'server'; readonly fatura: MasrafFatura }
+  | { readonly key: string; readonly kind: 'pending'; readonly bekleyen: BekleyenFatura }
   | { readonly key: string; readonly kind: 'local'; readonly file: PickedFile; readonly reading: LocalReading };
+
+const serverItem = (fatura: MasrafFatura): InvoiceAttachment => ({ key: `s-${fatura.id}`, kind: 'server', fatura });
+const pendingItem = (bekleyen: BekleyenFatura): InvoiceAttachment => ({ key: `p-${bekleyen.dosyaOzeti}`, kind: 'pending', bekleyen });
 
 /** The invoice id to send in `faturaIdler`, or null while the file is not read (yet). */
 export function attachmentId(item: InvoiceAttachment): string | null {
   if (item.kind === 'server') return item.fatura.id;
+  if (item.kind === 'pending') return null;
   return item.reading.phase === 'done' ? item.reading.kayitId : null;
+}
+
+/**
+ * The file's SHA-256 to send in `bekleyenFaturalar`: a pending invoice of the saved form (failed ones
+ * too; the server keeps them as they are) or a file on this device the server is still reading. Null for
+ * anything else.
+ */
+export function pendingHash(item: InvoiceAttachment): string | null {
+  if (item.kind === 'pending') return item.bekleyen.dosyaOzeti;
+  if (item.kind === 'local' && item.reading.phase === 'waiting') return item.reading.dosyaOzeti;
+  return null;
+}
+
+/**
+ * The SHA-256 of the item's file, whatever its state: an invoice's `dosyaOzeti` (null for old records), a
+ * pending file's, or a picked file's once the server answered. Matches a pending file to the invoice it
+ * became. Null while not known.
+ */
+export function fileHash(item: InvoiceAttachment): string | null {
+  if (item.kind === 'server') return item.fatura.dosyaOzeti;
+  if (item.kind === 'pending') return item.bekleyen.dosyaOzeti;
+  return item.reading.phase === 'waiting' || item.reading.phase === 'done' ? item.reading.dosyaOzeti : null;
+}
+
+/** `bekleyenFaturalar` for the list: every pending file once, in list order. */
+export function pendingHashes(list: readonly InvoiceAttachment[]): string[] {
+  return Array.from(new Set(list.flatMap((item) => pendingHash(item) ?? [])));
 }
 
 /** What was read from the invoice, or null when nothing is known (yet). */
 export function attachmentSummary(item: InvoiceAttachment): InvoiceSummary | null {
   if (item.kind === 'server') return item.fatura;
+  if (item.kind === 'pending') return null;
   return item.reading.phase === 'done' ? (item.reading.sonuc?.fatura ?? null) : null;
 }
 
+/** Still being uploaded or read, on this device or in the server's background reading. */
 export const isReading = (item: InvoiceAttachment): boolean =>
-  item.kind === 'local' && (item.reading.phase === 'pending' || item.reading.phase === 'uploading' || item.reading.phase === 'waiting');
+  item.kind === 'pending'
+    ? item.bekleyen.durum !== 'hata'
+    : item.kind === 'local' && (item.reading.phase === 'pending' || item.reading.phase === 'uploading' || item.reading.phase === 'waiting');
 
+/** Not on the server yet: a draft cannot carry it, not even as a pending invoice, until the upload ends. */
+export const isUploading = (item: InvoiceAttachment): boolean =>
+  item.kind === 'local' &&
+  (item.reading.phase === 'pending' || item.reading.phase === 'uploading' || (item.reading.phase === 'waiting' && item.reading.dosyaOzeti === null));
+
+/** A file on this device that could not be read; it is left out when the form is saved. */
 export const isFailed = (item: InvoiceAttachment): boolean => item.kind === 'local' && item.reading.phase === 'failed';
+
+/** A pending invoice of the saved form the server could not read; it stays on the form until read again or removed. */
+export const isPendingFailed = (item: InvoiceAttachment): boolean => item.kind === 'pending' && item.bekleyen.durum === 'hata';
 
 export interface AttachmentEvents {
   /** A file finished reading; `list` already holds it in its place. */
@@ -80,13 +136,18 @@ interface Run {
  * read in parallel. EXPO_PUBLIC_OKUMA_UST_SURE_MS counts from the moment the server starts reading the
  * file. Polling of an item stops when it is removed, retried or the form unmounts; the server keeps reading
  * in the background regardless. Nothing new starts after unmount.
+ *
+ * A saved form's pending invoices (`bekleyenFaturalar`) come after its invoices; their reading is followed
+ * through the form itself (see sync).
  */
-export function useInvoiceAttachments(initial: readonly MasrafFatura[], events: AttachmentEvents) {
-  const [items, setItems] = useState<readonly InvoiceAttachment[]>(() =>
-    initial.map((fatura) => ({ key: `s-${fatura.id}`, kind: 'server', fatura })),
-  );
+export function useInvoiceAttachments(initial: readonly MasrafFatura[], initialPending: readonly BekleyenFatura[], events: AttachmentEvents) {
+  const [items, setItems] = useState<readonly InvoiceAttachment[]>(() => [...initial.map(serverItem), ...initialPending.map(pendingItem)]);
   // Every change goes through update(), so this is always the latest list, also inside async callbacks.
   const itemsRef = useRef(items);
+  // Invoice ids of the saved form seen so far, and the files removed on this screen: a later copy of the
+  // form brings neither back, also not a removed pending file that the server has read into an invoice.
+  const seenIds = useRef(new Set(initial.map((f) => f.id)));
+  const droppedHashes = useRef(new Set<string>());
   // Each reading run gets its own id; timers and responses of a stopped run are ignored.
   const runs = useRef(new Map<string, Run>());
   // Keys waiting for an upload slot, oldest first, and the number of uploads in flight.
@@ -140,15 +201,29 @@ export function useInvoiceAttachments(initial: readonly MasrafFatura[], events: 
     eventsRef.current.onFailed(file);
   };
 
+  /**
+   * Whether another item of the list already holds this file: the same record id (the server rejects a
+   * repeat) or the same file (an invoice or pending file of the saved form, or a file picked twice).
+   */
+  const heldElsewhere = (key: string, kayitId: string | null, hash: string | null): boolean =>
+    itemsRef.current.some(
+      (item) => item.key !== key && ((kayitId !== null && attachmentId(item) === kayitId) || (hash !== null && fileHash(item) === hash)),
+    );
+
+  /** Takes a picked file that turned out to be on the list already off it again. */
+  const dropDuplicate = (key: string, file: PickedFile): void => {
+    stop(key);
+    update((list) => list.filter((item) => item.key !== key));
+    eventsRef.current.onDuplicate(file);
+  };
+
   const finish = (key: string, id: number, file: PickedFile, done: Extract<LocalReading, { phase: 'done' }>): void => {
     if (!alive(key, id)) return;
-    stop(key);
-    // The same file (or a file already on the form) gives the same record id; the server rejects a repeat.
-    if (itemsRef.current.some((item) => item.key !== key && attachmentId(item) === done.kayitId)) {
-      update((list) => list.filter((item) => item.key !== key));
-      eventsRef.current.onDuplicate(file);
+    if (heldElsewhere(key, done.kayitId, done.dosyaOzeti)) {
+      dropDuplicate(key, file);
       return;
     }
+    stop(key);
     const list = update((current) => current.map((item) => (item.key === key && item.kind === 'local' ? { ...item, reading: done } : item)));
     eventsRef.current.onRead(key, list);
   };
@@ -163,11 +238,17 @@ export function useInvoiceAttachments(initial: readonly MasrafFatura[], events: 
       return;
     }
     if (entry.durum === 'bitti' && entry.kayitId !== null) {
-      finish(key, id, file, { phase: 'done', kayitId: entry.kayitId, sonuc: entry.sonuc, onbellek: entry.onbellek });
+      finish(key, id, file, { phase: 'done', kayitId: entry.kayitId, sonuc: entry.sonuc, onbellek: entry.onbellek, dosyaOzeti: entry.dosyaOzeti });
       return;
     }
     if (entry.durum === 'hata' || entry.durum === 'bitti') {
       fail(key, id, file, entry.hata?.kod ?? 'okunamadi', entry.hata?.mesaj ?? 'Fatura okunamadı.');
+      return;
+    }
+    // The file is on the list already (an invoice or pending file of the saved form, or picked twice): no
+    // need to wait for its reading to find out.
+    if (heldElsewhere(key, null, entry.dosyaOzeti)) {
+      dropDuplicate(key, file);
       return;
     }
     if (entry.durum === 'okunuyor' && run.readingSince === null) run.readingSince = Date.now();
@@ -175,7 +256,15 @@ export function useInvoiceAttachments(initial: readonly MasrafFatura[], events: 
       fail(key, id, file, 'okuma_zaman_asimi', 'Okuma beklenenden uzun sürdü.');
       return;
     }
-    setReading(key, { phase: 'waiting', startedAt, queueId: queue.id, itemState: entry.durum });
+    setReading(key, {
+      phase: 'waiting',
+      startedAt,
+      queueId: queue.id,
+      itemState: entry.durum,
+      dosyaOzeti: entry.dosyaOzeti,
+      kuyrukSirasi: entry.kuyrukSirasi,
+      onundeki: entry.onundeki,
+    });
     schedule(key, id, file, startedAt, queue.id, 0);
   };
 
@@ -251,8 +340,65 @@ export function useInvoiceAttachments(initial: readonly MasrafFatura[], events: 
   /** Takes an invoice off the list (cancels its reading); returns the new list. */
   const remove = (key: string): readonly InvoiceAttachment[] => {
     stop(key);
+    const removed = itemsRef.current.find((item) => item.key === key);
+    const hash = removed === undefined ? null : fileHash(removed);
+    if (hash !== null) droppedHashes.current.add(hash);
     return update((list) => list.filter((item) => item.key !== key));
   };
 
-  return { items, add, retry, remove, busy: items.some(isReading) };
+  /**
+   * Brings the list up to a newer copy of the saved form, without undoing what the user changed here:
+   * pending invoices take their new state; one the server no longer lists is gone (read and added to the
+   * invoices, or found to be on the form already). Invoices the server added meanwhile (a pending file that
+   * was read) come at the end as ordinary invoices, in the server's order. An invoice read from a file the
+   * user removed here, or from a file another item already holds, is not shown (matched by `dosyaOzeti`).
+   * Returns the new list, the invoices that arrived on it, and the ids of every invoice the server added
+   * (shown or not), in the server's order: a save measures the list against those.
+   */
+  const sync = (
+    detail: MasrafDetay,
+  ): { readonly list: readonly InvoiceAttachment[]; readonly arrived: readonly { key: string; id: string }[]; readonly newIds: readonly string[] } => {
+    const pendingNow = new Map(detail.bekleyenFaturalar.map((b) => [b.dosyaOzeti, b] as const));
+    const arrived: { key: string; id: string }[] = [];
+    const newIds: string[] = [];
+    const list = update((current) => {
+      const kept = current.flatMap((item): InvoiceAttachment[] => {
+        if (item.kind !== 'pending') return [item];
+        const next = pendingNow.get(item.bekleyen.dosyaOzeti);
+        return next === undefined ? [] : [{ ...item, bekleyen: next }];
+      });
+      const onScreenIds = new Set(kept.flatMap((item) => attachmentId(item) ?? []));
+      const onScreenHashes = new Set(kept.flatMap((item) => fileHash(item) ?? []));
+      const added: InvoiceAttachment[] = [];
+      for (const fatura of detail.faturalar) {
+        if (seenIds.current.has(fatura.id)) continue;
+        newIds.push(fatura.id);
+        if (onScreenIds.has(fatura.id)) continue;
+        const hash = fatura.dosyaOzeti;
+        if (hash !== null && (droppedHashes.current.has(hash) || onScreenHashes.has(hash))) continue;
+        const item = serverItem(fatura);
+        added.push(item);
+        arrived.push({ key: item.key, id: fatura.id });
+      }
+      for (const bekleyen of detail.bekleyenFaturalar) {
+        if (onScreenHashes.has(bekleyen.dosyaOzeti) || droppedHashes.current.has(bekleyen.dosyaOzeti)) continue;
+        added.push(pendingItem(bekleyen));
+      }
+      return added.length === 0 ? kept : [...kept, ...added];
+    });
+    for (const fatura of detail.faturalar) seenIds.current.add(fatura.id);
+    return { list, arrived, newIds };
+  };
+
+  return {
+    items,
+    add,
+    retry,
+    remove,
+    sync,
+    /** Some file is still being uploaded or read (here or in the server's background reading). */
+    reading: items.some(isReading),
+    /** Some file has not reached the server yet; nothing can be saved until it does. */
+    uploading: items.some(isUploading),
+  };
 }

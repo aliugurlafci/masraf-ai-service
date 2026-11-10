@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  // Invoice links written before the duplicate key existed (migration 003) get theirs once.
+  // Invoice links written before the duplicate key existed get theirs once.
   const keyed = await fillDuplicateKeys(db);
   if (keyed > 0) console.info(`${keyed} fatura bağının mükerrer anahtarı dolduruldu.`);
 
@@ -94,6 +94,8 @@ async function main(): Promise<void> {
     auth: service.auth,
     baseCurrency: service.baseCurrency,
     mail,
+    // Files of saved forms that were still waiting when the server stopped are read again.
+    resumeReads: true,
   });
 
   // IPv4 only: the local-network checks (src/api/network.ts) know IPv4 private ranges.

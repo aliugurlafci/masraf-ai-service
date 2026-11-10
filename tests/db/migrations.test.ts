@@ -1,10 +1,8 @@
-// The schema files on an empty database: what the first one builds, how the second one turns the old
-// amount ranges of the approval flows into strategies and approval limits, the rules the schema itself
-// enforces, and a database built from migration files that no longer exist. The tests share one
+// The schema file on an empty database: what it builds, the rules the schema itself enforces, and a
+// database built from migration files that no longer exist (merged or renamed). The tests share one
 // database and run in order.
 import sql from 'mssql';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { planApprovals, validateFlow } from '../../src/approval/flow.ts';
 import { DatabaseError, loadMigrations, migrate } from '../../src/db/database.ts';
 import { loadDbConfig } from '../../src/config.ts';
 import { execute, p, poolConfig, query, queryOne, type Db } from '../../src/db/sql.ts';
@@ -37,138 +35,27 @@ describe('migrations', () => {
     return row?.id ?? 0;
   };
 
-  it('builds the schema from the first file, once, with the default flow and the categories', async () => {
+  it('builds the schema from its one file, once, with the default flow and the categories', async () => {
     const all = await loadMigrations();
-    expect(all.map((m) => m.name)).toEqual(['001_baslangic.sql', '002_onay_stratejisi.sql', '003_fatura_duzeltme.sql', '004_bildirimler.sql', '005_bildirim_form_basligi.sql']);
-    const first = all.filter((m) => m.version === 1);
-    expect(await migrate(db, first)).toEqual(['001_baslangic.sql']);
-    expect(await migrate(db, first)).toEqual([]);
+    expect(all.map((m) => m.name)).toEqual(['001_baslangic.sql']);
+    expect(await migrate(db, all)).toEqual(['001_baslangic.sql']);
+    expect(await migrate(db, all)).toEqual([]);
 
-    expect(await query(db, 'SELECT ad, varsayilan FROM dbo.onay_akislari')).toEqual([{ ad: 'Genel', varsayilan: true }]);
+    // The default flow is a chain.
+    expect(await query(db, 'SELECT ad, varsayilan, strateji FROM dbo.onay_akislari')).toEqual([{ ad: 'Genel', varsayilan: true, strateji: 'zincir' }]);
     const categories = await query<{ ad: string }>(db, 'SELECT ad FROM dbo.masraf_kategorileri ORDER BY sira');
     expect(categories.map((c) => c.ad)).toEqual(['Yemek', 'Ulaşım', 'Konaklama', 'Akaryakıt', 'Ofis malzemesi', 'Temsil ve ağırlama', 'Eğitim', 'İletişim', 'Diğer']);
     // Invoices hang off the form through form_faturalari only.
     const column = await queryOne(db, `SELECT 1 AS x FROM sys.columns WHERE object_id = OBJECT_ID('dbo.masraf_formlari') AND name = 'fatura_kayit_id'`);
     expect(column).toBeNull();
-  });
 
-  it('turns the amount ranges of existing flows into a strategy and approval limits', async () => {
-    const [ayse, mehmet, zeynep, dora] = [
-      await addUser('ayse@goc.test'),
-      await addUser('mehmet@goc.test'),
-      await addUser('zeynep@goc.test'),
-      await addUser('dora@goc.test'),
-    ];
-    const genel = (await queryOne<{ id: number }>(db, 'SELECT id FROM dbo.onay_akislari WHERE varsayilan = 1'))?.id ?? 0;
-    /** A flow as the first schema file kept it: [approver, lower limit, upper limit] in order. */
-    const oldFlow = async (ad: string, steps: Array<[number, number, number | null]>): Promise<number> => {
-      const id =
-        ad === 'Genel'
-          ? genel
-          : ((await queryOne<{ id: number }>(db, 'INSERT INTO dbo.onay_akislari (ad) OUTPUT inserted.id VALUES (@ad)', { ad: p.str(ad, 80) }))?.id ?? 0);
-      for (const [i, [onayci, alt, ust]] of steps.entries()) {
-        await execute(db, 'INSERT INTO dbo.onay_adimlari (akis_id, sira, onayci_id, alt_limit, ust_limit) VALUES (@f, @s, @o, @a, @u)', {
-          f: p.int(id),
-          s: p.int(i + 1),
-          o: p.int(onayci),
-          a: p.money(alt),
-          u: p.money(ust),
-        });
-      }
-      return id;
-    };
-    // Every approver but the last has an upper limit: each amount went to one approver ('tek').
-    await oldFlow('Genel', [
-      [ayse, 0, 1000],
-      [mehmet, 1000, null],
-    ]); // the flow of the installation this replaces
-    await oldFlow('Ayrık', [
-      [ayse, 0, 5000],
-      [mehmet, 5000.01, 50000],
-      [zeynep, 50000.01, null],
-    ]);
-    // Unlimited ranges starting higher and higher: an escalation chain ('zincir').
-    const kademe = await oldFlow('Kademe', [
-      [ayse, 0, null],
-      [mehmet, 5000.01, null],
-      [zeynep, 50000.01, null],
-    ]);
-    await oldFlow('Tek kişi', [[zeynep, 0, null]]);
-    await oldFlow('Boş', []);
-    // Shapes the new rules have no exact match for; see below what they become.
-    await oldFlow('Hepsi sıfırdan', [
-      [ayse, 0, null],
-      [mehmet, 0, null],
-    ]);
-    await oldFlow('Sıfır', [
-      [ayse, 0, 0],
-      [mehmet, 0.01, null],
-    ]);
-    await oldFlow('Çakışan', [
-      [ayse, 0, null],
-      [mehmet, 1000, 5000],
-      [zeynep, 2000, null],
-    ]);
-    await oldFlow('Ters', [
-      [ayse, 0, 5000],
-      [mehmet, 0, 1000],
-      [zeynep, 1000.01, null],
-    ]);
-    await execute(db, 'UPDATE dbo.kullanicilar SET onay_akisi_id = @f WHERE id = @u', { f: p.int(kademe), u: p.int(dora) });
-
-    const upToSecond = (await loadMigrations()).filter((m) => m.version <= 2);
-    expect(await migrate(db, upToSecond)).toEqual(['002_onay_stratejisi.sql']);
-    expect(await migrate(db, upToSecond)).toEqual([]);
-
-    const rows = await query<{ ad: string; varsayilan: boolean; strateji: string; sira: number | null; onayci_id: number | null; onay_limiti: number | null }>(
-      db,
-      `SELECT a.ad, a.varsayilan, a.strateji, s.sira, s.onayci_id, s.onay_limiti
-       FROM dbo.onay_akislari a LEFT JOIN dbo.onay_adimlari s ON s.akis_id = a.id ORDER BY a.id, s.sira`,
-    );
-    const flows = new Map<string, { strateji: string; adimlar: Array<[number, number | null]> }>();
-    for (const r of rows) {
-      const flow = flows.get(r.ad) ?? { strateji: r.strateji, adimlar: [] };
-      if (r.sira !== null) flow.adimlar.push([r.onayci_id ?? 0, r.onay_limiti]);
-      flows.set(r.ad, flow);
-    }
-    expect(Object.fromEntries(flows)).toEqual({
-      Genel: { strateji: 'tek', adimlar: [[ayse, 1000], [mehmet, null]] },
-      Ayrık: { strateji: 'tek', adimlar: [[ayse, 5000], [mehmet, 50000], [zeynep, null]] },
-      Kademe: { strateji: 'zincir', adimlar: [[ayse, 5000], [mehmet, 50000], [zeynep, null]] },
-      'Tek kişi': { strateji: 'zincir', adimlar: [[zeynep, null]] },
-      Boş: { strateji: 'zincir', adimlar: [] },
-      // Both from 0: everyone sees every amount above a single cent.
-      'Hepsi sıfırdan': { strateji: 'zincir', adimlar: [[ayse, 0.01], [mehmet, null]] },
-      // A range of the single amount 0 (no expense has it) becomes the smallest limit.
-      Sıfır: { strateji: 'tek', adimlar: [[ayse, 0.01], [mehmet, null]] },
-      // The middle upper limit is dropped: a chain, each limit just below the next lower limit.
-      Çakışan: { strateji: 'zincir', adimlar: [[ayse, 999.99], [mehmet, 1999.99], [zeynep, null]] },
-      // Upper limits out of order are kept as they are.
-      Ters: { strateji: 'tek', adimlar: [[ayse, 5000], [mehmet, 1000], [zeynep, null]] },
-    });
-    expect(rows.find((r) => r.ad === 'Genel')?.varsayilan).toBe(true);
-    expect(await queryOne(db, 'SELECT onay_akisi_id FROM dbo.kullanicilar WHERE id = @u', { u: p.int(dora) })).toEqual({ onay_akisi_id: kademe });
-
-    // Every converted flow follows the new rules except the one whose upper limits were out of order
-    // (and the empty one, as before): an administrator has to fix it on its next save.
-    const problems = [...flows].map(([ad, f]) => [ad, validateFlow(f.adimlar.map(([onayciId, limit]) => ({ onayciId, limit })), 'TRY')] as const);
-    expect(Object.fromEntries(problems.filter(([, list]) => list.length > 0))).toEqual({
-      Boş: ['Onay akışında en az bir onaycı olmalıdır.'],
-      Ters: ['2. onaycının limiti, 1. onaycınınkinden (5.000,00 TRY) büyük olmalıdır.'],
-    });
-    // The overlapping flow now also sends amounts above 5.000 to Mehmet (before: Ayşe and Zeynep only).
-    const cakisan = (flows.get('Çakışan')?.adimlar ?? []).map(([onayciId, limit], i) => ({ sira: i + 1, onayciId, limit }));
-    expect(planApprovals('zincir', cakisan, 6000, dora, [])?.map((s) => s.onayciId)).toEqual([ayse, mehmet, zeynep]);
-    expect(planApprovals('zincir', cakisan, 1500, dora, [])?.map((s) => s.onayciId)).toEqual([ayse, mehmet]);
-
-    // The old range columns are gone from the flow; a form's approval rows keep the band they were sent with.
+    // A flow step has one approval limit, no amount range; a form's approval rows keep the band they were sent with.
     const columns = async (table: string): Promise<string[]> =>
       (await query<{ name: string }>(db, 'SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(@t) ORDER BY column_id', { t: p.str(table, 128) })).map(
         (c) => c.name,
       );
     expect(await columns('dbo.onay_adimlari')).toEqual(['id', 'akis_id', 'sira', 'onayci_id', 'onay_limiti']);
-    expect(await columns('dbo.onay_akislari')).toContain('strateji');
-    expect(await columns('dbo.form_onaylari')).toEqual(expect.arrayContaining(['alt_limit', 'ust_limit']));
+    expect(await columns('dbo.form_onaylari')).toEqual(expect.arrayContaining(['alt_limit', 'ust_limit', 'son_hatirlatma']));
     const index = await queryOne(db, `SELECT 1 AS x FROM sys.indexes WHERE name = 'ix_onay_adimlari_onayci' AND object_id = OBJECT_ID('dbo.onay_adimlari')`);
     expect(index).toEqual({ x: 1 });
   });
@@ -264,11 +151,8 @@ describe('migrations', () => {
     ]);
   });
 
-  it('adds invoice corrections (JSON only) and an unenforced duplicate key to existing invoice links', async () => {
-    const upToThird = (await loadMigrations()).filter((m) => m.version <= 3);
-    expect(await migrate(db, upToThird)).toEqual(['003_fatura_duzeltme.sql']);
-    expect(await migrate(db, upToThird)).toEqual([]);
-    // Existing links keep their data; neither column is filled by the migration.
+  it('keeps invoice corrections JSON only, and the duplicate key exact and unenforced', async () => {
+    // Links start without a correction or a key.
     const links = await query<{ duzeltme: string | null; mukerrer_anahtari: string | null }>(db, 'SELECT duzeltme, mukerrer_anahtari FROM dbo.form_faturalari');
     expect(links.length).toBeGreaterThan(0);
     expect(links.every((l) => l.duzeltme === null && l.mukerrer_anahtari === null)).toBe(true);
@@ -292,10 +176,7 @@ describe('migrations', () => {
     expect(collation?.collation_name).toBe('Latin1_General_100_BIN2');
   });
 
-  it('adds notifications, the mail box, the mail preference and reminder times, with their checks', async () => {
-    const upToFourth = (await loadMigrations()).filter((m) => m.version <= 4);
-    expect(await migrate(db, upToFourth)).toEqual(['004_bildirimler.sql']);
-    expect(await migrate(db, upToFourth)).toEqual([]);
+  it('keeps notifications, the mail box, the mail preference and reminder times, with their checks', async () => {
     const user = await addUser('bildirim@firma.test');
     expect(await queryOne(db, 'SELECT mail_bildirim FROM dbo.kullanicilar WHERE id = @u', { u: p.int(user) })).toEqual({ mail_bildirim: true });
     expect(await queryOne(db, `SELECT COUNT(*) AS n FROM dbo.form_onaylari WHERE son_hatirlatma IS NOT NULL`)).toEqual({ n: 0 });
@@ -319,19 +200,113 @@ describe('migrations', () => {
     await expect(mail('bekliyor', 'masraf_pdf')).rejects.toMatchObject({ number: 547 });
   });
 
-  it('keeps the form title on notifications, filling it for those written before', async () => {
-    const form = await queryOne<{ id: number; olusturan_id: number; baslik: string }>(db, 'SELECT TOP (1) id, olusturan_id, baslik FROM dbo.masraf_formlari ORDER BY id');
-    expect(form).not.toBeNull();
-    await execute(db, `INSERT INTO dbo.bildirimler (kullanici_id, tur, form_id, baslik, mesaj) VALUES (@u, 'odendi', @f, N'B', N'M')`, {
-      u: p.int(form?.olusturan_id ?? 0),
-      f: p.int(form?.id ?? 0),
+  it("keeps the form title a notification was written with, and deletes a form's notifications with it", async () => {
+    const owner = await addUser('baslik@firma.test');
+    const form = await queryOne<{ id: number }>(
+      db,
+      `INSERT INTO dbo.masraf_formlari (olusturan_id, baslik, kategori_id, masraf_tarihi, tutar, para_birimi, yerel_tutar, durum)
+       OUTPUT inserted.id VALUES (@u, N'Eski başlık', (SELECT MIN(id) FROM dbo.masraf_kategorileri), '2026-01-01', 10, 'TRY', 10, 'onayda')`,
+      { u: p.int(owner) },
+    );
+    const f = p.int(form?.id ?? 0);
+    await execute(db, `INSERT INTO dbo.bildirimler (kullanici_id, tur, form_id, form_baslik, baslik, mesaj) VALUES (@u, 'odendi', @f, N'Eski başlık', N'B', N'M')`, {
+      u: p.int(owner),
+      f,
     });
-    const all = await loadMigrations();
-    expect(await migrate(db, all)).toEqual(['005_bildirim_form_basligi.sql']);
-    expect(await migrate(db, all)).toEqual([]);
-    const rows = await query<{ form_id: number | null; form_baslik: string | null }>(db, 'SELECT form_id, form_baslik FROM dbo.bildirimler ORDER BY id');
-    expect(rows.filter((r) => r.form_id === null).every((r) => r.form_baslik === null)).toBe(true);
-    expect(rows.find((r) => r.form_id === form?.id)?.form_baslik).toBe(form?.baslik);
+    await execute(db, `UPDATE dbo.masraf_formlari SET baslik = N'Yeni başlık' WHERE id = @f`, { f });
+    expect(await queryOne(db, 'SELECT form_baslik FROM dbo.bildirimler WHERE form_id = @f', { f })).toEqual({ form_baslik: 'Eski başlık' });
+    await execute(db, 'DELETE FROM dbo.masraf_formlari WHERE id = @f', { f });
+    expect(await queryOne(db, 'SELECT COUNT(*) AS n FROM dbo.bildirimler WHERE form_id = @f', { f })).toEqual({ n: 0 });
+  });
+
+  it('lets only a draft leave its amount empty, and keeps files waiting to be read with their checks', async () => {
+    // A form is not "okununca gönder" unless it says so.
+    expect(await queryOne(db, 'SELECT COUNT(*) AS n FROM dbo.masraf_formlari WHERE okununca_gonder = 1')).toEqual({ n: 0 });
+
+    const me = await addUser('bekleyen@firma.test');
+    const addForm = (durum: string, tutar: number | null, yerel: number | null) =>
+      queryOne<{ id: number }>(
+        db,
+        `INSERT INTO dbo.masraf_formlari (olusturan_id, baslik, kategori_id, masraf_tarihi, tutar, para_birimi, yerel_tutar, durum)
+         OUTPUT inserted.id
+         VALUES (@me, N'Masraf', (SELECT TOP (1) id FROM dbo.masraf_kategorileri), '2026-01-01', @t, 'TRY', @y, @d)`,
+        { me: p.int(me), t: p.money(tutar), y: p.money(yerel), d: p.ascii(durum, 16) },
+      );
+    const draft = (await addForm('taslak', null, null))?.id ?? 0;
+    expect(draft).toBeGreaterThan(0);
+    // Every other state needs the amount; the local amount comes and goes with it.
+    await expect(addForm('onayda', null, null)).rejects.toMatchObject({ number: 547 });
+    await expect(addForm('taslak', 10, null)).rejects.toMatchObject({ number: 547 });
+    await expect(addForm('taslak', null, 10)).rejects.toMatchObject({ number: 547 });
+    await expect(addForm('taslak', 0, 0)).rejects.toMatchObject({ number: 547 });
+    await expect(execute(db, `UPDATE dbo.masraf_formlari SET durum = 'onayda' WHERE id = @f`, { f: p.int(draft) })).rejects.toMatchObject({ number: 547 });
+
+    const hash = 'a'.repeat(64);
+    const waiting = (durum: string, kod: string | null, mesaj: string | null = null, ozet = hash) =>
+      execute(
+        db,
+        `INSERT INTO dbo.bekleyen_faturalar (form_id, kullanici_id, dosya_adi, dosya_ozeti, mime, boyut, icerik, durum, hata_kodu, hata_mesaji)
+         VALUES (@f, @u, N'fiş.jpg', @o, 'image/jpeg', 3, 0x010203, @d, @k, @m)`,
+        { f: p.int(draft), u: p.int(me), o: p.ascii(ozet, 64), d: p.ascii(durum, 12), k: p.ascii(kod, 40), m: p.str(mesaj, 500) },
+      );
+    await waiting('bekliyor', null);
+    // A file is on a form once.
+    await expect(waiting('bekliyor', null)).rejects.toMatchObject({ number: 2601 });
+    // A failure carries its code; a waiting file carries none.
+    await expect(waiting('hata', null, null, 'b'.repeat(64))).rejects.toMatchObject({ number: 547 });
+    await expect(waiting('bekliyor', 'claude_failed', null, 'b'.repeat(64))).rejects.toMatchObject({ number: 547 });
+    await expect(waiting('okundu', null, null, 'b'.repeat(64))).rejects.toMatchObject({ number: 547 });
+    await waiting('hata', 'claude_failed', 'Okunamadı.', 'b'.repeat(64));
+
+    const user = p.int(me);
+    for (const tur of ['okuma_bitti', 'okuma_hatasi', 'onaya_gonderildi', 'onaya_gonderilemedi']) {
+      await execute(db, `INSERT INTO dbo.bildirimler (kullanici_id, tur, baslik, mesaj) VALUES (@u, @t, N'B', N'M')`, { u: user, t: p.ascii(tur, 20) });
+    }
+
+    // Deleting the form takes its waiting files with it.
+    await execute(db, 'DELETE FROM dbo.masraf_formlari WHERE id = @f', { f: p.int(draft) });
+    expect(await queryOne(db, 'SELECT COUNT(*) AS n FROM dbo.bekleyen_faturalar')).toEqual({ n: 0 });
+  });
+
+  it('seeds the built-in fields, requiring invoice number, date, seller and grand total, and keeps the definition lists with their checks', async () => {
+    const fields = await query<{ anahtar: string; duzey: string; tur: string; zorunlu: boolean; sistem: boolean }>(
+      db,
+      'SELECT anahtar, duzey, tur, zorunlu, sistem FROM dbo.alan_tanimlari ORDER BY duzey, sira',
+    );
+    expect(fields.filter((f) => f.zorunlu).map((f) => f.anahtar)).toEqual(['faturaNo', 'faturaTarihi', 'saticiUnvan', 'genelToplam', 'kategori']);
+    expect(fields.filter((f) => f.tur === 'fatura').map((f) => f.anahtar)).toEqual([
+      'faturaNo', 'faturaTarihi', 'saticiUnvan', 'saticiVergiNo', 'aliciUnvan', 'aliciVergiNo', 'paraBirimi', 'araToplam', 'kdvToplam', 'genelToplam',
+    ]);
+    expect(fields.every((f) => f.sistem === (f.tur === 'fatura' || f.duzey === 'form'))).toBe(true);
+    const options = await query<{ anahtar: string; n: number }>(
+      db,
+      'SELECT a.anahtar, COUNT(*) AS n FROM dbo.alan_secenekleri s JOIN dbo.alan_tanimlari a ON a.id = s.alan_id GROUP BY a.anahtar ORDER BY a.anahtar',
+    );
+    expect(options).toEqual([{ anahtar: 'dokumanTipi', n: 6 }, { anahtar: 'odemeYontemi', n: 4 }]);
+
+    // A system row cannot be a free-text field, and a form-level row cannot sit on a receipt.
+    await expect(execute(db, `INSERT INTO dbo.alan_tanimlari (anahtar, ad, duzey, tur) VALUES ('x', N'X', 'fis', 'fatura')`)).rejects.toThrow();
+    await expect(execute(db, `INSERT INTO dbo.alan_tanimlari (anahtar, ad, duzey, tur, sistem) VALUES ('y', N'Y', 'fis', 'masraf_merkezi', 1)`)).rejects.toThrow();
+    // Codes are unique without regard to case.
+    await execute(db, `INSERT INTO dbo.masraf_merkezleri (kod) VALUES (N'MM-1')`);
+    await expect(execute(db, `INSERT INTO dbo.masraf_merkezleri (kod) VALUES (N'mm-1')`)).rejects.toThrow();
+    // A value is an option or text, never both or neither.
+    const user = await addUser('tanim@firma.test');
+    await execute(db, `INSERT INTO dbo.fatura_kayitlari (id, dosya_adi, olusturma, sonuc) VALUES ('20261110-100000-aaaaaaaa', N'f.pdf', SYSUTCDATETIME(), N'{}')`);
+    const form = await queryOne<{ id: number }>(
+      db,
+      `INSERT INTO dbo.masraf_formlari (olusturan_id, baslik, kategori_id, masraf_tarihi, tutar, para_birimi, yerel_tutar, durum)
+       OUTPUT inserted.id VALUES (@u, N'F', (SELECT MIN(id) FROM dbo.masraf_kategorileri), '2026-11-10', 10, 'TRY', 10, 'taslak')`,
+      { u: p.int(user) },
+    );
+    const f = p.int(form?.id ?? 0);
+    await execute(db, `INSERT INTO dbo.form_faturalari (form_id, kayit_id, sira) VALUES (@f, '20261110-100000-aaaaaaaa', 1)`, { f });
+    const note = `(SELECT id FROM dbo.alan_tanimlari WHERE anahtar = 'not')`;
+    await expect(execute(db, `INSERT INTO dbo.fis_alan_degerleri (form_id, kayit_id, alan_id) VALUES (@f, '20261110-100000-aaaaaaaa', ${note})`, { f })).rejects.toThrow();
+    await execute(db, `INSERT INTO dbo.fis_alan_degerleri (form_id, kayit_id, alan_id, metin) VALUES (@f, '20261110-100000-aaaaaaaa', ${note}, N'Yıkama')`, { f });
+    // Taking the invoice off the form takes its values with it.
+    await execute(db, 'DELETE FROM dbo.form_faturalari WHERE form_id = @f', { f });
+    expect(await queryOne(db, 'SELECT COUNT(*) AS n FROM dbo.fis_alan_degerleri')).toEqual({ n: 0 });
   });
 
   it('refuses a database built from migration files that are gone, instead of taking it as up to date', async () => {
@@ -341,13 +316,13 @@ describe('migrations', () => {
     expect(err).toBeInstanceOf(DatabaseError);
     expect((err as Error).message).toContain('099_form_faturalari.sql');
 
-    // Another file under a number that exists is the same case: a database built before the schema
-    // files were merged has 002_onay_akislari.sql and must not be taken as having the new 002.
-    await execute(db, `DELETE FROM dbo.sema_surumleri WHERE surum = 99; UPDATE dbo.sema_surumleri SET ad = N'002_onay_akislari.sql' WHERE surum = 2`);
-    await expect(migrate(db, all)).rejects.toThrow('002_onay_akislari.sql');
+    // A database built before the schema files were merged into one has the old 002-007 rows: it must not
+    // be taken as having the merged file.
+    await execute(db, `DELETE FROM dbo.sema_surumleri WHERE surum = 99; INSERT INTO dbo.sema_surumleri (surum, ad) VALUES (2, N'002_onay_stratejisi.sql')`);
+    await expect(migrate(db, all)).rejects.toThrow('002_onay_stratejisi.sql');
 
-    // So is a renamed file.
-    await execute(db, `UPDATE dbo.sema_surumleri SET ad = N'002_onay_stratejisi.sql' WHERE surum = 2; UPDATE dbo.sema_surumleri SET ad = N'001_eski.sql' WHERE surum = 1`);
+    // So is a renamed file under a number that exists.
+    await execute(db, `DELETE FROM dbo.sema_surumleri WHERE surum = 2; UPDATE dbo.sema_surumleri SET ad = N'001_eski.sql' WHERE surum = 1`);
     await expect(migrate(db, all)).rejects.toThrow('001_eski.sql');
 
     await execute(db, `UPDATE dbo.sema_surumleri SET ad = N'001_baslangic.sql' WHERE surum = 1`);

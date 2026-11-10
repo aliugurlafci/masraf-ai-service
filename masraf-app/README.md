@@ -30,7 +30,7 @@ cp env.example .env
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
 | `EXPO_PUBLIC_API_URL` | (zorunlu) | Sunucunun adresi: simülatör ve `adb reverse` için `http://127.0.0.1:4000`, iPhone/Wi-Fi için bilgisayarın Wi-Fi adresi (örn. `http://192.168.1.20:4000`, aşağıya bakın). Tanımlı değilse uygulama açılışta uyarı ekranı gösterir. |
-| `EXPO_PUBLIC_OKUMA_SORGU_ARALIGI_MS` | `2500` | Fatura okunurken durumun kaç ms'de bir sorulacağı. |
+| `EXPO_PUBLIC_OKUMA_SORGU_ARALIGI_MS` | `2500` | Fatura okunurken durumun kaç ms'de bir sorulacağı. Arka planda okunan faturası olan kayıtlı form en az 3 sn arayla sorulur. |
 | `EXPO_PUBLIC_OKUMA_UST_SURE_MS` | `300000` | Okuma için en uzun bekleme. Süre dolunca form elle doldurulur. |
 | `EXPO_PUBLIC_ISTEK_ZAMAN_ASIMI_MS` | `20000` | Bir API isteğinin zaman aşımı. |
 | `EXPO_PUBLIC_YUKLEME_ZAMAN_ASIMI_MS` | `60000` | Fatura dosyası yükleme isteğinin zaman aşımı. |
@@ -89,12 +89,12 @@ npx expo export --platform android --output-dir <repo dışı bir klasör>   # p
 | `src/app/giris.tsx` | Giriş (`POST /api/oturum`, `istemci: "mobil"`) |
 | `src/app/sifre.tsx` | Şifre değiştir (`PUT /api/ben/sifre`). `sifreDegismeli` ise girişten sonra zorunlu |
 | `src/app/(tabs)/index.tsx` | Ana sayfa (`GET /api/ozet`): bu ay toplamı, durum sayaçları, bekleyen onaylar, son masraflar, şirket geneli |
-| `src/app/(tabs)/masraflar.tsx` | Masraflarım (`GET /api/masraflar`): arama, durum çipleri, sonsuz kaydırma, Benim/Tümü |
-| `src/app/masraf/yeni.tsx` | Yeni masraf: kamera, galeri, PDF veya faturasız giriş; okuma, form, onay rotası önizlemesi |
+| `src/app/(tabs)/masraflar.tsx` | Masraflarım (`GET /api/masraflar`): arama, durum çipleri, sonsuz kaydırma, Benim/Tümü; okunan/okunamayan fatura rozeti, tutarı henüz olmayan taslak |
+| `src/app/masraf/yeni.tsx` | Yeni masraf: kamera, galeri, PDF veya faturasız giriş; okuma (sıradaki yer ve önündeki fatura sayısıyla), form, onay rotası önizlemesi. Okumalar bitmeden taslak kaydedilebilir (`bekleyenFaturalar`, tutar boş kalabilir, isteğe bağlı "Okumalar bitince onaya gönder"). Masraf merkezi (kullanıcıya tanımlı aktif olanlar, tek ise seçili gelir) ve her fişin altında açılır "Fiş bilgileri" (liste alanları sunucuda aranan alt sayfadan seçilir; metin, sayı, tarih). Fiş alanları okuma bitmeden de doldurulur, dosya faturaya dönüşünce değerler onunla kalır (`fisAlanlari`) |
 | `src/app/(tabs)/onaylar.tsx` | Onaylar (`GET /api/onaylar`): Bekleyen ve Karar verdiklerim |
 | `src/app/(tabs)/profil.tsx` | Profil: kullanıcı, rol, onaycılık, şifre, tema, sunucu adresi, çıkış |
-| `src/app/masraf/[id]/index.tsx` | Masraf detayı: fatura, onay zaman çizelgesi, geçmiş, `izinler`e göre eylemler |
-| `src/app/masraf/[id]/duzenle.tsx` | Düzenleme (aynı form, `PATCH`) |
+| `src/app/masraf/[id]/index.tsx` | Masraf detayı: organizasyon ve masraf merkezi, fatura, her faturanın ve okunmayı bekleyen dosyanın fiş bilgileri ile eksik zorunlu alanları, okunmayı bekleyen faturalar (sıra, yeniden oku, çıkar; bekleyen varken birkaç saniyede bir yenilenir), okununca gönder anahtarı, onay zaman çizelgesi, geçmiş, `izinler`e göre eylemler |
+| `src/app/masraf/[id]/duzenle.tsx` | Düzenleme (aynı form, `PATCH`); arka planda okunan faturalar okununca forma normal fatura olarak eklenir |
 | `src/app/fatura/[id].tsx` | Fatura görseli tam ekran (yakınlaştırma, kaydırma, çift dokunma) |
 
 ## Klasör yapısı
@@ -115,6 +115,7 @@ src/
 
 - Oturum token'ı yalnızca `expo-secure-store` içinde tutulur ve istekler `Authorization: Bearer` başlığı taşır. Sunucu `401` dönerse oturum kapanır ve giriş ekranı açılır.
 - Düğmeler sunucunun döndürdüğü `izinler` alanına göre gösterilir; uygulama iş kurallarını kendisi hesaplamaz. Onay rotası da sunucudan (`POST /api/onay-akisi/onizle`) gelir.
+- Zorunlu alan yıldızları ve "eksik" uyarıları `src/lib/fields.ts` ile hesaplanır (sunucudaki `requiredFields`'ın aynısı, `GET /api/alanlar`); kararı sunucu verir (`eksikAlanlar`, `409 alan_eksik` / `fatura_eksik`). Alan, liste ve Excel yönetimi yalnızca web panelindedir.
 - Tema tercihi (sistem/açık/koyu) cihazda saklanır.
 - Animasyonlar sistemdeki "hareketi azalt" ayarı açıksa kapanır.
 - Yayın (release) Android derlemesi düz `http://` adresine varsayılan olarak izin vermez. Geliştirme ve Expo Go'da sorun yoktur; yayın derlemesi gerekirse `expo-build-properties` ile `usesCleartextTraffic` açılmalıdır.

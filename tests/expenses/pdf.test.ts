@@ -1,6 +1,6 @@
 // The approval document renderer (docs/onay-sistemi.md, section 7). No database.
 import { describe, expect, it } from 'vitest';
-import { renderApprovalPdf, type PdfData } from '../../src/expenses/pdf.ts';
+import { headerRows, receiptFieldRows, renderApprovalPdf, type PdfData } from '../../src/expenses/pdf.ts';
 
 const data = (over: Partial<PdfData> = {}): PdfData => ({
   form: {
@@ -50,6 +50,34 @@ describe('renderApprovalPdf', () => {
 
   it('renders a form without invoices', async () => {
     const pdf = await renderApprovalPdf(data({ faturalar: [] }));
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  });
+
+  it('prints the organisation and the cost centre only when the form carries them, with a dash for none', () => {
+    const labels = (d: PdfData): string[] => headerRows(d).map(([label]) => label);
+    expect(labels(data())).not.toContain('Organizasyon');
+    expect(labels(data())).not.toContain('Masraf merkezi');
+    const rows = headerRows(data({ form: { ...data().form, organizasyon: '1000 – Şenpiliç Gıda', masrafMerkezi: null } }));
+    expect(rows.slice(2, 5)).toEqual([
+      ['Organizasyon', '1000 – Şenpiliç Gıda'],
+      ['Masraf merkezi', '-'],
+      ['Kategori', 'Yemek'],
+    ]);
+  });
+
+  it("lists each invoice's receipt fields under its number, and renders them", async () => {
+    const [first, second] = data().faturalar;
+    const faturalar = [
+      { ...first!, alanlar: [{ ad: 'Etiket', gosterim: 'P34MHG325 – Bakım' }, { ad: 'Not', gosterim: 'Çağlayan şubesi' }] },
+      { ...second!, alanlar: [{ ad: 'Ödeme Yöntemi', gosterim: 'Nakit' }] },
+      { ...first!, faturaNo: 'ABC-3' },
+    ];
+    expect(receiptFieldRows({ faturalar })).toEqual([
+      ['1. fatura · ABC-1', 'Etiket', 'P34MHG325 – Bakım'],
+      ['1. fatura · ABC-1', 'Not', 'Çağlayan şubesi'],
+      ['2. fatura', 'Ödeme Yöntemi', 'Nakit'],
+    ]);
+    const pdf = await renderApprovalPdf(data({ faturalar }));
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
   });
 });

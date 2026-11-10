@@ -19,9 +19,26 @@ export interface TextFieldProps extends Omit<TextInputProps, 'style'> {
   readonly style?: StyleProp<ViewStyle>;
   readonly inputStyle?: TextInputProps['style'];
   readonly ref?: Ref<TextInputInstance>;
+  /** Shows the required mark after the label (and says "zorunlu" to screen readers). */
+  readonly required?: boolean;
 }
 
-export function TextField({ label, error, hint, icon, right, style, inputStyle, multiline, onFocus, onBlur, ref, ...rest }: TextFieldProps) {
+export function TextField({
+  label,
+  error,
+  hint,
+  icon,
+  right,
+  style,
+  inputStyle,
+  multiline,
+  onFocus,
+  onBlur,
+  ref,
+  required = false,
+  accessibilityLabel,
+  ...rest
+}: TextFieldProps) {
   const { colors } = useTheme();
   const motion = useMotion();
   const [focused, setFocused] = useState(false);
@@ -29,9 +46,7 @@ export function TextField({ label, error, hint, icon, right, style, inputStyle, 
   const borderColor = hasError ? colors.danger : focused ? colors.primary : colors.border;
   return (
     <View style={[styles.wrap, style]}>
-      <Text variant="label" tone="muted" style={styles.label}>
-        {label}
-      </Text>
+      <FieldLabel label={label} required={required} />
       <View
         style={[
           styles.box,
@@ -42,7 +57,7 @@ export function TextField({ label, error, hint, icon, right, style, inputStyle, 
         {icon !== undefined ? <Ionicons name={icon} size={20} color={focused ? colors.primary : colors.textFaint} /> : null}
         <TextInput
           ref={ref}
-          accessibilityLabel={label}
+          accessibilityLabel={`${accessibilityLabel ?? label}${required ? ', zorunlu' : ''}`}
           accessibilityHint={hasError ? (error ?? undefined) : hint}
           placeholderTextColor={colors.textFaint}
           selectionColor={colors.primary}
@@ -73,6 +88,17 @@ export function TextField({ label, error, hint, icon, right, style, inputStyle, 
         </Text>
       ) : null}
     </View>
+  );
+}
+
+/** A field's label, with a red mark when the field is required (read out as "zorunlu"). */
+export function FieldLabel({ label, required = false }: { readonly label: string; readonly required?: boolean }) {
+  const { colors } = useTheme();
+  return (
+    <Text variant="label" tone="muted" style={styles.label} accessibilityLabel={required ? `${label}, zorunlu` : label}>
+      {label}
+      {required ? <Text variant="label" color={colors.danger}>{' *'}</Text> : null}
+    </Text>
   );
 }
 

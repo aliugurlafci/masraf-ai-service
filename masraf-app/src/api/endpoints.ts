@@ -2,6 +2,7 @@ import { config } from '@/config';
 
 import { apiUrl, request, upload } from './client';
 import type {
+  AlanlarYaniti,
   BenYaniti,
   BildirimListesi,
   Kullanici,
@@ -18,6 +19,7 @@ import type {
   OnizlemeIstegi,
   OturumYaniti,
   Ozet,
+  SecenekListesi,
   SifreDegistirIstegi,
   TercihIstegi,
 } from './types';
@@ -48,6 +50,25 @@ export const getKategoriler = (opts: Signal = {}): Promise<Kategori[]> => reques
 export const previewFlow = (body: OnizlemeIstegi, opts: Signal = {}): Promise<Onizleme> =>
   request<Onizleme>('/api/onay-akisi/onizle', { method: 'POST', body, ...opts });
 
+// --- Receipt fields ---
+
+/** Active fields (form level first, then by order) and the rules whose condition field is active. */
+export const getAlanlar = (opts: Signal = {}): Promise<AlanlarYaniti> => request<AlanlarYaniti>('/api/alanlar', opts);
+
+/**
+ * One page of a liste field's options (by order, then code). A non-admin sees only active options of an
+ * active field; 404 when the field is gone, not a liste or inactive.
+ */
+export const getSecenekler = (
+  anahtar: string,
+  query: { readonly q?: string; readonly sayfa: number; readonly adet: number },
+  opts: Signal = {},
+): Promise<SecenekListesi> =>
+  request<SecenekListesi>(`/api/alanlar/${encodeURIComponent(anahtar)}/secenekler`, {
+    query: { q: query.q, sayfa: query.sayfa, adet: query.adet },
+    ...opts,
+  });
+
 // --- Expense forms ---
 
 export const getMasraflar = (query: MasrafListeSorgusu, opts: Signal = {}): Promise<MasrafListesi> =>
@@ -65,8 +86,11 @@ export const createMasraf = (body: MasrafOlusturIstegi): Promise<MasrafDetay> =>
 export const updateMasraf = (id: number, body: MasrafGuncelleIstegi): Promise<MasrafDetay> =>
   request<MasrafDetay>(`/api/masraflar/${id}`, { method: 'PATCH', body });
 
-/** Actions without a body. */
-export type MasrafIslemi = 'gonder' | 'geri-cek' | 'iptal' | 'odendi';
+/**
+ * Actions without a body. `yeniden-oku` puts the form's failed pending invoices back in the reading queue
+ * (only the owner, `taslak`/`reddedildi`; nothing changes when none failed).
+ */
+export type MasrafIslemi = 'gonder' | 'geri-cek' | 'iptal' | 'odendi' | 'yeniden-oku';
 
 export const runMasrafAction = (id: number, action: MasrafIslemi): Promise<MasrafDetay> =>
   request<MasrafDetay>(`/api/masraflar/${id}/${action}`, { method: 'POST' });

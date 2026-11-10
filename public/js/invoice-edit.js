@@ -11,7 +11,10 @@ import { btn, field, input, openDialog, setFieldError } from './ui.js';
 export const MAX_LINES = 200;
 const MAX_TEXT = 500;
 
-/** The four fields every invoice needs before its form can be sent. */
+/**
+ * The four header fields required before field management existed; the fallback when the field list
+ * (GET /api/alanlar) could not be loaded. fields.js works out the required ones from the field list.
+ */
 export const REQUIRED = ['faturaNo', 'faturaTarihi', 'saticiUnvan', 'genelToplam'];
 
 // kind: text | date | currency | amount
@@ -171,16 +174,17 @@ function readControl(def, control) {
 /**
  * Opens the editor for one invoice. current: { fatura, kalemler } (the valid data now);
  * errors: server messages by path ("fatura.faturaTarihi", "kalemler.0.tutar"); canRevert: offer
- * "Okunan değere dön". Resolves with { fatura, kalemler } (apply), 'revert' or null (cancelled).
+ * "Okunan değere dön"; required: the header keys required on this receipt (asterisks). Resolves with
+ * { fatura, kalemler } (apply), 'revert' or null (cancelled).
  */
-export function editInvoiceDialog({ title, current, errors = {}, canRevert = false }) {
+export function editInvoiceDialog({ title, current, errors = {}, canRevert = false, required: requiredKeys = REQUIRED }) {
   const data = pickInvoice(current?.fatura, current?.kalemler);
   const headerControls = {};
   const headerFields = [];
   for (const def of HEADER_FIELDS) {
     const control = makeControl(def, data.fatura[def.key]);
     headerControls[def.key] = control;
-    const required = REQUIRED.includes(def.key);
+    const required = requiredKeys.includes(def.key);
     headerFields.push(field({ label: required ? `${def.label} *` : def.label, input: control, className: `inv-edit-field${required ? ' required' : ''}` }));
     if (required) {
       const warn = () => setFieldError(control, control.value.trim() === '' ? 'Boş. Onaya göndermek için doldurun.' : null);
@@ -248,7 +252,7 @@ export function editInvoiceDialog({ title, current, errors = {}, canRevert = fal
       if (k && rows[Number(k[1])]?.controls[k[2]]) setFieldError(rows[Number(k[1])].controls[k[2]], String(message));
     }
   }
-  for (const key of REQUIRED) if (headerControls[key].value.trim() === '') setFieldError(headerControls[key], 'Boş. Onaya göndermek için doldurun.');
+  for (const key of requiredKeys) if (headerControls[key]?.value.trim() === '') setFieldError(headerControls[key], 'Boş. Onaya göndermek için doldurun.');
   showErrors();
 
   function collect() {
@@ -263,7 +267,7 @@ export function editInvoiceDialog({ title, current, errors = {}, canRevert = fal
         first ??= headerControls[def.key];
       } else {
         fatura[def.key] = r.value;
-        if (!REQUIRED.includes(def.key)) setFieldError(headerControls[def.key], null);
+        if (!requiredKeys.includes(def.key)) setFieldError(headerControls[def.key], null);
       }
     }
     const kalemler = [];
@@ -315,7 +319,7 @@ export function editInvoiceDialog({ title, current, errors = {}, canRevert = fal
     },
   });
   // The cursor goes to the first empty required field, so a missing value is one click away.
-  const firstEmpty = REQUIRED.find((k) => headerControls[k].value.trim() === '');
+  const firstEmpty = requiredKeys.find((k) => headerControls[k]?.value.trim() === '');
   if (firstEmpty) headerControls[firstEmpty].focus();
   return ctl.done.then((r) => (r === true ? null : r));
 }

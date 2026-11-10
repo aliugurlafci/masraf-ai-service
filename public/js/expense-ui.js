@@ -5,14 +5,14 @@ import * as api from './api.js';
 import { el, icon, ICONS } from './dom.js';
 import { safeType } from './files.js';
 import { fmtCurrency, fmtDateShort } from './format.js';
-import { amountTexts, categoryIcon, statusBadge } from './labels.js';
+import { amountTexts, categoryIcon, readingTags, statusBadge } from './labels.js';
 import { field, openDialog, setFieldError, textarea } from './ui.js';
 
 export const expenseHref = (id) => `#/masraflar/${encodeURIComponent(String(id))}`;
 
 /** One line of an expense list that links to its detail (dashboard, small lists). */
 export function expenseMiniRow(m, base, { showOwner = false } = {}) {
-  const { main, local } = amountTexts(m, base);
+  const { main, local, empty } = amountTexts(m, base);
   const sub = [showOwner ? m.olusturan?.adSoyad : null, m.kategori?.ad, fmtDateShort(m.masrafTarihi)].filter(Boolean).join(' · ');
   return el(
     'li',
@@ -25,9 +25,10 @@ export function expenseMiniRow(m, base, { showOwner = false } = {}) {
       el(
         'span',
         { className: 'mini-end' },
-        el('span', { className: 'mini-amount', text: main ?? '' }),
+        el('span', { className: `mini-amount${empty ? ' is-empty' : ''}`, text: main ?? '' }),
         local ? el('span', { className: 'mini-sub', text: `≈ ${local}` }) : null,
         statusBadge(m.durum, { className: 'sm' }),
+        readingTags(m.okuma),
       ),
     ),
   );
@@ -198,8 +199,8 @@ export function rejectDialog(m, base) {
 
 /** "1.800,00 ₺" with the local amount under it when the currency differs. */
 export function amountBlock(m, base, className = 'amount-block') {
-  const { main, local } = amountTexts(m, base);
-  return el('div', { className }, el('span', { className: 'amount-main', text: main ?? '—' }), local ? el('span', { className: 'amount-local', text: `≈ ${local}` }) : null);
+  const { main, local, empty } = amountTexts(m, base);
+  return el('div', { className }, el('span', { className: `amount-main${empty ? ' is-empty' : ''}`, text: main ?? '—' }), local ? el('span', { className: 'amount-local', text: `≈ ${local}` }) : null);
 }
 
 export const money = (v, cur) => fmtCurrency(v, cur) ?? '—';

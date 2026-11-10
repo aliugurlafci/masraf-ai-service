@@ -25,7 +25,14 @@ const ICONS: Record<BildirimTuru, IconName> = {
   reddedildi: 'close-circle-outline',
   odendi: 'wallet-outline',
   odeme_bekliyor: 'cash-outline',
+  okuma_bitti: 'document-text-outline',
+  okuma_hatasi: 'alert-circle-outline',
+  onaya_gonderildi: 'paper-plane-outline',
+  onaya_gonderilemedi: 'warning-outline',
 };
+
+/** Notifications about something the user has to fix: their icon is in the warning color while unread. */
+const NEEDS_ACTION: ReadonlySet<BildirimTuru> = new Set<BildirimTuru>(['okuma_hatasi', 'onaya_gonderilemedi']);
 
 export default function NotificationsScreen() {
   const { colors } = useTheme();
@@ -106,7 +113,7 @@ export default function NotificationsScreen() {
             />
           }
           ListEmptyComponent={
-            <EmptyState icon="notifications-off-outline" title="Bildirim yok" message="Onay ve ödeme gelişmeleri burada görünecek." />
+            <EmptyState icon="notifications-off-outline" title="Bildirim yok" message="Onay, ödeme ve fatura okuma gelişmeleri burada görünecek." />
           }
           ListFooterComponent={
             list.isFetchingNextPage ? (
@@ -137,8 +144,14 @@ function NotificationRow({ item, onPress }: { readonly item: Bildirim; readonly 
         },
       ]}
     >
-      <View style={[styles.icon, { backgroundColor: item.okundu ? colors.surfaceAlt : colors.primary }]}>
-        <Ionicons name={ICONS[item.tur]} size={20} color={item.okundu ? colors.textMuted : colors.onPrimary} />
+      <View
+        style={[styles.icon, { backgroundColor: item.okundu ? colors.surfaceAlt : NEEDS_ACTION.has(item.tur) ? colors.warning : colors.primary }]}
+      >
+        <Ionicons
+          name={ICONS[item.tur]}
+          size={20}
+          color={item.okundu ? colors.textMuted : NEEDS_ACTION.has(item.tur) ? colors.onAccent : colors.onPrimary}
+        />
       </View>
       <View style={styles.flex}>
         <View style={styles.titleRow}>

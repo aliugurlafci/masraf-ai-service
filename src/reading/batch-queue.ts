@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ExtractionError } from '../claude/extractor.ts';
 import type { DetectedFile } from '../invoice/file-type.ts';
 import type { ReadHooks, ReadInput, ReadResult } from './reader.ts';
@@ -27,6 +28,12 @@ export interface BatchItemView {
   readonly hata: ItemError | null;
   /** The invoice once read: {fatura, kalemler}. Measurements are on GET /api/invoices/<kayitId>. */
   readonly sonuc: Invoice | null;
+  /** SHA-256 of the file; a form saved before the read ends names the file by it. Null for refused files. */
+  readonly dosyaOzeti: string | null;
+  /** While `sirada`: its place among the files waiting for Claude (1 = next); null otherwise. */
+  readonly kuyrukSirasi: number | null;
+  /** While `sirada`: files read before it (being read now or waiting ahead); null otherwise. */
+  readonly onundeki: number | null;
 }
 
 export interface BatchView {
@@ -85,6 +92,9 @@ interface Item {
   onbellek: boolean;
   hata: ItemError | null;
   sonuc: Invoice | null;
+  readonly dosyaOzeti: string | null;
+  kuyrukSirasi: number | null;
+  onundeki: number | null;
 }
 
 interface Batch<C> {
@@ -152,6 +162,9 @@ export function createBatchQueue<C = undefined>(read: BatchRead<C>, opts: BatchQ
           onbellek: false,
           hata: null,
           sonuc: null,
+          dosyaOzeti: 'hata' in input ? null : createHash('sha256').update(input.buffer).digest('hex'),
+          kuyrukSirasi: null,
+          onundeki: null,
         };
         batch.items.push(item);
         const place: BatchPlace<C> = { kuyrukId: batch.id, sira: item.sira, context };
@@ -163,10 +176,23 @@ export function createBatchQueue<C = undefined>(read: BatchRead<C>, opts: BatchQ
         }
         let settle = (): void => {};
         settled.push(new Promise<void>((resolve) => (settle = resolve)));
-        const hooks = { onQueued: () => settle(), onStart: () => (item.durum = 'okunuyor') };
+        const hooks: ReadHooks = {
+          onQueued: () => settle(),
+          onPosition: (place) => {
+            item.kuyrukSirasi = place.kuyrukSirasi;
+            item.onundeki = place.onundeki;
+          },
+          onStart: () => {
+            item.durum = 'okunuyor';
+            item.kuyrukSirasi = null;
+            item.onundeki = null;
+          },
+        };
         read({ buffer: input.buffer, type: input.type, name: input.name, force }, hooks, place).then(
           (result) => {
             item.durum = 'bitti';
+            item.kuyrukSirasi = null;
+            item.onundeki = null;
             item.kayitId = result.record.id;
             item.onbellek = result.reused;
             item.sonuc = result.record.sonuc;
@@ -175,6 +201,8 @@ export function createBatchQueue<C = undefined>(read: BatchRead<C>, opts: BatchQ
           },
           (err: unknown) => {
             item.durum = 'hata';
+            item.kuyrukSirasi = null;
+            item.onundeki = null;
             item.hata = toItemError(err);
             settle();
             opts.onError?.(err);

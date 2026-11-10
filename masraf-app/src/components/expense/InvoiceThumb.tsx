@@ -10,14 +10,16 @@ import { radius, useTheme } from '@/theme';
 
 export type InvoiceThumbSource =
   | { readonly kind: 'local'; readonly uri: string; readonly mime: string }
-  | { readonly kind: 'remote'; readonly faturaId: string; readonly mime: string | null; readonly hasFile: boolean };
+  | { readonly kind: 'remote'; readonly faturaId: string; readonly mime: string | null; readonly hasFile: boolean }
+  /** A file the server holds but has no invoice record for yet (a pending invoice): only its type is shown. */
+  | { readonly kind: 'icon'; readonly mime: string | null };
 
 /** Small preview of an invoice: the photo itself, or a document icon for a PDF or a missing file. */
 export function InvoiceThumb({ source, width = 64, height = 80, style }: { readonly source: InvoiceThumbSource; readonly width?: number; readonly height?: number; readonly style?: StyleProp<ViewStyle> }) {
   const { colors } = useTheme();
   const [failed, setFailed] = useState(false);
   const pdf = isPdf(source.mime);
-  const showImage = !pdf && !failed && (source.kind === 'local' || source.hasFile);
+  const showImage = !pdf && !failed && (source.kind === 'local' || (source.kind === 'remote' && source.hasFile));
   return (
     <View
       importantForAccessibility="no-hide-descendants"

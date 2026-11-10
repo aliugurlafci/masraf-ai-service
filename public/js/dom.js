@@ -86,6 +86,11 @@ export const ICONS = {
   bell: 'M5.5 14V9a4.5 4.5 0 0 1 9 0v5l1.5 1.5h-12zM8.5 17.5h3',
   mail: 'M3 5.5h14v9H3zM3.5 6l6.5 5 6.5-5',
   monitor: 'M3 4.5h14v9H3zM7.5 16.5h5M10 13.5v3',
+  // Definitions
+  building: 'M3.5 16.5V4h8v12.5M11.5 8.5h5v8M2.5 16.5h15M6 7h3M6 10h3M6 13h3M13.5 11.5h1M13.5 14h1',
+  target: 'M10 3.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM10 9.9v.2',
+  list: 'M7.5 6h9M7.5 10h9M7.5 14h9M3.5 6h.1M3.5 10h.1M3.5 14h.1',
+  sliders: 'M4 5h12M4 10h12M4 15h12M7 3.5v3M13 8.5v3M9 13.5v3',
 };
 
 /** Restarts a CSS animation class on a node that may already have it. */

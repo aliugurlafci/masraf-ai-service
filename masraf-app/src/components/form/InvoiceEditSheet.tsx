@@ -10,7 +10,7 @@ import { IconButton } from '@/components/ui/IconButton';
 import { PressableScale } from '@/components/ui/PressableScale';
 import { Sheet } from '@/components/ui/Sheet';
 import { Text } from '@/components/ui/Text';
-import { FieldError, TextField } from '@/components/ui/TextField';
+import { FieldError, FieldLabel, TextField } from '@/components/ui/TextField';
 import { formatDate, parseAmount, todayIso } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
 import {
@@ -100,6 +100,10 @@ export interface InvoiceEditSheetProps {
   readonly canRevert: boolean;
   /** Server errors for this invoice. */
   readonly serverErrors: EditErrors;
+  /** Header fields required for sending this receipt (lib/fields; other keys are ignored). */
+  readonly required: readonly string[];
+  /** Help text by header field (the field definitions' `aciklama`). */
+  readonly help?: Readonly<Record<string, string>>;
   readonly onSave: (value: OkunanFatura) => void;
   readonly onRevert: () => void;
   readonly onClose: () => void;
@@ -122,21 +126,34 @@ const EMPTY: OkunanFatura = {
 };
 
 /** "Fatura bilgileri": the 10 header fields and the lines of one invoice, editable. */
-export function InvoiceEditSheet({ visible, title, value, canRevert, serverErrors, onSave, onRevert, onClose }: InvoiceEditSheetProps) {
+export function InvoiceEditSheet({ visible, title, value, canRevert, serverErrors, required, help = NO_HELP, onSave, onRevert, onClose }: InvoiceEditSheetProps) {
   const scrollRef = useRef<ScrollViewInstance>(null);
   return (
     <Sheet visible={visible} onClose={onClose} title="Fatura bilgileri" subtitle={title} scrollRef={scrollRef}>
       {/* Mounted only while the sheet is open, so every opening starts from the current value. */}
-      <EditBody scrollRef={scrollRef} value={value ?? EMPTY} canRevert={canRevert} serverErrors={serverErrors} onSave={onSave} onRevert={onRevert} />
+      <EditBody
+        scrollRef={scrollRef}
+        value={value ?? EMPTY}
+        canRevert={canRevert}
+        serverErrors={serverErrors}
+        required={required}
+        help={help}
+        onSave={onSave}
+        onRevert={onRevert}
+      />
     </Sheet>
   );
 }
+
+const NO_HELP: Readonly<Record<string, string>> = {};
 
 function EditBody({
   scrollRef,
   value,
   canRevert,
   serverErrors,
+  required,
+  help,
   onSave,
   onRevert,
 }: {
@@ -144,6 +161,8 @@ function EditBody({
   readonly value: OkunanFatura;
   readonly canRevert: boolean;
   readonly serverErrors: EditErrors;
+  readonly required: readonly string[];
+  readonly help: Readonly<Record<string, string>>;
   readonly onSave: (value: OkunanFatura) => void;
   readonly onRevert: () => void;
 }) {
@@ -155,7 +174,8 @@ function EditBody({
   const [serverShown, setServerShown] = useState<EditErrors>(serverErrors);
   const [calendar, setCalendar] = useState(false);
   // The first empty required field is brought into view (and focused, unless it is the date) once.
-  const target = useRef(HEADER_FIELDS.find((f) => f.required === true && value.fatura[f.key] === null)).current;
+  const isRequired = (key: HeaderKey): boolean => required.includes(key);
+  const target = useRef(HEADER_FIELDS.find((f) => isRequired(f.key) && value.fatura[f.key] === null)).current;
   const targetInput = useRef<TextInputInstance>(null);
   const reveal = (y: number): void => {
     scrollRef.current?.scrollTo({ y: Math.max(0, y - spacing.lg), animated: false });
@@ -208,18 +228,18 @@ function EditBody({
         const path = `fatura.${f.key}`;
         const empty = draft.header[f.key].trim() === '';
         // A required field left empty is red: sending needs it. A draft can still be saved.
-        const error = errorOf(path) ?? (f.required === true && empty ? 'Gönderim için bu alan gerekli.' : undefined);
+        const mandatory = isRequired(f.key);
+        const error = errorOf(path) ?? (mandatory && empty ? 'Gönderim için bu alan gerekli.' : undefined);
+        const hint = help[f.key];
         const place = f.key === target?.key ? { onLayout: (e: LayoutChangeEvent) => reveal(e.nativeEvent.layout.y) } : {};
         if (f.kind === 'date') {
           return (
             <View key={f.key} style={styles.field} {...place}>
-              <Text variant="label" tone="muted" style={styles.label}>
-                {f.label}
-              </Text>
+              <FieldLabel label={f.label} required={mandatory} />
               <View style={styles.dateRow}>
                 <PressableScale
                   accessibilityRole="button"
-                  accessibilityLabel={`${f.label}: ${empty ? 'boş' : formatDate(dateText)}`}
+                  accessibilityLabel={`${f.label}${mandatory ? ', zorunlu' : ''}: ${empty ? 'boş' : formatDate(dateText)}`}
                   accessibilityHint="Takvimi açar"
                   onPress={() => setCalendar(true)}
                   style={[styles.dateField, { backgroundColor: colors.surface, borderColor: error !== undefined ? colors.danger : colors.border }]}
@@ -233,7 +253,13 @@ function EditBody({
                   <IconButton icon="close" tone="soft" accessibilityLabel="Tarihi temizle" onPress={() => setHeader('faturaTarihi', '')} />
                 ) : null}
               </View>
-              <FieldError message={error} />
+              {error !== undefined ? (
+                <FieldError message={error} />
+              ) : hint !== undefined ? (
+                <Text variant="small" tone="faint" style={styles.label}>
+                  {hint}
+                </Text>
+              ) : null}
             </View>
           );
         }
@@ -242,6 +268,8 @@ function EditBody({
           <TextField
             ref={f.key === target?.key ? targetInput : undefined}
             label={f.label}
+            required={mandatory}
+            hint={hint}
             value={draft.header[f.key]}
             onChangeText={(t) => setHeader(f.key, f.kind === 'amount' ? t.replace(/[^0-9.,]/g, '') : t)}
             keyboardType={f.kind === 'amount' ? 'decimal-pad' : 'default'}

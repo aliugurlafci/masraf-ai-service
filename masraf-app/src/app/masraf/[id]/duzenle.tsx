@@ -14,12 +14,16 @@ export default function EditExpenseScreen() {
 
   return (
     <View style={[styles.flex, { backgroundColor: colors.bg }]}>
-      {masraf.isPending ? (
-        <View style={styles.pad}>
-          <ListSkeleton count={4} />
-        </View>
-      ) : masraf.isError ? (
-        <ErrorState error={masraf.error} onRetry={() => void masraf.refetch()} />
+      {/* A failed background refresh (the form is asked again while invoices are read) keeps the form
+          on screen with what the user entered; only a first load that failed shows the error. */}
+      {masraf.data === undefined ? (
+        masraf.isError ? (
+          <ErrorState error={masraf.error} onRetry={() => void masraf.refetch()} />
+        ) : (
+          <View style={styles.pad}>
+            <ListSkeleton count={4} />
+          </View>
+        )
       ) : !masraf.data.izinler.duzenle ? (
         <EmptyState
           icon="lock-closed-outline"

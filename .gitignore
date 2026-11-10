@@ -1,13 +1,11 @@
 node_modules/
 coverage/
 *.log
-.env
 
 # Okunan faturaların JSON kayıtları (yerel veri)
 data/
 
 # Claude abonelik token'ı: yalnızca README izlenir
-secrets/*
 !secrets/README.md
 
 .codebase-memory/

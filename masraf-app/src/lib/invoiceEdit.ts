@@ -43,9 +43,12 @@ export const LINE_FIELDS: readonly FieldSpec<LineKey>[] = [
   { key: 'tutar', label: 'Tutar', kind: 'amount' },
 ];
 
+/** The header fields required out of the box; used until the field definitions (GET /api/alanlar) are known. */
 export const REQUIRED_FIELDS: readonly ZorunluAlan[] = ['faturaNo', 'faturaTarihi', 'saticiUnvan', 'genelToplam'];
 
 export const fieldLabel = (key: string): string => HEADER_FIELDS.find((f) => f.key === key)?.label ?? key;
+
+export const isHeaderKey = (key: string): key is HeaderKey => HEADER_FIELDS.some((f) => f.key === key);
 
 /** The effective information of an invoice already on a form, in the shape of the read result. */
 export function toOkunan(f: MasrafFatura): OkunanFatura {
@@ -68,9 +71,12 @@ export function toOkunan(f: MasrafFatura): OkunanFatura {
 
 const blank = (value: string | number | null | undefined): boolean => value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
 
-/** Required fields that are empty. A missing result (nothing read) leaves all of them empty. */
-export function missingFields(value: OkunanFatura | null): ZorunluAlan[] {
-  return REQUIRED_FIELDS.filter((key) => value === null || blank(value.fatura[key]));
+/**
+ * Required header fields that are empty, in the order of `required` (field keys; only header keys
+ * count). A missing result (nothing read) leaves all of them empty.
+ */
+export function missingFields(value: OkunanFatura | null, required: readonly string[] = REQUIRED_FIELDS): HeaderKey[] {
+  return required.filter(isHeaderKey).filter((key) => value === null || blank(value.fatura[key]));
 }
 
 const sameLine = (a: FaturaKalemi, b: FaturaKalemi): boolean => LINE_FIELDS.every((f) => a[f.key] === b[f.key]);
@@ -105,6 +111,7 @@ export type Edits = Readonly<Record<string, OkunanFatura | null>>;
 /** What was read from the invoice (before any correction), or null when nothing is known. */
 export function originalOf(item: InvoiceAttachment): OkunanFatura | null {
   if (item.kind === 'server') return item.fatura.okunan ?? toOkunan(item.fatura);
+  if (item.kind === 'pending') return null;
   return item.reading.phase === 'done' ? item.reading.sonuc : null;
 }
 
@@ -125,9 +132,14 @@ export function isCorrected(item: InvoiceAttachment, edits: Edits): boolean {
   return item.kind === 'server' && item.fatura.duzeltildi;
 }
 
-/** Required fields still empty. Without a change on this screen the server's own `eksikAlanlar` counts. */
-export function missingOf(item: InvoiceAttachment, edits: Edits): ZorunluAlan[] {
+/**
+ * Required header fields still empty. `required` comes from the field rules (lib/fields.ts) for this
+ * receipt; while they are not known (null), an unchanged saved invoice goes by the server's own
+ * `eksikAlanlar` and anything else by the out-of-the-box set.
+ */
+export function missingOf(item: InvoiceAttachment, edits: Edits, required: readonly string[] | null): HeaderKey[] {
+  if (required !== null) return missingFields(effectiveOf(item, edits), required);
   const id = attachmentId(item);
-  if (item.kind === 'server' && (id === null || !(id in edits))) return [...item.fatura.eksikAlanlar];
+  if (item.kind === 'server' && (id === null || !(id in edits))) return item.fatura.eksikAlanlar.filter(isHeaderKey);
   return missingFields(effectiveOf(item, edits));
 }

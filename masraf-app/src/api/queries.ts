@@ -11,8 +11,11 @@ import {
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
 
+import { config } from '@/config';
+
 import { ApiError } from './client';
 import {
+  getAlanlar,
   getBen,
   getBildirimler,
   getKategoriler,
@@ -20,19 +23,34 @@ import {
   getMasraflar,
   getOnaylar,
   getOzet,
+  getSecenekler,
   markAllNotificationsRead,
   markNotificationRead,
   previewFlow,
   updatePreferences,
 } from './endpoints';
-import type { BenYaniti, BildirimListesi, Kapsam, MasrafDetay, MasrafDurum, MasrafListesi, OnayListeDurumu, OnizlemeIstegi } from './types';
+import type {
+  BenYaniti,
+  BildirimListesi,
+  Kapsam,
+  MasrafDetay,
+  MasrafDurum,
+  MasrafListesi,
+  OnayListeDurumu,
+  OnizlemeIstegi,
+  SecenekListesi,
+} from './types';
 
 export const PAGE_SIZE = 20;
+/** Options asked per page in the option picker. */
+export const OPTION_PAGE_SIZE = 50;
 
 export const queryKeys = {
   ben: ['ben'] as const,
   ozet: ['ozet'] as const,
   kategoriler: ['kategoriler'] as const,
+  alanlar: ['alanlar'] as const,
+  secenekler: (anahtar: string, q: string) => ['secenekler', anahtar, q] as const,
   masraflarAll: ['masraflar'] as const,
   masraflar: (kapsam: Kapsam, durum: readonly MasrafDurum[], q: string) => ['masraflar', kapsam, durum, q] as const,
   masraf: (id: number) => ['masraf', id] as const,
@@ -95,6 +113,31 @@ export function useKategoriler() {
   });
 }
 
+/** The receipt field definitions and rules; they change rarely (an admin's work on the panel). */
+export function useAlanlar() {
+  return useQuery({
+    queryKey: queryKeys.alanlar,
+    queryFn: ({ signal }) => getAlanlar({ signal }),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** A liste field's options matching `q`, page by page (`fetchNextPage` for more). */
+export function useSecenekler(anahtar: string, q: string, enabled = true) {
+  const text = q.trim();
+  return useInfiniteQuery({
+    queryKey: queryKeys.secenekler(anahtar, text),
+    queryFn: ({ pageParam, signal }) =>
+      getSecenekler(anahtar, { q: text === '' ? undefined : text, sayfa: pageParam, adet: OPTION_PAGE_SIZE }, { signal }),
+    initialPageParam: 1,
+    getNextPageParam: (last: SecenekListesi) => (last.sayfa * last.adet < last.toplam ? last.sayfa + 1 : undefined),
+    enabled,
+    staleTime: 5 * 60_000,
+    // While the search text changes, the previous results stay until the new ones arrive.
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useMasrafList(kapsam: Kapsam, durum: readonly MasrafDurum[], q: string) {
   return useInfiniteQuery({
     queryKey: queryKeys.masraflar(kapsam, durum, q),
@@ -106,12 +149,21 @@ export function useMasrafList(kapsam: Kapsam, durum: readonly MasrafDurum[], q: 
   });
 }
 
+/** How often a form with invoices still being read in the background is asked again. */
+const PENDING_POLL_MS = Math.max(config.pollIntervalMs, 3000);
+
+/** Whether the server is still reading some of the form's invoice files (failed ones do not change by themselves). */
+export const isReadingInBackground = (detail: MasrafDetay): boolean => detail.bekleyenFaturalar.some((b) => b.durum !== 'hata');
+
 export function useMasraf(id: number) {
   return useQuery({
     queryKey: queryKeys.masraf(id),
     // A bad id (e.g. a broken link) must end in "not found"; a disabled query would stay pending forever.
     queryFn: ({ signal }) =>
       Number.isInteger(id) && id > 0 ? getMasraf(id, { signal }) : Promise.reject(new ApiError(404, 'bulunamadi', 'Kayıt bulunamadı.')),
+    // While invoices are read in the background, the form is asked again every few seconds. It stops when
+    // they are done, when the screen closes and while the app is in the background.
+    refetchInterval: (query) => (query.state.data !== undefined && isReadingInBackground(query.state.data) ? PENDING_POLL_MS : false),
   });
 }
 

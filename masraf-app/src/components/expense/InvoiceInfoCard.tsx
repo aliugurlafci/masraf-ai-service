@@ -6,11 +6,11 @@ import type { FaturaKalemi, MasrafFatura } from '@/api/types';
 import { Card } from '@/components/ui/Card';
 import { PressableScale } from '@/components/ui/PressableScale';
 import { Text } from '@/components/ui/Text';
+import { fieldName, valueLines, type FieldDefs } from '@/lib/fields';
 import { haptics } from '@/lib/haptics';
 import {
   changedHeaderKeys,
   displayValue,
-  fieldLabel,
   HEADER_FIELDS,
   LINE_FIELDS,
   sameLines,
@@ -22,8 +22,23 @@ import { radius, spacing, useTheme } from '@/theme';
 
 const spec = (key: HeaderKey): FieldSpec<string> => HEADER_FIELDS.find((f) => f.key === key) as FieldSpec<string>;
 
-/** One invoice's information (the effective values) and lines; when corrected, how it differs from what was read. */
-export function InvoiceInfoCard({ fatura, index, count, currency }: { readonly fatura: MasrafFatura; readonly index: number; readonly count: number; readonly currency: string }) {
+/**
+ * One invoice's information (the effective values), its receipt field values and lines; when corrected,
+ * how it differs from what was read. `defs` names the fields (GET /api/alanlar); keys show until it loads.
+ */
+export function InvoiceInfoCard({
+  fatura,
+  index,
+  count,
+  currency,
+  defs,
+}: {
+  readonly fatura: MasrafFatura;
+  readonly index: number;
+  readonly count: number;
+  readonly currency: string;
+  readonly defs: FieldDefs | undefined;
+}) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const current = toOkunan(fatura);
@@ -33,6 +48,8 @@ export function InvoiceInfoCard({ fatura, index, count, currency }: { readonly f
   const money = (f: FieldSpec<string>, value: string | number | null, invoiceCurrency: string | null): string =>
     displayValue(f, value, invoiceCurrency ?? currency);
   const filled = HEADER_FIELDS.filter((f) => current.fatura[f.key] !== null);
+  const receiptValues = valueLines(defs, fatura.alanlar);
+  const missingText = fatura.eksikAlanlar.map((k) => fieldName(defs, k).toLocaleLowerCase('tr-TR')).join(', ');
   const title = count > 1 ? `${index + 1}. fatura` : 'Fatura bilgileri';
 
   return (
@@ -55,7 +72,7 @@ export function InvoiceInfoCard({ fatura, index, count, currency }: { readonly f
         <View style={styles.row}>
           <Ionicons name="alert-circle" size={16} color={colors.danger} />
           <Text variant="small" tone="danger" style={styles.flex}>
-            Eksik bilgi: {fatura.eksikAlanlar.map((k) => fieldLabel(k).toLowerCase()).join(', ')}
+            Eksik bilgi: {missingText}
           </Text>
         </View>
       ) : null}
@@ -76,6 +93,27 @@ export function InvoiceInfoCard({ fatura, index, count, currency }: { readonly f
           </View>
         ))
       )}
+
+      {receiptValues.length > 0 ? (
+        <View style={[styles.receipt, { borderTopColor: colors.border }]}>
+          <View style={styles.row}>
+            <Ionicons name="pricetags-outline" size={15} color={colors.primary} />
+            <Text variant="label" tone="muted">
+              Fiş bilgileri
+            </Text>
+          </View>
+          {receiptValues.map((line) => (
+            <View key={line.anahtar} style={styles.fact} accessible accessibilityLabel={`${line.label}: ${line.gosterim}`}>
+              <Text variant="small" tone="muted">
+                {line.label}
+              </Text>
+              <Text variant="label" style={styles.value}>
+                {line.gosterim}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
 
       {current.kalemler.length > 0 ? (
         <>
@@ -162,6 +200,7 @@ const styles = StyleSheet.create({
   badge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   fact: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.lg },
+  receipt: { gap: spacing.sm, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth },
   value: { flexShrink: 1, textAlign: 'right' },
   toggle: { flexDirection: 'row', alignItems: 'center', minHeight: 44, gap: spacing.sm },
   line: { paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
