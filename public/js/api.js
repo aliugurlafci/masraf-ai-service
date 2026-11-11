@@ -264,6 +264,52 @@ export const createFieldRule = (data) => send('POST', '/api/alan-kurallari', dat
 export const updateFieldRule = (id, data) => send('PUT', `/api/alan-kurallari/${seg(id)}`, data);
 export const deleteFieldRule = (id) => send('DELETE', `/api/alan-kurallari/${seg(id)}`);
 
+// ---------- Integrations (yonetici; docs section 9, "Entegrasyonlar") ----------
+
+/** A 202 may come without a body; for these calls it still means "accepted". */
+async function accepted(pending) {
+  const r = await pending;
+  return !r.ok && r.res?.status === 202 ? { ok: true, res: r.res, body: null } : r;
+}
+
+/**
+ * Entegrasyon[] by name: the input's fields with defaults filled, without the password, plus
+ * { id, kimlik: { tur, kullanici?, sifreVar }, sorunlar: string[], sonGonderim: { id, durum, zaman } | null,
+ * olusturma, guncelleme, guncelleyen }.
+ */
+export const listIntegrations = (opts) => get('/api/entegrasyonlar', opts);
+/** { form: Kaynak[], fis: Kaynak[] }; Kaynak: { anahtar, ad, tur: metin|sayi|tutar|tarih, aktif }. */
+export const integrationSources = (opts) => get('/api/entegrasyonlar/kaynaklar', opts);
+export const getIntegration = (id, opts) => get(`/api/entegrasyonlar/${seg(id)}`, opts);
+/**
+ * EntegrasyonGirdi: { ad, aktif, adres, yontem, bicim, kok, xmlAdAlani, fisListesi, fisOgesi, tarihBicimi,
+ * tetikleyici, kimlik: { tur, kullanici?, sifre? }, basliklar: [{ ad, deger }], zamanAsimiSn,
+ * alanlar: [{ kaynak, alias, deger? }] } → 201 Entegrasyon · 400 · 409 entegrasyon_adi_kullaniliyor · 409 anahtar_yok
+ */
+export const createIntegration = (data) => send('POST', '/api/entegrasyonlar', data);
+/** The whole input replaces the integration; without kimlik.sifre the stored password is kept. */
+export const updateIntegration = (id, data) => send('PUT', `/api/entegrasyonlar/${seg(id)}`, data);
+/** 204; the integration's send log goes with it. */
+export const deleteIntegration = (id) => send('DELETE', `/api/entegrasyonlar/${seg(id)}`);
+/**
+ * The body the (unsaved) input would send for a form, or for sample data without formId. Nothing is sent
+ * or stored. → { govde, icerikTuru, ornek, form: { id, baslik } | null } · 400 (alanlar["entegrasyon.<yol>"]) · 404
+ */
+export const previewIntegration = (entegrasyon, formId, opts) =>
+  send('POST', '/api/entegrasyonlar/onizle', formId === null || formId === undefined ? { entegrasyon } : { entegrasyon, formId }, opts);
+/** Sends an approved or paid form by hand → 202 { id } (the send's id) · 404 · 409 gecersiz_durum */
+export const sendIntegration = (id, formId) => send('POST', `/api/entegrasyonlar/${seg(id)}/gonder`, { formId });
+/**
+ * { entegrasyonId?, formId?, durum?: bekliyor|gonderildi|hata, adet? } → GonderimOzet[] newest first:
+ * { id, entegrasyon: { id, ad }, form: { id, baslik }, tetikleyen, kullanici, durum, deneme, httpDurum,
+ * sonHata, olusturma, gonderim, sonrakiDeneme }
+ */
+export const listIntegrationSends = (params, opts) => get(`/api/entegrasyon-gonderimleri${qs(params)}`, opts);
+/** Gonderim: GonderimOzet + { govde, icerikTuru, yanit } of the last attempt (null before the first one). */
+export const getIntegrationSend = (id, opts) => get(`/api/entegrasyon-gonderimleri/${seg(id)}`, opts);
+/** Only a failed send (`hata`): its attempts start over and it is queued at once. 202 · 409 gecersiz_durum */
+export const retryIntegrationSend = (id) => accepted(send('POST', `/api/entegrasyon-gonderimleri/${seg(id)}/yeniden`));
+
 // ---------- Expenses ----------
 
 /** { kapsam: 'benim'|'tumu', durum: 'onayda,taslak', q, sayfa, adet } */

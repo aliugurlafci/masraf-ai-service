@@ -19,6 +19,7 @@ import { expenseFormView } from './views/expense-form.js';
 import { allExpensesView, myExpensesView } from './views/expenses.js';
 import { fieldsAdminView } from './views/fields-admin.js';
 import { flowView } from './views/flow.js';
+import { integrationEditView, integrationsView } from './views/integrations.js';
 import { renderLogin, renderPasswordChange } from './views/login.js';
 import { forbiddenView, notFoundView } from './views/misc.js';
 import { notificationsView } from './views/notifications.js';
@@ -52,6 +53,9 @@ const ROUTES = [
   { name: 'denetim', path: '/denetim', title: 'Denetim kaydı', nav: '/denetim', roles: MANAGER, view: auditView },
   { name: 'bildirimler', path: '/bildirimler', title: 'Bildirimler', nav: null, view: notificationsView },
   { name: 'eposta', path: '/eposta', title: 'E-posta', nav: '/eposta', roles: MANAGER, view: emailView },
+  { name: 'entegrasyonlar', path: '/entegrasyonlar', title: 'Entegrasyonlar', nav: '/entegrasyonlar', roles: MANAGER, view: integrationsView },
+  { name: 'entegrasyon-yeni', path: '/entegrasyonlar/yeni', title: 'Yeni entegrasyon', nav: '/entegrasyonlar', roles: MANAGER, view: integrationEditView },
+  { name: 'entegrasyon', path: '/entegrasyonlar/:id', params: { id: ID }, title: 'Entegrasyon', nav: '/entegrasyonlar', roles: MANAGER, view: integrationEditView },
   { name: 'profil', path: '/profil', title: 'Profil', nav: null, view: profileView },
 ];
 const NOT_FOUND = { name: 'bulunamadi', title: 'Sayfa bulunamadı', nav: null, view: notFoundView };
@@ -75,6 +79,7 @@ const NAV = [
       { path: '/kullanicilar', label: 'Kullanıcılar', icon: ICONS.users },
       { path: '/onay-akisi', label: 'Onay akışları', icon: ICONS.flow },
       { path: '/eposta', label: 'E-posta', icon: ICONS.mail },
+      { path: '/entegrasyonlar', label: 'Entegrasyonlar', icon: ICONS.plug },
       { path: '/denetim', label: 'Denetim kaydı', icon: ICONS.log },
     ],
   },

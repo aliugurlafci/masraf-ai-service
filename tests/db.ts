@@ -101,7 +101,8 @@ export async function resetDb(db: Db): Promise<void> {
       await transaction(db, (tx) =>
         execute(
           tx,
-          `DELETE FROM dbo.bildirimler; DELETE FROM dbo.eposta_kutusu; DELETE FROM dbo.form_gecmisi; DELETE FROM dbo.form_onaylari; DELETE FROM dbo.fis_alan_degerleri; DELETE FROM dbo.bekleyen_alan_degerleri; DELETE FROM dbo.form_faturalari; DELETE FROM dbo.bekleyen_faturalar; DELETE FROM dbo.masraf_formlari;
+          `DELETE FROM dbo.entegrasyon_gonderimleri; DELETE FROM dbo.entegrasyonlar;
+           DELETE FROM dbo.bildirimler; DELETE FROM dbo.eposta_kutusu; DELETE FROM dbo.form_gecmisi; DELETE FROM dbo.form_onaylari; DELETE FROM dbo.fis_alan_degerleri; DELETE FROM dbo.bekleyen_alan_degerleri; DELETE FROM dbo.form_faturalari; DELETE FROM dbo.bekleyen_faturalar; DELETE FROM dbo.masraf_formlari;
            DELETE FROM dbo.fatura_yuklemeleri; DELETE FROM dbo.fatura_dosyalari; DELETE FROM dbo.fatura_kayitlari;
            DELETE FROM dbo.onay_adimlari; UPDATE dbo.onay_akislari SET guncelleyen_id = NULL;
            DELETE FROM dbo.oturumlar; DELETE FROM dbo.denetim_kayitlari;

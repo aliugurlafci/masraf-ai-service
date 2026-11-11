@@ -35,10 +35,10 @@ describe('migrations', () => {
     return row?.id ?? 0;
   };
 
-  it('builds the schema from its one file, once, with the default flow and the categories', async () => {
+  it('builds the schema from its files, once, with the default flow and the categories', async () => {
     const all = await loadMigrations();
-    expect(all.map((m) => m.name)).toEqual(['001_baslangic.sql']);
-    expect(await migrate(db, all)).toEqual(['001_baslangic.sql']);
+    expect(all.map((m) => m.name)).toEqual(['001_baslangic.sql', '002_entegrasyonlar.sql']);
+    expect(await migrate(db, all)).toEqual(['001_baslangic.sql', '002_entegrasyonlar.sql']);
     expect(await migrate(db, all)).toEqual([]);
 
     // The default flow is a chain.
@@ -309,6 +309,60 @@ describe('migrations', () => {
     expect(await queryOne(db, 'SELECT COUNT(*) AS n FROM dbo.fis_alan_degerleri')).toEqual({ n: 0 });
   });
 
+  it('keeps integrations and their sends with their checks, and deletes the sends with the integration', async () => {
+    const user = await addUser('entegrasyon@firma.test');
+    const insert = (cols: Record<string, string>) => {
+      const all: Record<string, string> = { ad: `N'E${Math.random()}'`, adres: "N'http://pi.test/x'", bicim: "'json'", fis_listesi: "'FISLER'", fis_ogesi: "'FIS'", ...cols };
+      return queryOne<{ id: number }>(db, `INSERT INTO dbo.entegrasyonlar (${Object.keys(all).join(', ')}) OUTPUT inserted.id VALUES (${Object.values(all).join(', ')})`);
+    };
+    const ok = await insert({ ad: "N'SAP PI'" });
+    expect(await queryOne(db, 'SELECT aktif, yontem, tarih_bicimi, tetikleyici, kimlik_turu, basliklar, alanlar, zaman_asimi_sn FROM dbo.entegrasyonlar WHERE id = @i', { i: p.int(ok?.id ?? 0) })).toEqual({
+      aktif: true,
+      yontem: 'POST',
+      tarih_bicimi: 'YYYY-AA-GG',
+      tetikleyici: 'onaylandi',
+      kimlik_turu: 'yok',
+      basliklar: '[]',
+      alanlar: '[]',
+      zaman_asimi_sn: 30,
+    });
+    // Names are unique without regard to case, by Turkish rules (I ↔ ı).
+    await expect(insert({ ad: "N'sap pı'" })).rejects.toMatchObject({ number: 2627 });
+    await expect(insert({ bicim: "'csv'" })).rejects.toMatchObject({ number: 547 });
+    await expect(insert({ yontem: "'GET'" })).rejects.toMatchObject({ number: 547 });
+    await expect(insert({ tarih_bicimi: "'DD/MM/YYYY'" })).rejects.toMatchObject({ number: 547 });
+    await expect(insert({ tetikleyici: "'taslak'" })).rejects.toMatchObject({ number: 547 });
+    await expect(insert({ zaman_asimi_sn: '121' })).rejects.toMatchObject({ number: 547 });
+    await expect(insert({ alanlar: "N'{bozuk'" })).rejects.toMatchObject({ number: 547 });
+    // XML needs a root element.
+    await expect(insert({ bicim: "'xml'" })).rejects.toMatchObject({ number: 547 });
+    expect(await insert({ bicim: "'xml'", kok: "'MT_Masraf'" })).toEqual({ id: expect.any(Number) });
+    // Basic needs a user and a sealed password; none without Basic.
+    await expect(insert({ kimlik_turu: "'basic'", kullanici_adi: "N'PI'" })).rejects.toMatchObject({ number: 547 });
+    await expect(insert({ kullanici_adi: "N'PI'" })).rejects.toMatchObject({ number: 547 });
+    expect(await insert({ kimlik_turu: "'basic'", kullanici_adi: "N'PI'", sifre: '0x01' })).toEqual({ id: expect.any(Number) });
+
+    const form = await queryOne<{ id: number }>(
+      db,
+      `INSERT INTO dbo.masraf_formlari (olusturan_id, baslik, kategori_id, masraf_tarihi, tutar, para_birimi, yerel_tutar, durum)
+       OUTPUT inserted.id VALUES (@u, N'F', (SELECT MIN(id) FROM dbo.masraf_kategorileri), '2026-11-01', 10, 'TRY', 10, 'onaylandi')`,
+      { u: p.int(user) },
+    );
+    const send = (durum: string, tetikleyen = 'onaylandi') =>
+      execute(db, 'INSERT INTO dbo.entegrasyon_gonderimleri (entegrasyon_id, form_id, tetikleyen, durum) VALUES (@e, @f, @t, @d)', {
+        e: p.int(ok?.id ?? 0),
+        f: p.int(form?.id ?? 0),
+        t: p.ascii(tetikleyen, 12),
+        d: p.ascii(durum, 12),
+      });
+    for (const durum of ['bekliyor', 'gonderildi', 'hata']) await send(durum);
+    await send('bekliyor', 'elle');
+    await expect(send('atlandi')).rejects.toMatchObject({ number: 547 });
+    await expect(send('bekliyor', 'taslak')).rejects.toMatchObject({ number: 547 });
+    await execute(db, 'DELETE FROM dbo.entegrasyonlar WHERE id = @i', { i: p.int(ok?.id ?? 0) });
+    expect(await queryOne(db, 'SELECT COUNT(*) AS n FROM dbo.entegrasyon_gonderimleri')).toEqual({ n: 0 });
+  });
+
   it('refuses a database built from migration files that are gone, instead of taking it as up to date', async () => {
     const all = await loadMigrations();
     await execute(db, `INSERT INTO dbo.sema_surumleri (surum, ad) VALUES (99, N'099_form_faturalari.sql')`);
@@ -317,12 +371,12 @@ describe('migrations', () => {
     expect((err as Error).message).toContain('099_form_faturalari.sql');
 
     // A database built before the schema files were merged into one has the old 002-007 rows: it must not
-    // be taken as having the merged file.
-    await execute(db, `DELETE FROM dbo.sema_surumleri WHERE surum = 99; INSERT INTO dbo.sema_surumleri (surum, ad) VALUES (2, N'002_onay_stratejisi.sql')`);
+    // be taken as having the merged file, nor the newer 002 under the same number.
+    await execute(db, `DELETE FROM dbo.sema_surumleri WHERE surum = 99; UPDATE dbo.sema_surumleri SET ad = N'002_onay_stratejisi.sql' WHERE surum = 2`);
     await expect(migrate(db, all)).rejects.toThrow('002_onay_stratejisi.sql');
 
     // So is a renamed file under a number that exists.
-    await execute(db, `DELETE FROM dbo.sema_surumleri WHERE surum = 2; UPDATE dbo.sema_surumleri SET ad = N'001_eski.sql' WHERE surum = 1`);
+    await execute(db, `UPDATE dbo.sema_surumleri SET ad = N'002_entegrasyonlar.sql' WHERE surum = 2; UPDATE dbo.sema_surumleri SET ad = N'001_eski.sql' WHERE surum = 1`);
     await expect(migrate(db, all)).rejects.toThrow('001_eski.sql');
 
     await execute(db, `UPDATE dbo.sema_surumleri SET ad = N'001_baslangic.sql' WHERE surum = 1`);

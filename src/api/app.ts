@@ -20,6 +20,9 @@ import { definitionRouter } from './definition-routes.ts';
 import { requireSession, tokenOf, userOf } from './auth.ts';
 import { expenseRouter } from './expense-routes.ts';
 import { fieldRouter } from './field-routes.ts';
+import { integrationRouter } from './integration-routes.ts';
+import { createPayloadLoader } from '../integrations/form-data.ts';
+import type { SecretBox } from '../integrations/secret.ts';
 import { notificationRouter } from './notification-routes.ts';
 import { NO_MAIL, type NotifySettings } from '../notifications/store.ts';
 import { liveStream, type Visibility } from './live.ts';
@@ -65,6 +68,11 @@ export interface AppDeps {
   readonly resumeReads?: boolean;
   /** Receives the background reader of saved forms' files, e.g. to wait for it in tests. */
   readonly onPendingReads?: (pending: PendingReads) => void;
+  /**
+   * Integrations (docs/onay-sistemi.md, section 9): the box that seals Basic passwords (null without
+   * ENTEGRASYON_ANAHTARI) and a wake-up for the send job. Default: no box, nothing woken.
+   */
+  readonly integrations?: { readonly box: SecretBox | null; readonly kick?: () => void };
 }
 
 const EXTRACTION_STATUS: Record<ExtractionError['code'], number> = {
@@ -401,6 +409,16 @@ export function createApp(deps: AppDeps): express.Express {
   app.use('/api', json, accountRouter(accountDeps), adminRouter({ db: deps.db, baseCurrency, passwordMinLength: auth.passwordMinLength }), expenseRouter(expenses), notificationRouter({ db: deps.db, mail }));
   app.use('/api', json, fieldRouter(deps.db));
   app.use('/api', json, definitionRouter({ db: deps.db }));
+  app.use(
+    '/api',
+    json,
+    integrationRouter({
+      db: deps.db,
+      load: createPayloadLoader(deps.db, expenses, baseCurrency),
+      box: deps.integrations?.box ?? null,
+      ...(deps.integrations?.kick ? { kick: deps.integrations.kick } : {}),
+    }),
+  );
 
   app.use(express.static(join(ROOT_DIR, 'public'), { index: 'index.html' }));
 

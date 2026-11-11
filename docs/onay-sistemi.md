@@ -30,6 +30,7 @@ Bu belge web paneli, mobil uygulama (`masraf-app/`) ve sunucu için tek kaynakt�
 | Tüm faturaları ve canlı izlemenin tamamını görme | | ✓ | ✓ |
 | Kullanıcı, kategori ve onay akışı yönetimi, akış ataması, onay devretme | | | ✓ |
 | Tanım listeleri (organizasyon, masraf merkezi, kategori, seçenekler), Excel içe/dışa aktarma, alan yönetimi ve zorunluluk kuralları | | | ✓ |
+| Entegrasyonlar (SAP PI/PO'ya gönderim, bölüm 9) ve gönderim kaydı | | | ✓ |
 
 Onaycılık bir rol değildir. Her rolden aktif kullanıcı bir ya da birden çok onay akışına eklenebilir.
 
@@ -184,6 +185,8 @@ Docker'daki SQL Server 2022 kullanılır (`docker compose up -d`). Sunucu açıl
 | `denetim_kayitlari` | Yönetici işlemleri |
 | `bildirimler` | Uygulama içi bildirim: kullanıcı, tür, form (`NULL` olabilir), başlık, mesaj, oluşturma, okunma zamanı (`NULL` = okunmadı) |
 | `eposta_kutusu` | Giden mail kutusu: alıcı kullanıcı (`NULL` = test maili), adres, konu, düz metin ve HTML gövde, ek türü (`masraf_pdf` ya da `NULL`), form, durum (`bekliyor`, `gonderildi`, `hata`, `atlandi`), deneme sayısı, son hata, sonraki deneme, oluşturma, gönderim |
+| `entegrasyonlar` | Entegrasyon ayarları (bölüm 9): ad (benzersiz), aktif, adres, yöntem, biçim, kök ve liste adları, tarih biçimi, tetikleyici, kimlik türü, kullanıcı adı, şifrelenmiş şifre (`VARBINARY`), ek başlıklar ve alan eşlemesi (JSON), zaman aşımı |
+| `entegrasyon_gonderimleri` | Entegrasyon gönderim kuyruğu ve kaydı: entegrasyon (silinince kayıt da silinir), form, tetikleyen, elle gönderen, durum (`bekliyor`, `gonderildi`, `hata`), deneme, HTTP durum kodu, son hata, son denemenin gövdesi ve yanıtın başı, sonraki deneme, oluşturma, gönderim |
 | `sema_surumleri` | Uygulanan migration'lar |
 
 `kullanicilar.mail_bildirim` (varsayılan 1) kullanıcının mail isteyip istemediğini, `form_onaylari.son_hatirlatma` bir adım için gönderilen son hatırlatmanın zamanını tutar. Bildirimdeki form başlığı, bildirim yazıldığı andaki başlıktır; form sonradan değişse de bildirimde değişmez.
@@ -632,3 +635,203 @@ Arka plandaki okuma ve okununca gönder olaylarını yapan bir kullanıcı yoktu
 ## 8. Ayarlar (`.env`)
 
 Bütün ayarlar kök dizindeki `.env` dosyasından okunur (`env.example` şablondur: `copy env.example .env`). Sunucu `node --env-file-if-exists=.env` ile başlar. `docker compose` de aynı dosyayı kullanır. Mobil uygulamanın ayarları `masraf-app/.env` içindedir (`EXPO_PUBLIC_*`).
+
+## 9. Entegrasyonlar (SAP PI/PO)
+
+Entegrasyon, onaylanan masraf formlarını dış bir sisteme (ör. SAP PI/PO'nun REST ya da HTTP adaptörü) gönderir. Yönetici panelde "Entegrasyonlar" sayfasından hangi form ve fiş alanlarının hangi adla (alias) gideceğini, gövdenin biçimini (JSON ya da XML) ve adresi seçer. Örneğin `Tutar` alanı `TTR` adıyla JSON gövdede `{"TTR": 2193.39}` olarak gider.
+
+Birden çok entegrasyon tanımlanabilir (ör. test ve canlı PI). Her biri ayrı adres, biçim, alan eşlemesi ve gönderim zamanıyla çalışır.
+
+### Gönderim zamanı ve kuyruk
+
+- **Tetikleyici (`tetikleyici`):** `onaylandi` form son onayı alınca, `odendi` form ödendi işaretlenince, `elle` yalnızca yönetici istediğinde gönderir. Tetikleyiciye uyan her aktif entegrasyon için gönderim, işlemle **aynı transaction'da** kuyruğa yazılır; işlem geri alınırsa gönderim de oluşmaz.
+- **Elle gönderim:** Yönetici `onaylandi` ya da `odendi` durumundaki bir formu herhangi bir entegrasyonla (pasif olsa da; deneme için) elle gönderebilir. Her elle gönderim yeni bir kayıttır.
+- **Pasif entegrasyon** kendiliğinden yeni gönderim oluşturmaz. Kuyrukta bekleyen otomatik gönderimleri de gönderilmez; entegrasyon yeniden aktif olunca gider. Elle gönderimler pasif entegrasyonda da gider.
+- **Gövde gönderim anında oluşur:** Formun o anki bilgisi ve entegrasyonun o anki eşlemesiyle hazırlanır. Böylece eşlemedeki bir hata düzeltilip gönderim yeniden denenebilir. Her denemenin gövdesi kayda yazılır.
+- **Gönderim işi:** Sunucu içindeki bir iş kuyruktaki gönderimleri sırayla gönderir (15 sn'de bir; elle gönderim ve yeniden deneme hemen başlar). İki sunucu süreci aynı gönderimi iki kez yapmaz.
+- **Sonuç:** `2xx` yanıt başarıdır (`gonderildi`). Yanıtın gövdesine bakılmaz. Bağlantı hatası, zaman aşımı, `408`, `429` ve `5xx` artan aralıklarla (1, 5, 15, 60 dakika…) en çok `ENTEGRASYON_DENEME_SAYISI` kez denenir, sonra `hata` olur. Diğer yanıtlar (`3xx`, `4xx`) yeniden denemeyle düzelmeyeceği için hemen `hata` olur. Yönlendirme (`3xx`) izlenmez.
+- **Gövde hazırlanamazsa** (eşlemedeki bir kaynak alan silinmiş, Basic şifresi çözülemiyor) gönderim denenmeden `hata` olur.
+- Yönetici `hata` durumundaki gönderimi yeniden deneyebilir: deneme sayısı sıfırlanır, gönderim hemen kuyruğa girer.
+- Yanıtın ilk 2000 karakteri ve HTTP durum kodu kayda yazılır. Şifre ve `Authorization` başlığı hiçbir kayda, yanıta ya da hata mesajına yazılmaz.
+
+### Gövde
+
+Eşlemedeki her satır bir kaynak alanı (`kaynak`) bir ada (`alias`) bağlar. Kaynak ya form düzeyindedir (`form.*`, formda bir kez) ya da fiş düzeyindedir (`fis.*`, formdaki her fatura için). Satırların sırası gövdedeki sıradır. Önce form düzeyindeki alanlar, sonra fiş listesi yazılır. Hiç fiş düzeyinde satır yoksa fiş listesi yazılmaz.
+
+JSON (`bicim: "json"`):
+
+```jsonc
+{
+  "TTR": 2193.39,
+  "BUKRS": "1000",
+  "FISLER": [                       // fisListesi; faturasız formda []
+    { "BELNR": "ABC2026000123", "BLDAT": "2026-11-05", "WRBTR": 1800 }
+  ]
+}
+// kok doluysa (ör. "MASRAF") gövde { "MASRAF": { … } } olur.
+```
+
+XML (`bicim: "xml"`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ns0:MT_Masraf xmlns:ns0="urn:firma:masraf">
+  <TTR>2193.39</TTR>
+  <BUKRS>1000</BUKRS>
+  <FISLER>
+    <FIS>
+      <BELNR>ABC2026000123</BELNR>
+      <BLDAT>2026-11-05</BLDAT>
+      <WRBTR>1800.00</WRBTR>
+    </FIS>
+  </FISLER>
+</ns0:MT_Masraf>
+<!-- xmlAdAlani boşsa kök öneksiz yazılır: <MT_Masraf>. Alt öğeler ad alanı almaz (SAP PI kuralı). -->
+```
+
+Değerler:
+
+| Kaynak türü | JSON | XML |
+|---|---|---|
+| `metin` | metin | metin (`&`, `<`, `>`, `"`, `'` kaçışlı; XML'de geçersiz denetim karakterleri silinir) |
+| `sayi` | sayı | sayının kendisi (`0.5`, `34.123456`) |
+| `tutar` | sayı (`1800`, `2193.39`) | iki ondalıklı (`1800.00`) |
+| `tarih` | `tarihBicimi`ne göre metin | aynı |
+| boş değer | `null` | boş öğe (`<TTR/>`) |
+
+- Ondalık ayracı her zaman noktadır, binlik ayracı yoktur.
+- `tarihBicimi`: `YYYY-AA-GG` (varsayılan, `2026-11-05`), `YYYYAAGG` (`20261105`, SAP `DATS`), `GG.AA.YYYY` (`05.11.2026`). Zaman bilgisi olan kaynaklar (gönderim, onay, ödeme) sunucunun yerel tarihine çevrilir.
+- Sabit değer (`form.sabit`, `fis.sabit`) her zaman metin olarak yazılır (ör. şirket kodu `1000`).
+- Gövde girintili (2 boşluk) yazılır. JSON'da `Content-Type: application/json; charset=utf-8`, XML'de `application/xml; charset=utf-8` gönderilir; `basliklar` ile değiştirilebilir.
+
+### Kaynak alanlar
+
+Form düzeyi (`form.*`):
+
+| Kaynak | Ad | Tür |
+|---|---|---|
+| `form.no` | Form No | sayi |
+| `form.baslik` | Başlık | metin |
+| `form.aciklama` | Açıklama | metin |
+| `form.masrafTarihi` | Masraf Tarihi | tarih |
+| `form.tutar` | Tutar | tutar |
+| `form.paraBirimi` | Para Birimi | metin |
+| `form.kur` | Kur | sayi |
+| `form.yerelTutar` | Yerel Tutar | tutar |
+| `form.onayTutari` | Onay Tutarı | tutar |
+| `form.satici` | Satıcı | metin |
+| `form.durum` | Durum | metin (`onaylandi`, `odendi`, …) |
+| `form.kategori` | Kategori | metin (ad) |
+| `form.kategoriKodu` | Kategori Kodu | metin |
+| `form.hesapKodu` | Hesap Kodu | metin (kategorinin) |
+| `form.masrafMerkezi` | Masraf Merkezi | metin (kod) |
+| `form.masrafMerkeziAciklama` | Masraf Merkezi Açıklaması | metin |
+| `form.organizasyon` | Organizasyon Kodu | metin |
+| `form.organizasyonAdi` | Organizasyon Adı | metin |
+| `form.gonderen` | Gönderen | metin (ad soyad) |
+| `form.gonderenEposta` | Gönderen E-postası | metin |
+| `form.departman` | Departman | metin (gönderenin) |
+| `form.gonderimTarihi` | Gönderim Tarihi | tarih (son gönderim) |
+| `form.onayTarihi` | Onay Tarihi | tarih (son onay) |
+| `form.odemeTarihi` | Ödeme Tarihi | tarih |
+| `form.sonOnaylayan` | Son Onaylayan | metin (son turda en son onaylayan) |
+| `form.fisSayisi` | Fiş Sayısı | sayi |
+| `form.sabit` | Sabit değer | metin (`deger`) |
+
+Fiş düzeyi (`fis.*`, faturanın formdaki **geçerli bilgisi**, bölüm 3):
+
+| Kaynak | Ad | Tür |
+|---|---|---|
+| `fis.sira` | Sıra | sayi (1, 2, …) |
+| `fis.kimlik` | Fatura Kimliği | metin |
+| `fis.dosyaAdi` | Dosya Adı | metin |
+| `fis.faturaNo`, `fis.faturaTarihi`, `fis.saticiUnvan`, `fis.saticiVergiNo`, `fis.aliciUnvan`, `fis.aliciVergiNo`, `fis.paraBirimi` | Fatura bilgileri | metin (`faturaTarihi`: tarih) |
+| `fis.araToplam`, `fis.kdvToplam`, `fis.genelToplam` | Fatura toplamları | tutar |
+| `fis.yerelKarsilik` | Yerel Karşılık | tutar (gönderenin girdiği; yalnızca üçüncü para birimindeki faturada) |
+| `fis.yerelTutar` | Yerel Tutar | tutar (faturanın 6. kuraldaki yerel değeri; sayılamıyorsa boş) |
+| `fis.alan.<anahtar>` | Fiş alanının adı | `liste`: seçeneğin kodu (metin); `metin`, `uzun_metin`: metin; `sayi`: sayi; `tarih`: tarih |
+| `fis.alan.<anahtar>.ad` | "<Alan adı> (açıklama)" | metin: seçeneğin adı (yalnızca `liste` alanları) |
+| `fis.sabit` | Sabit değer | metin (`deger`) |
+
+Pasif fiş alanı kaynak listesinde kalır (`aktif: false`), değeri boş gider. Silinen bir fiş alanına bağlı eşleme satırı entegrasyonun `sorunlar` listesinde görünür; o satır düzeltilene kadar gönderimler `hata` olur.
+
+### Kurallar
+
+- `ad` 1–80 karakterdir ve benzersizdir (büyük/küçük harf ayrımı yapılmaz).
+- `adres` `http://` ya da `https://` ile başlayan, en çok 2000 karakterlik bir adrestir. Adreste kullanıcı adı ya da şifre olamaz (Basic kimlik doğrulaması kullanılır). Yerel ağdaki adresler kabul edilir.
+- `yontem`: `POST` (varsayılan) ya da `PUT`. `zamanAsimiSn`: 5–120, varsayılan 30.
+- **Ad kuralı** (`alias`, `kok`, `fisListesi`, `fisOgesi`): harf ya da `_` ile başlar; harf, rakam, `_`, `-` ve `.` içerir; en çok 60 karakterdir; `xml` ile başlayamaz (büyük/küçük harf fark etmez). Türkçe harf kullanılamaz. Böylece aynı eşleme JSON ve XML'de geçerlidir.
+- `kok` XML'de zorunludur, JSON'da isteğe bağlıdır. `fisListesi` (varsayılan `FISLER`) ve `fisOgesi` (varsayılan `FIS`, yalnızca XML'de kullanılır) her zaman doludur.
+- `xmlAdAlani` isteğe bağlıdır, en çok 400 karakterdir; boşluk, `"`, `'`, `<`, `>` ve `&` içeremez. Doluysa kök `ns0:` önekiyle yazılır.
+- `alanlar` 1–100 satırdır. Form düzeyindeki adlar kendi aralarında ve `fisListesi` ile, fiş düzeyindeki adlar kendi aralarında benzersizdir (büyük/küçük harf ayrımı yapılmaz). Aynı kaynak farklı adlarla birden çok kez eşlenebilir. `deger` yalnızca sabit değer satırında bulunur ve zorunludur (1–200 karakter); diğer satırlarda gönderilirse `400` döner.
+- `kimlik.tur`: `yok` ya da `basic`. Basic'te `kullanici` (1–200) zorunludur. `sifre` (en çok 500) yalnızca istekte gönderilir, hiçbir yanıtta dönmez; yanıtta `sifreVar` bulunur. `PUT` içinde `sifre` gönderilmezse (boş metin ya da `null` da gönderilmemiş sayılır) kayıtlı şifre korunur. İlk kez Basic seçilirken şifre zorunludur. `tur: "yok"` kullanıcı adını ve şifreyi siler.
+- Şifre veritabanında `ENTEGRASYON_ANAHTARI` ile şifrelenmiş (AES-256-GCM) saklanır. Anahtar tanımlı değilken şifre kaydedilemez (`409 anahtar_yok`). Anahtar değişirse kayıtlı şifreler çözülemez; gönderim `hata` olur ve şifre yeniden girilmelidir.
+- `basliklar` en çok 20 ek HTTP başlığıdır (`{ ad, deger }`). `ad` HTTP başlık adı kurallarına uyar; `Host`, `Content-Length`, `Authorization`, `Connection`, `Transfer-Encoding`, `Cookie` ve benzeri bağlantı başlıkları kullanılamaz. `deger` en çok 1000 karakterdir, satır sonu içeremez. Başlık değerleri gizli sayılmaz ve yanıtta döner; gizli değerler için Basic kimlik doğrulaması kullanılır.
+- Ekleme, değişiklik, silme, elle gönderim ve yeniden deneme denetim kaydına yazılır (`entegrasyon_ekle`, `entegrasyon_guncelle`, `entegrasyon_sil`, `entegrasyon_gonder`, `entegrasyon_yeniden`). Şifre denetim kaydına yazılmaz; yalnızca "şifre değişti" yazılır.
+- Entegrasyon silinince gönderim kaydı da silinir.
+
+### API (yonetici)
+
+| İstek | Gövde | Yanıt |
+|---|---|---|
+| `GET /api/entegrasyonlar` | | `Entegrasyon[]` (ada göre) |
+| `GET /api/entegrasyonlar/kaynaklar` | | `{ form: Kaynak[], fis: Kaynak[] }` |
+| `POST /api/entegrasyonlar` | `EntegrasyonGirdi` | `201 Entegrasyon` · `400 gecersiz_istek` · `409 entegrasyon_adi_kullaniliyor` · `409 anahtar_yok` |
+| `GET /api/entegrasyonlar/:id` | | `Entegrasyon` |
+| `PUT /api/entegrasyonlar/:id` | `EntegrasyonGirdi` (tamamı yerine geçer; `kimlik.sifre` gönderilmezse korunur) | `Entegrasyon` · `400` · `409 entegrasyon_adi_kullaniliyor` · `409 anahtar_yok` |
+| `DELETE /api/entegrasyonlar/:id` | | `204` |
+| `POST /api/entegrasyonlar/onizle` | `{ entegrasyon: EntegrasyonGirdi, formId? }` | `Onizleme` · `400` (girdi `alanlar["entegrasyon.<yol>"]` ile) · `404` (form yok) |
+| `POST /api/entegrasyonlar/:id/gonder` | `{ formId }` | `202 { id }` (gönderim kaydının kimliği) · `404` · `409 gecersiz_durum` (form `onaylandi` ya da `odendi` değil) |
+| `GET /api/entegrasyon-gonderimleri?entegrasyonId=&formId=&durum=&adet=50` | | `GonderimOzet[]` (en yeni önce; `adet` 1–500) |
+| `GET /api/entegrasyon-gonderimleri/:id` | | `Gonderim` |
+| `POST /api/entegrasyon-gonderimleri/:id/yeniden` | | `202` · `409 gecersiz_durum` (yalnızca `hata`) |
+
+```jsonc
+// EntegrasyonGirdi (POST/PUT gövdesi). Gönderilmeyen isteğe bağlı alanlar varsayılanını alır.
+{ "ad": "SAP PI masraf", "aktif": true,                // aktif varsayılanı true
+  "adres": "https://pi.firma.local:50001/RESTAdapter/masraf",
+  "yontem": "POST",                                     // POST | PUT
+  "bicim": "json",                                      // json | xml
+  "kok": null, "xmlAdAlani": null,
+  "fisListesi": "FISLER", "fisOgesi": "FIS",
+  "tarihBicimi": "YYYY-AA-GG",                          // YYYY-AA-GG | YYYYAAGG | GG.AA.YYYY
+  "tetikleyici": "onaylandi",                           // onaylandi | odendi | elle
+  "kimlik": { "tur": "basic", "kullanici": "PIUSER", "sifre": "…" },   // varsayılanı { "tur": "yok" }
+  "basliklar": [ { "ad": "X-Kaynak", "deger": "masraf" } ],           // varsayılanı []
+  "zamanAsimiSn": 30,
+  "alanlar": [
+    { "kaynak": "form.tutar", "alias": "TTR" },
+    { "kaynak": "form.sabit", "alias": "BUKRS", "deger": "1000" },
+    { "kaynak": "fis.faturaNo", "alias": "BELNR" } ] }
+
+// Entegrasyon: girdinin bütün alanları (varsayılanlar dolu), şifre hariç, ve şunlar:
+{ "id": 1, …,
+  "kimlik": { "tur": "basic", "kullanici": "PIUSER", "sifreVar": true },
+  "sorunlar": [],          // ör. "3. satır (fis.alan.etiket): bu alan silinmiş." Doluyken gönderimler hata olur
+  "sonGonderim": { "id": 41, "durum": "gonderildi", "zaman": "…" },   // en son gönderim kaydı; yoksa null
+  "olusturma": "…", "guncelleme": "…", "guncelleyen": { "id": 1, "adSoyad": "…" } }   // guncelleyen null olabilir
+
+// Kaynak
+{ "anahtar": "form.tutar", "ad": "Tutar", "tur": "tutar", "aktif": true }   // tur: metin | sayi | tutar | tarih
+
+// Onizleme: girdinin bu formla (formId yoksa örnek verilerle) üreteceği gövde. Hiçbir şey gönderilmez, kaydedilmez.
+{ "govde": "{\n  \"TTR\": 2193.39\n}", "icerikTuru": "application/json; charset=utf-8",
+  "ornek": false,          // true: formId verilmedi, örnek veriler kullanıldı
+  "form": { "id": 1001, "baslik": "…" } }   // ornek iken null
+// Önizleme yalnızca gövdeyi belirleyen alanları doğrular (bicim, kok, xmlAdAlani, fisListesi, fisOgesi, tarihBicimi,
+// basliklar, alanlar); ad, adres, kimlik gibi diğerleri yok sayılır. Böylece kaydedilmemiş, yarım bir düzenleyici de
+// önizlenir. icerikTuru, basliklar içinde Content-Type varsa odur. Önizleme her durumdaki formu gösterebilir.
+
+// GonderimOzet
+{ "id": 41, "entegrasyon": { "id": 1, "ad": "SAP PI masraf" }, "form": { "id": 1001, "baslik": "…" },
+  "tetikleyen": "onaylandi",          // onaylandi | odendi | elle
+  "kullanici": null,                  // elle gönderen yönetici (KisiOzet); otomatikte null
+  "durum": "gonderildi",              // bekliyor | gonderildi | hata
+  "deneme": 1, "httpDurum": 200,      // httpDurum: son denemenin yanıt kodu; yanıt alınamadıysa null
+  "sonHata": null,                    // ör. "HTTP 500: …", "Bağlantı kurulamadı: ECONNREFUSED", "Zaman aşımı (30 sn)."
+  "olusturma": "…", "gonderim": "…", "sonrakiDeneme": null }
+
+// Gonderim = GonderimOzet + son denemenin gövdesi ve yanıtı
+{ …, "govde": "…", "icerikTuru": "application/json; charset=utf-8",   // henüz denenmediyse ikisi de null
+  "yanit": "…" }                                                         // yanıtın ilk 2000 karakteri; yoksa null
+```

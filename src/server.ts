@@ -5,6 +5,9 @@ import { createClaudeExtractor } from './claude/extractor.ts';
 import { ConfigError, loadConfig, loadDbConfig, loadServiceConfig } from './config.ts';
 import { DatabaseError, openDatabase } from './db/database.ts';
 import { createExpenseService, fillDuplicateKeys } from './expenses/forms.ts';
+import { createPayloadLoader } from './integrations/form-data.ts';
+import { createSecretBox } from './integrations/secret.ts';
+import { createIntegrationSender } from './integrations/sender.ts';
 import { createOutbox } from './notifications/outbox.ts';
 import { createReminderJob } from './notifications/reminders.ts';
 import { smtpSender } from './notifications/smtp.ts';
@@ -83,6 +86,15 @@ async function main(): Promise<void> {
   // Reminders run in every mail mode: the in-app notification always goes out; with mail off the
   // mail is written as skipped (atlandi). Only HATIRLATMA_BEKLEME_SAAT=0 turns them off.
   const reminders = createReminderJob({ db, settings: service.reminder, mail });
+  // Approved forms go to the integrations' addresses (docs/onay-sistemi.md, section 9). Nothing is sent
+  // until an administrator adds an active integration.
+  const box = createSecretBox(service.integration.key);
+  const integrations = createIntegrationSender({
+    db,
+    load: createPayloadLoader(db, documents, service.baseCurrency),
+    box,
+    maxAttempts: service.integration.maxAttempts,
+  });
 
   const app = createApp({
     extract: createCascadeExtractor(steps, config.maxConcurrent),
@@ -96,6 +108,7 @@ async function main(): Promise<void> {
     mail,
     // Files of saved forms that were still waiting when the server stopped are read again.
     resumeReads: true,
+    integrations: { box, kick: () => integrations.kick() },
   });
 
   // IPv4 only: the local-network checks (src/api/network.ts) know IPv4 private ranges.
@@ -111,6 +124,7 @@ async function main(): Promise<void> {
     );
     outbox?.start();
     reminders.start();
+    integrations.start();
     if (config.lanAccess) {
       const addresses = [...lanAddresses(), ...config.extraHosts];
       console.info(
@@ -136,8 +150,8 @@ async function main(): Promise<void> {
 
   const shutdown = (): void => {
     server.close(() => {
-      // The jobs finish the mail or reminder at hand before the pool closes.
-      Promise.all([outbox?.stop(), reminders.stop()])
+      // The jobs finish the mail, reminder or integration send at hand before the pool closes.
+      Promise.all([outbox?.stop(), reminders.stop(), integrations.stop()])
         .then(() => db.close())
         .finally(() => process.exit(0));
     });

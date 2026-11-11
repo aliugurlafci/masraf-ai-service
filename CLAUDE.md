@@ -5,14 +5,14 @@ Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının C
 ## Yapı
 
 - `src/server.ts`: Giriş noktası. Ayarları okur, veritabanını açar (migration'lar dahil), gerekirse ilk yöneticiyi oluşturur, model başına bir okuyucu kurup kademeye bağlar ve sunucuyu `127.0.0.1` üzerinde (`AG_ERISIMI=yerel` ise bütün IPv4 arabirimlerinde) başlatır.
-- `src/config.ts`: Ortam değişkenlerini okur: `loadConfig` (sunucu ve Claude), `loadDbConfig` (`MSSQL_*`), `loadServiceConfig` (oturum, şifre, para birimi, ilk yönetici).
+- `src/config.ts`: Ortam değişkenlerini okur: `loadConfig` (sunucu ve Claude), `loadDbConfig` (`MSSQL_*`), `loadServiceConfig` (oturum, şifre, para birimi, ilk yönetici, mail, hatırlatma, entegrasyon).
 - `src/errors.ts`: `HttpError` ve kısayolları (`notFound`, `forbidden`, `conflict`). Mesaj Türkçe, kullanıcıya gösterilir.
 
 `src/db/`: SQL Server katmanı (`mssql` paketi).
 
 - `sql.ts`: Tipli parametreler (`p.int`, `p.str`, `p.money`, …), `query`/`queryOne`/`execute`/`transaction`. Bütün sorgular parametrelidir; SQL'e değer birleştirilmez.
 - `database.ts`: Bağlanır (hazır olana kadar bekler), veritabanı yoksa oluşturur, `migrations/NNN_ad.sql` dosyalarını sırayla uygular (`sema_surumleri`). Artık bulunmayan bir dosyanın kaydı olan veritabanını reddeder.
-- `migrations/`: Şema. Bütün şema `001_baslangic.sql` içindedir (eski dosyalar 2026-11-10'da birleştirildi). Uygulanmış dosya değiştirilmez; değişiklik yeni numaralı dosyayla (`002_….sql`) yapılır.
+- `migrations/`: Şema. Temel şema `001_baslangic.sql` içindedir (eski dosyalar 2026-11-10'da birleştirildi), entegrasyon tabloları `002_entegrasyonlar.sql` içindedir. Uygulanmış dosya değiştirilmez; değişiklik yeni numaralı dosyayla (`003_….sql`) yapılır.
 - `audit.ts`: Denetim kaydı (`denetim_kayitlari`).
 
 `src/auth/`: `password.ts` (scrypt, şifre kuralı), `sessions.ts` (token'ın yalnızca SHA-256 özeti saklanır, kayan süre), `login-limiter.ts` (hatalı giriş kilidi, bellekte).
@@ -50,6 +50,14 @@ Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının C
 - `reminders.ts`: Günlük onay hatırlatması (`HATIRLATMA_*`). Mail kapalıyken de uygulama içi bildirim gönderir.
 - `smtp.ts`: nodemailer taşıyıcısı; dosya ve URL eklerine erişim kapalıdır.
 
+`src/integrations/`: Entegrasyonlar (SAP PI/PO'ya gönderim, `docs/onay-sistemi.md` bölüm 9).
+
+- `payload.ts`: Saf kurallar. Seçilebilir kaynak alanlar (form, fiş ve fiş alanları), ad (alias) kuralı, eşleme kontrolü, JSON/XML gövde ve önizleme için örnek veri.
+- `form-data.ts`: Bir formun gönderilecek değerleri; faturalar form servisinin `detail` çıktısından (geçerli bilgi) gelir.
+- `store.ts`: Entegrasyon kayıtları, kuyruğa ekleme (`queueIntegrations`, son onay ve ödendi ile aynı transaction'da), elle gönderim, gönderim kaydı ve yeniden deneme.
+- `sender.ts`: Gönderim işi. Satırı sahiplenir, `fetch` ile gönderir (yönlendirme izlenmez), `5xx`/`408`/`429`/bağlantı hatasını artan aralıklarla yeniden dener, `4xx`'i hemen `hata` yapar. Gövde gönderim anında oluşur.
+- `secret.ts`: Basic şifreleri `ENTEGRASYON_ANAHTARI` ile AES-256-GCM şifreler; şifre hiçbir yanıta, kayda ya da hata mesajına yazılmaz.
+
 `src/claude/`: Claude CLI ile konuşan katman.
 
 - `extractor.ts`: CLI çağrısını, ortam yalıtımını ve çıktının çözümlenmesini yapar. Ortak semafor (`createSemaphore`) da buradadır.
@@ -78,6 +86,7 @@ Yerel bir masraf yönetimi servisi. Faturayı (PDF veya resim) kullanıcının C
 - `account-routes.ts`, `admin-routes.ts`, `expense-routes.ts`: Oturum/profil, yönetim (kullanıcılar, onay akışı, kategoriler, denetim) ve masraf/onay uçları.
 - `definition-routes.ts`, `field-routes.ts`: Tanım listeleri (Excel içe/dışa aktarma dahil) ve alan/kural uçları.
 - `notification-routes.ts`: Bildirim uçları ve yöneticinin mail uçları (test maili, giden kutusu, yeniden deneme).
+- `integration-routes.ts`: Entegrasyon uçları (ekleme/değiştirme, kaynak listesi, önizleme, elle gönderim, gönderim kaydı).
 - `validation.ts`: Zod ile istek doğrulama (Türkçe hata mesajları, `alanlar`).
 - `uploads.ts`: Tekli ve çoklu yüklemeyi çözer (`multipart/form-data` veya ham gövde) ve gönderenin panel mi API mi olduğunu belirler (`X-Panel-Etiket`).
 - `live.ts`: Canlı izleme akışı (`GET /api/izleme/akis`, Server-Sent Events).

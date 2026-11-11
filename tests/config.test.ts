@@ -167,6 +167,7 @@ describe('loadServiceConfig', () => {
       firstAdmin: null,
       mail: { enabled: false, smtp: null, gonderen: null, maxAttempts: 5, appUrl: null },
       reminder: { waitHours: 24, hour: 9, minute: 0 },
+      integration: { key: null, maxAttempts: 5 },
     });
   });
 
@@ -219,6 +220,15 @@ describe('loadServiceConfig', () => {
 
   it('never echoes the SMTP password', () => {
     expect(() => loadServiceConfig({ MAIL_GONDERIM: 'smtp', SMTP_SIFRE: 'GizliSmtp1', MAIL_GONDEREN: 'm@f.com' })).toThrow(/^(?!.*GizliSmtp1)/);
+  });
+
+  it('reads the integration key, at least 32 characters and never echoed, and the attempts', () => {
+    const key = 'Anahtar-'.repeat(5);
+    expect(loadServiceConfig({ ENTEGRASYON_ANAHTARI: ` ${key} `, ENTEGRASYON_DENEME_SAYISI: '8' }).integration).toEqual({ key, maxAttempts: 8 });
+    expect(loadServiceConfig({ ENTEGRASYON_ANAHTARI: '  ' }).integration.key).toBeNull();
+    expect(() => loadServiceConfig({ ENTEGRASYON_ANAHTARI: 'KisaAnahtar123' })).toThrow(/ENTEGRASYON_ANAHTARI: en az 32 karakter/);
+    expect(() => loadServiceConfig({ ENTEGRASYON_ANAHTARI: 'KisaAnahtar123' })).toThrow(/^(?!.*KisaAnahtar123)/);
+    expect(() => loadServiceConfig({ ENTEGRASYON_DENEME_SAYISI: '0' })).toThrow(/ENTEGRASYON_DENEME_SAYISI/);
   });
 
   it('reads the reminder time, and 0 hours turns reminders off', () => {

@@ -26,6 +26,7 @@ import {
   type StoredValue,
 } from './field-rules.ts';
 import { cleanFileName } from '../invoice/storage.ts';
+import { queueIntegrations } from '../integrations/store.ts';
 import type { FormRef, NotificationEvent } from '../notifications/events.ts';
 import { activeAccountants, NO_MAIL, notify, type NotifySettings } from '../notifications/store.ts';
 import type { ReadingStatus } from '../reading/reader.ts';
@@ -2123,6 +2124,8 @@ export function createExpenseService(db: Db, opts: ExpenseServiceOptions): Expen
           });
           await history(tx, row.id, null, 'tamamlandi', 'Bütün onaylar tamamlandı.');
           await tell(tx, { kind: 'onaylandi', form: refOf(row, 'onaylandi'), muhasebeIds: await activeAccountants(tx) }, actor);
+          // Integrations that send on the last approval (docs/onay-sistemi.md, section 9).
+          await queueIntegrations(tx, row.id, 'onaylandi');
         } else {
           await execute(tx, 'UPDATE dbo.masraf_formlari SET guncelleme = SYSUTCDATETIME() WHERE id = @f', { f: p.int(row.id) });
           await tell(tx, { kind: 'onay_bekliyor', form: refOf(row, 'onayda'), onayciId: waiting.onayci_id, sonraki: true }, actor);
@@ -2159,6 +2162,7 @@ export function createExpenseService(db: Db, opts: ExpenseServiceOptions): Expen
         });
         await history(tx, row.id, actor.id, 'odendi');
         await tell(tx, { kind: 'odendi', form: refOf(row, 'odendi') }, actor);
+        await queueIntegrations(tx, row.id, 'odendi');
       });
     },
 

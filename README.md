@@ -19,8 +19,9 @@
 - Yönetici kullanıcıya bir organizasyon ve bir ya da birden çok masraf merkezi tanımlar; çalışan formda bunlardan birini seçer. Etiket, proje kodu, ödeme yöntemi, doküman tipi, not gibi alanlar her fiş için ayrı doldurulur, fiş okunurken de düzenlenebilir.
 - "Alan yönetimi" sayfasında fiş alanı eklenir, çıkarılır (pasifleştirilir), hangi fatura bilgilerinin ve fiş alanlarının zorunlu olduğu seçilir. Koşullu kurallarla bir değere bağlı zorunluluk tanımlanır: örneğin "Kategori ARAÇ BAKIM ONARIM ise Etiket zorunlu". Eksik alanlı form taslak kaydedilir ama onaya gönderilemez.
 - Organizasyonlar, masraf merkezleri, kategoriler ve liste alanlarının seçenekleri panelden yönetilir; Excel (`.xlsx`, en çok 5 MB ve 20.000 satır) ile önce önizlenip içe aktarılır, dışa aktarılır. masraff.io dışa aktarımlarının sütun adları tanınır.
+- "Entegrasyonlar" sayfasında onaylanan masraflar SAP PI/PO gibi bir sisteme gönderilir. Yönetici form ve fiş alanlarını seçip her birine bir ad (alias) verir, biçimi (JSON ya da XML) ve adresi seçer: örneğin Tutar → `TTR` ile gövde `{"TTR": 2193.39}` olur. Gönderim son onayda, ödendi işaretlenince ya da yalnızca elle yapılır; başarısız gönderimler yeniden denenir ve gönderim kaydında gövdesi ve yanıtıyla görünür. Ayrıntı `docs/onay-sistemi.md` bölüm 9'dadır.
 
-Roller: `calisan` (kendi masrafları ve onaycısı olduğu formlar), `muhasebe` (bütün masrafları görür, ödendi işaretler, dışa aktarır), `yonetici` (her şey; kullanıcılar, onay akışları, tanım listeleri, alan yönetimi). Onaycı olmak bir rol değildir: bir akışa eklenen herkes onaycıdır.
+Roller: `calisan` (kendi masrafları ve onaycısı olduğu formlar), `muhasebe` (bütün masrafları görür, ödendi işaretler, dışa aktarır), `yonetici` (her şey; kullanıcılar, onay akışları, tanım listeleri, alan yönetimi, entegrasyonlar). Onaycı olmak bir rol değildir: bir akışa eklenen herkes onaycıdır.
 
 ## Gereksinimler
 
@@ -323,6 +324,8 @@ Bütün ayarlar kök dizindeki `.env` dosyasındadır (şablon: `env.example`). 
 | `UYGULAMA_ADRESI` | (yok) | Maillerdeki bağlantıların açacağı panel adresi (`http://` ya da `https://`). Boşsa bağlantı konmaz |
 | `HATIRLATMA_BEKLEME_SAAT` | `24` | Bu kadar saatten uzun karar bekleyen onaycıya günde bir kez hatırlatma gider (0 = kapalı, en çok 720) |
 | `HATIRLATMA_SAATI` | `09:00` | Hatırlatmaların gönderileceği saat (`SS:DD`, sunucunun yerel saati) |
+| `ENTEGRASYON_ANAHTARI` | (yok) | Entegrasyonların (SAP PI/PO) Basic şifrelerini veritabanında şifreleyen anahtar; en az 32 karakter. Boşsa Basic kimlikli entegrasyon kaydedilemez. Değişirse kayıtlı şifreler yeniden girilir |
+| `ENTEGRASYON_DENEME_SAYISI` | `5` | Sunucu hatası, zaman aşımı ya da bağlantı sorunu yaşayan bir entegrasyon gönderiminin en çok deneme sayısı (1–20); aralıklar mailinkiyle aynı. `4xx` yanıtı hemen `hata` olur |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI'nin yolu |
 | `CLAUDE_MODEL` | `haiku,opus` | Modeller, en ucuzdan başlayarak virgülle (en çok 4). Sonraki model yalnızca önceki okuma kontrollerden geçmezse çalışır (aşağıda "Kademeli okuma"). Tek model için örneğin `opus` |
 | `CLAUDE_EFFORT` | `low` | Claude'un düşünme düzeyi (`low`, `medium`, `high`, `xhigh`, `max`). `default` CLI'nin kendi ayarını kullanır. Karmaşık faturalarda yanlış okuma görürseniz `medium` deneyin |

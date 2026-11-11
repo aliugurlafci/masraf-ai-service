@@ -78,6 +78,21 @@
     {
       "key": "kuralId",
       "value": ""
+    },
+    {
+      "key": "entegrasyonId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "gonderimId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "piSifre",
+      "value": "",
+      "type": "string"
     }
   ],
   "item": [
@@ -2344,6 +2359,330 @@
                 "{{kuralId}}"
               ]
             }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Entegrasyonlar",
+      "description": "SAP PI/PO gibi dış sistemlere gönderim (yonetici). Kurallar: docs/onay-sistemi.md bölüm 9. Basic şifre yalnızca istekte gönderilir, hiçbir yanıtta dönmez; saklamak için sunucunun .env dosyasında ENTEGRASYON_ANAHTARI tanımlı olmalıdır.",
+      "item": [
+        {
+          "name": "Entegrasyonları listele",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyonlar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyonlar"
+              ]
+            },
+            "description": "Ada göre. `sorunlar` doluysa (eşlenen bir fiş alanı silinmiş) gönderimler `hata` olur."
+          },
+          "response": []
+        },
+        {
+          "name": "Kaynak alanlar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyonlar/kaynaklar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyonlar",
+                "kaynaklar"
+              ]
+            },
+            "description": "`{ form: Kaynak[], fis: Kaynak[] }`. Fiş alanları `fis.alan.<anahtar>` (liste alanında kod) ve `fis.alan.<anahtar>.ad` (seçeneğin adı) olarak gelir."
+          },
+          "response": []
+        },
+        {
+          "name": "Gövde önizle",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entegrasyon\": {\n    \"bicim\": \"json\",\n    \"alanlar\": [\n      {\n        \"kaynak\": \"form.tutar\",\n        \"alias\": \"TTR\"\n      }\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyonlar/onizle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyonlar",
+                "onizle"
+              ]
+            },
+            "description": "Hiçbir şey göndermez, kaydetmez. `formId` verilmezse örnek verilerle (`{\"TTR\": 2193.39}`), verilirse o formla hazırlar. Yalnızca gövdeyi belirleyen alanlar doğrulanır."
+          },
+          "response": []
+        },
+        {
+          "name": "Entegrasyon ekle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('entegrasyonId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ad\": \"SAP PI masraf\",\n  \"aktif\": true,\n  \"adres\": \"https://pi.firma.local:50001/RESTAdapter/masraf\",\n  \"yontem\": \"POST\",\n  \"bicim\": \"json\",\n  \"kok\": null,\n  \"xmlAdAlani\": null,\n  \"fisListesi\": \"FISLER\",\n  \"fisOgesi\": \"FIS\",\n  \"tarihBicimi\": \"YYYYAAGG\",\n  \"tetikleyici\": \"onaylandi\",\n  \"kimlik\": {\n    \"tur\": \"basic\",\n    \"kullanici\": \"PIUSER\",\n    \"sifre\": \"{{piSifre}}\"\n  },\n  \"basliklar\": [],\n  \"zamanAsimiSn\": 30,\n  \"alanlar\": [\n    {\n      \"kaynak\": \"form.no\",\n      \"alias\": \"XBLNR\"\n    },\n    {\n      \"kaynak\": \"form.tutar\",\n      \"alias\": \"TTR\"\n    },\n    {\n      \"kaynak\": \"form.sabit\",\n      \"alias\": \"BUKRS\",\n      \"deger\": \"1000\"\n    },\n    {\n      \"kaynak\": \"form.masrafMerkezi\",\n      \"alias\": \"KOSTL\"\n    },\n    {\n      \"kaynak\": \"fis.faturaNo\",\n      \"alias\": \"BELNR\"\n    },\n    {\n      \"kaynak\": \"fis.faturaTarihi\",\n      \"alias\": \"BLDAT\"\n    },\n    {\n      \"kaynak\": \"fis.genelToplam\",\n      \"alias\": \"WRBTR\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyonlar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyonlar"
+              ]
+            },
+            "description": "`bicim`: json | xml (XML'de `kok` zorunlu). `tetikleyici`: onaylandi | odendi | elle. `409 entegrasyon_adi_kullaniliyor`, `409 anahtar_yok` (ENTEGRASYON_ANAHTARI yok, şifre saklanamaz)."
+          },
+          "response": []
+        },
+        {
+          "name": "Entegrasyon",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyonlar/{{entegrasyonId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyonlar",
+                "{{entegrasyonId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Entegrasyonu kaydet",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ad\": \"SAP PI masraf\",\n  \"aktif\": true,\n  \"adres\": \"https://pi.firma.local:50001/RESTAdapter/masraf\",\n  \"yontem\": \"POST\",\n  \"bicim\": \"xml\",\n  \"kok\": \"MT_Masraf\",\n  \"xmlAdAlani\": \"urn:firma:masraf\",\n  \"fisListesi\": \"FISLER\",\n  \"fisOgesi\": \"FIS\",\n  \"tarihBicimi\": \"YYYYAAGG\",\n  \"tetikleyici\": \"onaylandi\",\n  \"kimlik\": {\n    \"tur\": \"basic\",\n    \"kullanici\": \"PIUSER\"\n  },\n  \"basliklar\": [],\n  \"zamanAsimiSn\": 30,\n  \"alanlar\": [\n    {\n      \"kaynak\": \"form.no\",\n      \"alias\": \"XBLNR\"\n    },\n    {\n      \"kaynak\": \"form.tutar\",\n      \"alias\": \"TTR\"\n    },\n    {\n      \"kaynak\": \"form.sabit\",\n      \"alias\": \"BUKRS\",\n      \"deger\": \"1000\"\n    },\n    {\n      \"kaynak\": \"form.masrafMerkezi\",\n      \"alias\": \"KOSTL\"\n    },\n    {\n      \"kaynak\": \"fis.faturaNo\",\n      \"alias\": \"BELNR\"\n    },\n    {\n      \"kaynak\": \"fis.faturaTarihi\",\n      \"alias\": \"BLDAT\"\n    },\n    {\n      \"kaynak\": \"fis.genelToplam\",\n      \"alias\": \"WRBTR\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyonlar/{{entegrasyonId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyonlar",
+                "{{entegrasyonId}}"
+              ]
+            },
+            "description": "Tamamı yerine geçer. `kimlik.sifre` gönderilmezse kayıtlı şifre korunur."
+          },
+          "response": []
+        },
+        {
+          "name": "Formu elle gönder",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code < 300) {",
+                  "  pm.collectionVariables.set('gonderimId', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"formId\": {{masrafId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyonlar/{{entegrasyonId}}/gonder",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyonlar",
+                "{{entegrasyonId}}",
+                "gonder"
+              ]
+            },
+            "description": "`202 { id }`. Yalnızca `onaylandi` ya da `odendi` durumundaki form (`409 gecersiz_durum`). Pasif entegrasyonla da gönderilebilir."
+          },
+          "response": []
+        },
+        {
+          "name": "Gönderim kaydı",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyon-gonderimleri?entegrasyonId=&formId=&durum=hata&adet=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyon-gonderimleri"
+              ],
+              "query": [
+                {
+                  "key": "entegrasyonId",
+                  "value": ""
+                },
+                {
+                  "key": "formId",
+                  "value": ""
+                },
+                {
+                  "key": "durum",
+                  "value": "hata"
+                },
+                {
+                  "key": "adet",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "En yeni önce. `durum`: bekliyor | gonderildi | hata."
+          },
+          "response": []
+        },
+        {
+          "name": "Gönderim",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyon-gonderimleri/{{gonderimId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyon-gonderimleri",
+                "{{gonderimId}}"
+              ]
+            },
+            "description": "Son denemenin gövdesi (`govde`) ve yanıtın ilk 2000 karakteri (`yanit`) ile."
+          },
+          "response": []
+        },
+        {
+          "name": "Gönderimi yeniden dene",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyon-gonderimleri/{{gonderimId}}/yeniden",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyon-gonderimleri",
+                "{{gonderimId}}",
+                "yeniden"
+              ]
+            },
+            "description": "Yalnızca `hata` durumundaki gönderim (`409 gecersiz_durum`); deneme sayısı sıfırlanır."
+          },
+          "response": []
+        },
+        {
+          "name": "Entegrasyonu sil",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/entegrasyonlar/{{entegrasyonId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "entegrasyonlar",
+                "{{entegrasyonId}}"
+              ]
+            },
+            "description": "Gönderim kaydı da silinir."
           },
           "response": []
         }

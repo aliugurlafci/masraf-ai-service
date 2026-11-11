@@ -91,6 +91,9 @@ export const ICONS = {
   target: 'M10 3.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM10 9.9v.2',
   list: 'M7.5 6h9M7.5 10h9M7.5 14h9M3.5 6h.1M3.5 10h.1M3.5 14h.1',
   sliders: 'M4 5h12M4 10h12M4 15h12M7 3.5v3M13 8.5v3M9 13.5v3',
+  // Integrations
+  plug: 'M7.5 3.5v4M12.5 3.5v4M5 7.5h10V10a5 5 0 0 1-10 0zM10 15v2.5',
+  code: 'M7 6 3 10l4 4M13 6l4 4-4 4M11 4.5 9 15.5',
 };
 
 /** Restarts a CSS animation class on a node that may already have it. */

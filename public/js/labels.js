@@ -171,6 +171,11 @@ export const AUDIT_LABEL = {
   onay_akisi_guncellendi: 'Onay akışı güncellendi',
   onay_akisi_silindi: 'Onay akışı silindi',
   varsayilan_akis_degisti: 'Varsayılan akış değişti',
+  entegrasyon_ekle: 'Entegrasyon eklendi',
+  entegrasyon_guncelle: 'Entegrasyon güncellendi',
+  entegrasyon_sil: 'Entegrasyon silindi',
+  entegrasyon_gonder: 'Entegrasyonla elle gönderildi',
+  entegrasyon_yeniden: 'Entegrasyon gönderimi yeniden denendi',
 };
 
 export const auditLabel = (code) => AUDIT_LABEL[code] ?? humanize(code);
@@ -204,4 +209,25 @@ export const MAIL_STATUS = {
   gonderildi: { label: 'Gönderildi', tone: 'ok', icon: ICONS.checkCircle },
   hata: { label: 'Hata', tone: 'err', icon: ICONS.alert },
   atlandi: { label: 'Atlandı', tone: 'muted', icon: ICONS.ban },
+};
+
+// ---------- Integrations (docs/onay-sistemi.md, section 9) ----------
+
+/** When an integration sends by itself (`tetikleyici`). */
+export const INTEGRATION_TRIGGER = {
+  onaylandi: 'Son onayda',
+  odendi: 'Ödendi işaretlenince',
+  elle: 'Yalnızca elle',
+};
+
+/** What started a send (`tetikleyen`). */
+export const SEND_ORIGIN = { onaylandi: 'Son onay', odendi: 'Ödendi', elle: 'Elle' };
+
+export const INTEGRATION_FORMAT = { json: 'JSON', xml: 'XML' };
+
+/** A send's state (`durum`). */
+export const SEND_STATUS = {
+  bekliyor: { label: 'Bekliyor', tone: 'wait', icon: ICONS.clock },
+  gonderildi: { label: 'Gönderildi', tone: 'ok', icon: ICONS.checkCircle },
+  hata: { label: 'Hata', tone: 'err', icon: ICONS.alert },
 };

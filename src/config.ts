@@ -102,6 +102,14 @@ const ServiceEnvSchema = z.object({
     .trim()
     .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'SS:DD biçiminde olmalı (ör. 09:00)')
     .default('09:00'),
+  // Integrations (docs/onay-sistemi.md, section 9): the key that seals the stored Basic passwords, and
+  // how many times a failed send is tried.
+  ENTEGRASYON_ANAHTARI: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()))
+    .pipe(z.string().min(32, 'en az 32 karakter olmalı').max(500, 'en fazla 500 karakter olmalı').optional()),
+  ENTEGRASYON_DENEME_SAYISI: z.coerce.number().int().min(1).max(20).default(5),
 });
 
 export interface AppConfig {
@@ -177,6 +185,12 @@ export interface ReminderSettings {
   readonly minute: number;
 }
 
+export interface IntegrationSettings {
+  /** ENTEGRASYON_ANAHTARI; null = no password can be stored. Never logged. */
+  readonly key: string | null;
+  readonly maxAttempts: number;
+}
+
 export interface ServiceConfig {
   readonly auth: AuthSettings;
   /** Currency of the approval ranges and of the reports. */
@@ -185,6 +199,7 @@ export interface ServiceConfig {
   readonly firstAdmin: FirstAdmin | null;
   readonly mail: MailSettings;
   readonly reminder: ReminderSettings;
+  readonly integration: IntegrationSettings;
 }
 
 export class ConfigError extends Error {
@@ -300,5 +315,6 @@ export function loadServiceConfig(env: NodeJS.ProcessEnv = process.env): Service
   };
   const [hour, minute] = e.HATIRLATMA_SAATI.split(':').map(Number) as [number, number];
   const reminder: ReminderSettings = { waitHours: e.HATIRLATMA_BEKLEME_SAAT, hour, minute };
-  return { auth, baseCurrency: e.PARA_BIRIMI, firstAdmin, mail, reminder };
+  const integration: IntegrationSettings = { key: e.ENTEGRASYON_ANAHTARI ?? null, maxAttempts: e.ENTEGRASYON_DENEME_SAYISI };
+  return { auth, baseCurrency: e.PARA_BIRIMI, firstAdmin, mail, reminder, integration };
 }

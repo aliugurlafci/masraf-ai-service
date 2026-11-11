@@ -8768,3 +8768,896 @@ a.notif-main:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- Integrations (#/entegrasyonlar) ---------- */
+
+.ig-stack {
+  display: grid;
+  gap: 20px;
+}
+
+/* Tables run to the card's edges, like .card > .table-scroll. */
+.ig-list > .table-scroll,
+.ig-log > .table-scroll {
+  margin: 0 -22px;
+  border-top: 1px solid var(--line);
+}
+
+.ig-list > .table-scroll:last-child,
+.ig-log > .table-scroll:last-child {
+  margin-bottom: -20px;
+}
+
+.ig-name {
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.ig-name:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.ig-issues {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--wait) 30%, transparent);
+  border-radius: 9px;
+  background: var(--wait-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.ig-issues svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--wait);
+}
+
+.ig-issues p {
+  margin: 0;
+  font-weight: 650;
+}
+
+.ig-issues ul {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}
+
+.ig-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 340px;
+}
+
+.ig-url .mono {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ig-method {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.ig-last {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.ig-last time {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+/* Send log */
+.ig-log-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ig-log-tools select.input {
+  width: auto;
+  min-width: 150px;
+}
+
+.ig-log {
+  transition: opacity 0.15s;
+}
+
+.ig-log[aria-busy='true'] {
+  opacity: 0.6;
+}
+
+.ig-log-note {
+  margin: 12px 0 0;
+}
+
+.ig-err {
+  display: -webkit-box;
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--err);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.ig-next {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.ig-form-link {
+  display: inline-grid;
+  gap: 1px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.ig-form-link .mono {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.ig-form-link:hover .mono {
+  text-decoration: underline;
+}
+
+.ig-int-link {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.ig-log-slot {
+  margin-top: 20px;
+}
+
+.ig-log-slot:empty {
+  display: none;
+}
+
+/* Editor: the form on the left; sending by hand and the live preview on the right. */
+.ig-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  align-items: stretch;
+  gap: 20px;
+}
+
+.ig-main,
+.ig-side {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.ig-main > .form-actions {
+  margin-top: 0;
+}
+
+.ig-preview {
+  position: sticky;
+  top: calc(var(--topbar-h) + 16px);
+  min-width: 0;
+}
+
+.ig-card > .field:last-child,
+.ig-card > .ig-pair:last-child > .field,
+.ig-card > fieldset.field:last-child {
+  margin-bottom: 0;
+}
+
+.ig-addr {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 0 12px;
+}
+
+.ig-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 0 16px;
+}
+
+.ig-suffix {
+  position: relative;
+  display: flex;
+  align-items: center;
+  max-width: 160px;
+}
+
+.ig-suffix .input {
+  padding-right: 40px;
+}
+
+.ig-suffix-text {
+  position: absolute;
+  right: 12px;
+  color: var(--ink-3);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.ig-label {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.ig-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+}
+
+/* Two or three choices as radios that look like a segmented control. */
+.seg-radio {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.seg-opt {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 18px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 650;
+  transition:
+    background-color 0.15s,
+    color 0.15s,
+    box-shadow 0.15s;
+}
+
+.seg-opt input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.seg-opt:hover {
+  color: var(--ink);
+}
+
+.seg-opt:has(input:checked) {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow:
+    0 0 0 1px var(--line),
+    0 1px 2px rgb(0 0 0 / 0.06);
+}
+
+.seg-opt:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ig-triggers {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.ig-auth-note {
+  margin-bottom: 12px;
+}
+
+.ig-auth-note:empty {
+  display: none;
+}
+
+/* Field mapping */
+.ig-rule {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.ig-rule svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.ig-card-map > .field-error {
+  margin-bottom: 12px;
+}
+
+.ig-group {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.ig-group + .ig-group {
+  margin-top: 16px;
+}
+
+.ig-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+}
+
+.ig-group-title {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 700;
+}
+
+.ig-group-sub {
+  margin: 2px 0 0;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.ig-group-empty {
+  margin: 0;
+  padding: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.ig-group > .table-scroll {
+  border-top: 1px solid var(--line);
+}
+
+.ig-map-table th,
+.ig-map-table td {
+  padding: 8px 10px;
+}
+
+.ig-map-table td {
+  vertical-align: top;
+}
+
+.ig-map-table tbody tr:hover {
+  background: transparent;
+}
+
+.ig-map-table .t-order {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.ig-map-table .t-src {
+  width: 42%;
+  min-width: 210px;
+}
+
+.ig-map-table .t-alias {
+  width: 30%;
+  min-width: 160px;
+}
+
+.ig-map-table .t-value {
+  min-width: 120px;
+}
+
+.ig-map-table .t-value > .tag {
+  margin-top: 9px;
+}
+
+.ig-map-table td.t-actions .btn {
+  margin-top: 4px;
+}
+
+.ig-map-table .field-error,
+.ig-hdr-cell .field-error {
+  margin-top: 4px;
+}
+
+.ig-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 40px;
+}
+
+.ig-move .order-n {
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
+}
+
+.ig-src-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 4px 0 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.ig-src-meta .mono {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* Extra headers */
+.ig-hdr-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ig-hdr-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 32px;
+  align-items: start;
+  gap: 8px;
+}
+
+.ig-hdr-row > .btn {
+  margin-top: 4px;
+}
+
+.ig-hdr-head {
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.ig-hdr-cell {
+  min-width: 0;
+}
+
+.ig-hdr-foot {
+  display: flex;
+  margin-bottom: 10px;
+}
+
+.ig-card-headers > .field-error {
+  margin-bottom: 10px;
+}
+
+/* Bodies: preview, send detail */
+.ig-code {
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  box-shadow: none;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  transition: opacity 0.2s;
+}
+
+.ig-code:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ig-code.is-stale,
+.ig-code[aria-busy='true'] {
+  opacity: 0.5;
+}
+
+.ig-preview .card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ig-preview .card-title svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.ig-pv-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ig-pv-form {
+  margin-bottom: 10px;
+}
+
+.ig-pv-form .input {
+  max-width: 200px;
+}
+
+.ig-pv-status {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.ig-pv-status:empty {
+  display: none;
+}
+
+.ig-ctype {
+  display: inline-block;
+  max-width: 100%;
+  margin: 0 0 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.ig-pv-problems {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ig-pv-problems:empty {
+  display: none;
+}
+
+.ig-pv-problems > .btn {
+  justify-self: start;
+}
+
+.ig-pv-idle {
+  margin: 0;
+  padding: 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+}
+
+.ig-pv-code {
+  max-height: max(220px, calc(100vh - var(--topbar-h) - 320px));
+}
+
+.ig-spin {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.ig-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+/* Send by hand */
+.ig-send {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.ig-send > .field {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+}
+
+.ig-send > .btn {
+  margin-top: 27px;
+}
+
+.ig-send-note {
+  margin: 10px 0 0;
+}
+
+.ig-send-result {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ig-send-result:empty {
+  display: none;
+}
+
+.ig-send-result > .btn {
+  justify-self: start;
+}
+
+/* Send detail and the field picker (dialogs) */
+.ig-detail {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.ig-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ig-code-sec {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ig-code-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ig-code-head .sec-title {
+  margin: 0 auto 0 0;
+}
+
+.ig-code-head .ig-ctype {
+  margin: 0;
+}
+
+.ig-code-sec .ig-code {
+  max-height: 360px;
+}
+
+.ig-code-sec .hint {
+  margin: 0;
+}
+
+.ig-pick {
+  max-height: min(52vh, 460px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.ig-pick-item {
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.ig-pick-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ig-pick-key {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.ig-pick-item .tag {
+  flex: none;
+  margin-left: auto;
+}
+
+.ig-pick-count {
+  margin: 8px 0 0;
+}
+
+@media (max-width: 1100px) {
+  /* One column; the preview follows the mapping it shows. */
+  .ig-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .ig-main,
+  .ig-side {
+    display: contents;
+  }
+
+  .ig-card-general {
+    order: 1;
+  }
+
+  .ig-card-format {
+    order: 2;
+  }
+
+  .ig-card-map {
+    order: 3;
+  }
+
+  .ig-preview {
+    position: static;
+    order: 4;
+  }
+
+  .ig-card-trigger {
+    order: 5;
+  }
+
+  .ig-card-auth {
+    order: 6;
+  }
+
+  .ig-card-headers {
+    order: 7;
+  }
+
+  .ig-actions {
+    order: 8;
+  }
+
+  .ig-send-card {
+    order: 9;
+  }
+
+  .ig-pv-code {
+    max-height: 460px;
+  }
+}
+
+@media (max-width: 760px) {
+  .ig-list > .table-scroll,
+  .ig-log > .table-scroll {
+    margin: 0 -16px;
+  }
+
+  .ig-list > .table-scroll:last-child,
+  .ig-log > .table-scroll:last-child {
+    margin-bottom: -16px;
+  }
+
+  .ig-log-tools {
+    width: 100%;
+  }
+
+  .ig-log-tools select.input {
+    flex: 1 1 140px;
+  }
+
+  .ig-url {
+    max-width: none;
+  }
+
+  .ig-url .mono {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .ig-err {
+    max-width: none;
+  }
+
+  .ig-addr,
+  .ig-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .seg-radio {
+    display: flex;
+  }
+
+  .seg-opt {
+    flex: 1 1 0;
+  }
+
+  /* Mapping rows: [order, move] … [remove] on the first line, the source under it, then alias and type. */
+  .ig-map-table td {
+    padding: 0;
+  }
+
+  .ig-map-table .t-src,
+  .ig-map-table .t-alias,
+  .ig-map-table .t-value {
+    width: auto;
+    min-width: 0;
+  }
+
+  .ig-map-table td.t-order {
+    flex: 1 1 auto;
+    order: -2;
+  }
+
+  .ig-map-table td.t-actions {
+    flex: none;
+    flex-basis: auto;
+    order: -1;
+  }
+
+  .ig-map-table td.t-actions .btn {
+    margin-top: 0;
+  }
+
+  .ig-map-table td.t-src {
+    flex-basis: 100%;
+  }
+
+  .ig-map-table td.t-alias,
+  .ig-map-table td.t-value {
+    flex: 1 1 calc(50% - 14px);
+    min-width: 140px;
+  }
+
+  .ig-map-table .t-value > .tag {
+    margin-top: 0;
+  }
+
+  .ig-move {
+    min-height: 32px;
+  }
+
+  .ig-hdr-head {
+    display: none;
+  }
+
+  .ig-hdr-row {
+    grid-template-columns: minmax(0, 1fr) 32px;
+  }
+
+  .ig-hdr-row > :nth-child(1) {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .ig-hdr-row > :nth-child(2) {
+    grid-row: 2;
+    grid-column: 1;
+  }
+
+  .ig-hdr-row > :nth-child(3) {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .ig-hdr-row:not(.ig-hdr-head) + .ig-hdr-row {
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+
+  .ig-pv-form .input {
+    max-width: none;
+  }
+}
